@@ -22,16 +22,35 @@ export interface Suggestion {
   param: string; label: string; direction: string; per_step: number;
   step: number; unit: string;
 }
-export interface Simulation {
+/** 汎用シミュレーション カード（リード/リガチャー） */
+export interface SimCard {
+  title: string; big: string | null; status: "ok" | "warn" | "bad";
+  rows: [string, string][]; advice: string;
+}
+export interface MouthpieceSimulation {
+  kind: "mouthpiece";
   tier1: Tier1; tier2: Tier2; harmonics: Harmonics;
   sensitivity: { table: Record<string, unknown>; suggestions: Record<string, Suggestion> };
 }
+export interface CardSimulation {
+  kind: "reed" | "ligature";
+  cards: SimCard[];
+  /** リードのみ。音プレビュー（印象合成）用 */
+  harmonics?: Harmonics;
+}
+export type Simulation = MouthpieceSimulation | CardSimulation;
 export interface ProjectData {
   name: string; notes: string; path: string | null;
   instrument_id: string; template_id: string; component_id: string;
   component_label: string;
   params: Record<string, unknown>; schema: ParamSpec[]; simulation: Simulation;
   manual_edit: ManualEdit;
+  /** 参照コンポーネント（リード/リガチャーのみ非 null） */
+  reference: ReferenceInfo | null;
+}
+export interface ReferenceInfo {
+  component_id: string; label: string; source: string | null;
+  dims: [string, string][];
 }
 export interface InstrumentSummary {
   id: string; label: string;
@@ -113,6 +132,8 @@ export const api = {
   save: (path: string) => req<{ ok: boolean; path: string }>("/api/project/save", json({ path })),
   open: (path: string) => req<ProjectData>("/api/project/open", json({ path })),
   recent: () => req<string[]>("/api/recent"),
+  setReference: (component: string, path: string | null) =>
+    req<ProjectData>("/api/project/reference", json({ component, path })),
   dialog: (mode: string, suggested = "") =>
     req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),

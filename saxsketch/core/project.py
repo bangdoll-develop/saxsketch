@@ -27,6 +27,10 @@ class Project:
     notes: str = ""
     schema_version: int = SCHEMA_VERSION
     path: str | None = None  # 最後に保存したファイルパス
+    # 参照コンポーネント（リード/リガチャーが従属するマウスピース等のスナップショット）
+    #   {"mouthpiece": {"source": path|None, "label": str, "params": {...}}}
+    # 取込時点の値で固定する。参照元を後から編集しても自動追従しない（frozen と同じ思想）。
+    refs: dict = field(default_factory=dict)
     # 外部編集ワークフロー（省略可能な追加フィールド。v1 のまま後方互換）
     frozen: dict | None = None        # {frozen_at, params, solid_volume_cc, export_dir}
     derived: dict | None = None       # {imported_at, source_file, quality, analysis}
@@ -42,6 +46,7 @@ class Project:
             "template_id": self.template_id,
             "component_id": self.component_id,
             "params": self.params,
+            "refs": self.refs,
             "notes": self.notes,
             "frozen": self.frozen,
             "derived": self.derived,
@@ -71,6 +76,7 @@ class Project:
             component_id=data["component_id"],
             name=data.get("name", path.stem),
             params=data.get("params", {}),
+            refs=data.get("refs", {}) or {},  # refs 欠落の旧 .wproj は空 dict
             notes=data.get("notes", ""),
             schema_version=data.get("schema_version", SCHEMA_VERSION),
             frozen=data.get("frozen"),

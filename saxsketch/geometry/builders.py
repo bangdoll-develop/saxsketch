@@ -34,6 +34,53 @@ def loft_stations(stations: list[dict]) -> Solid:
     return solid
 
 
+def loft_sections(sections: list[dict]) -> Solid:
+    """任意断面のロフト。各要素 {"z": float, "pts": [(x, y), …]}（z 昇順）。
+
+    `loft_stations` のスーパー楕円では作れない形状（底面が厳密に平坦なリード等）
+    のための汎用版。堅牢性の理由は `superellipse_wire` と同じで、多角形ワイヤ＋
+    ルールドロフトに統一している。
+    """
+    wires = []
+    for s in sections:
+        pts = [Vector(x, y, s["z"]) for (x, y) in s["pts"]]
+        wires.append(Wire.make_polygon(pts, close=True))
+    solid = Solid.make_loft(wires, ruled=True)
+    if solid.volume < 0:  # ThruSections が裏返しシェルを返すことがある
+        solid = Solid(solid.wrapped.Reversed())
+    return solid
+
+
+def flat_bottom_rect_pts(w: float, h: float, y0: float = 0.0,
+                         corner_r: float = 0.0,
+                         samples: int = 8) -> list[tuple[float, float]]:
+    """底面が y=y0 で厳密に平坦な角丸長方形の点列（反時計回り）。
+
+    リードのテーブル面はマウスピースへ密着させる必要があり、スーパー楕円では
+    わずかに膨らんで密着しない。角丸は上側の2隅にのみ入れる（下側は平坦を保つ）。
+
+    点数は `corner_r` によらず常に `2*samples + 4` 個で一定にする。`loft_sections`
+    のルールドロフトは頂点対応ではなくパラメータ対応で面を張るため、断面ごとに
+    点数が変わると角の位置が辺の途中に写像されて面がねじれる。角丸が実質ゼロの
+    断面でも微小半径を残して点を並べる（形状差は 0.01mm 未満＝造形精度以下）。
+    """
+    hw = w / 2.0
+    r = min(corner_r, hw - 1e-6, h - 1e-6)
+    r = max(r, min(h, w) * 1e-3)   # 点が重ならない下限。角は実質直角のまま
+    top = y0 + h
+    pts: list[tuple[float, float]] = [(-hw, y0), (hw, y0)]  # 底辺（平坦）
+    pts.append((hw, top - r))
+    for i in range(1, samples + 1):  # 右上の角丸（終点 (hw-r, top) まで含む）
+        th = (math.pi / 2.0) * i / samples
+        pts.append((hw - r + r * math.cos(th), top - r + r * math.sin(th)))
+    pts.append((-hw + r, top))
+    for i in range(1, samples):  # 左上の角丸
+        th = (math.pi / 2.0) * i / samples
+        pts.append((-hw + r - r * math.sin(th), top - r + r * math.cos(th)))
+    pts.append((-hw, top - r))
+    return pts
+
+
 def yz_profile_cut_solid(points_yz: list[tuple[float, float]], half_width: float) -> Solid:
     """YZ平面の閉ポリゴン (z,y) を X 方向 ±half_width に押し出したソリッド。
 

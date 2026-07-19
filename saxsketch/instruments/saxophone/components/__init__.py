@@ -1,7 +1,9 @@
 """サクソフォンのコンポーネント登録。"""
 from saxsketch.core.registry import Component
 
+from .ligature import LigatureComponent
 from .mouthpiece import MouthpieceComponent
+from .reed import ReedComponent
 
 
 class _Planned(Component):
@@ -19,16 +21,6 @@ class _Planned(Component):
 
     def bom(self, params):
         raise NotImplementedError
-
-
-class ReedComponent(_Planned):
-    id = "reed"
-    label = "リード（Phase 3）"
-
-
-class LigatureComponent(_Planned):
-    id = "ligature"
-    label = "リガチャー（Phase 3）"
 
 
 class NeckComponent(_Planned):

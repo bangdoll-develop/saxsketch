@@ -25,10 +25,28 @@ class Component(ABC):
 
     id: str = ""
     label: str = ""  # 日本語名
+    #: 従属先コンポーネントのID。設定するとプロジェクトが参照スナップショットを持つ
+    #: （例: リード/リガチャー → "mouthpiece"）。None なら参照不要。
+    REQUIRES_REF: str | None = None
 
     def __init__(self, descriptor: dict, template: dict):
         self.descriptor = descriptor
         self.template = template
+        self.refs: dict = {}
+
+    # ------------------------------------------------------------ 参照
+
+    def set_refs(self, refs: dict) -> None:
+        self.refs = refs or {}
+
+    def ref_params(self) -> dict:
+        """参照コンポーネントのパラメータ。未設定なら空 dict。"""
+        entry = self.refs.get(self.REQUIRES_REF or "", {})
+        return dict(entry.get("params", {}))
+
+    def ref_dimensions(self) -> list[tuple[str, str]]:
+        """参照の要約表示用の主要寸法（UI カード）。"""
+        return []
 
     @abstractmethod
     def param_specs(self) -> list[ParamSpec]:
@@ -47,7 +65,15 @@ class Component(ABC):
         """部品表の行リスト。"""
 
     def spec_extras(self, params: dict) -> dict:
-        """仕様書用の追加情報（主要寸法・断面SVG等）。"""
+        """仕様書用の追加情報。
+
+        Returns:
+            {"dimensions": [(名前, 値), …],
+             "sections":   [{"title": str, "svg": str}, …]}
+
+        断面図は各コンポーネントが `saxsketch.export.svg.polyline_svg()` を使って
+        自分で組み立てる。共通側は図の中身を知らない（コアは楽器を知らない）。
+        """
         return {}
 
     def regions(self, params: dict) -> dict:
@@ -67,6 +93,20 @@ class Component(ABC):
             "params": [],
             "warnings": [],
         }
+
+    # --- Tier3（音響）。対応するコンポーネントだけがオーバーライドする ---
+
+    def impedance(self, params: dict) -> dict:
+        """入力インピーダンス曲線。"""
+        raise NotImplementedError(f"{self.label}にはインピーダンス計算がありません")
+
+    def synthesize(self, params: dict, embouchure: str) -> tuple[bytes, dict]:
+        """物理モデルによる単音の WAV。"""
+        raise NotImplementedError(f"{self.label}には音合成がありません")
+
+    def scale(self, params: dict) -> tuple[bytes, dict]:
+        """物理モデルによる簡易スケールの WAV。"""
+        raise NotImplementedError(f"{self.label}には音合成がありません")
 
     def cavity_volume(self, params: dict) -> dict:
         """内部空洞体積の高速近似 {"total_cc","effective_cc"}（ゴールシーク用）。"""

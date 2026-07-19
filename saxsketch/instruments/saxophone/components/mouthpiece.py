@@ -155,6 +155,7 @@ class MouthpieceComponent(Component):
         sens = ac_brightness.sensitivity(params, self.param_specs())
         harm = ac_harmonics.harmonic_series(tier2)
         return {
+            "kind": "mouthpiece",
             "tier1": tier1,
             "tier2": tier2,
             "sensitivity": sens,
@@ -215,6 +216,21 @@ class MouthpieceComponent(Component):
              "material": "シリコン", "note": "ビーク保護（任意）"},
         ]
 
+    def _section_svg(self, params: dict) -> str:
+        """側面断面図（外形・内部空洞・テーブル面）。"""
+        from saxsketch.export.svg import polyline_svg
+        pr = profiles.side_profile_polylines(params)
+        ty = pr["table_y"]
+        zs = [z for z, _ in pr["outer_top"]]
+        return polyline_svg([
+            {"pts": pr["outer_top"], "stroke": "#222", "width": 1.5},
+            {"pts": pr["outer_bot"], "stroke": "#222", "width": 1.5},
+            {"pts": pr["cavity_top"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
+            {"pts": pr["cavity_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
+            {"pts": [(min(zs), ty), (max(zs) * 0.63, ty)], "stroke": "#cc3300",
+             "width": 0.8, "dash": "2 2"},
+        ], "側面断面図（実線=外形 / 青破線=内部空洞 / 赤破線=テーブル面） 単位:mm")
+
     def spec_extras(self, params: dict) -> dict:
         p = params
         vol = profiles.cavity_volume_cc(p)
@@ -228,4 +244,5 @@ class MouthpieceComponent(Component):
              f"{p['window_length']:.1f} × {profiles.window_width(p):.1f} mm"),
             ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
         ]
-        return {"dimensions": dims, "profile": profiles.side_profile_polylines(p)}
+        return {"dimensions": dims,
+                "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}

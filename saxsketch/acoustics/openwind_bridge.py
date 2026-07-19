@@ -382,12 +382,17 @@ EMBOUCHURES: dict[str, tuple[float, float]] = {
 DEFAULT_EMBOUCHURE = "normal"
 
 
-def _reed_player(params: dict, embouchure: str):  # pragma: no cover - 環境依存
+def _reed_player(params: dict, embouchure: str,
+                 override: dict | None = None):  # pragma: no cover - 環境依存
     """マウスピース設計値を反映した有次元 1自由度リード奏者。
 
     `CLARINET` プリセット（Bilbao 2008）を基点に、設計値は**相対倍率**で効かせる。
     絶対値で上書きするとプリセットの校正が壊れて持続発振しなくなる（実測済み）。
     無次元版（WOODWIND_REED_SCALED）は本ジオメトリで発振しないため採らない。
+
+    `override`（リード コンポーネントから渡る）があれば、リード共振はアンブシュア
+    プリセットではなく**リード実形状から算出した f_reed** を使う。幅も実寸に置く。
+    リードを設計している以上、リードの物理はリード側の値が正となる。
     """
     from openwind import Player
     from openwind.technical.default_excitator_parameters import (
@@ -400,19 +405,24 @@ def _reed_player(params: dict, embouchure: str):  # pragma: no cover - 環境依
 
     # 設計パラメータ連動：これが無いと設計を変えても音が変わらない
     player.update_curve("opening", 4e-4 * (params.get("tip_opening", 1.8) / 1.8))
-    player.update_curve("width", 3e-2 * (params.get("reed_width", 14.5) / 14.5))
-    # フェイシングが長い＝リードの有効長が長い＝リード共振が低い
-    f_reed = f_base * (23.0 / max(params.get("facing_length", 23.0), 1.0))
+    reed_w = (override or {}).get("width_mm", params.get("reed_width", 14.5))
+    player.update_curve("width", 3e-2 * (reed_w / 14.5))
+    if override and override.get("f_reed"):
+        f_reed = float(override["f_reed"])
+    else:
+        # フェイシングが長い＝リードの有効長が長い＝リード共振が低い
+        f_reed = f_base * (23.0 / max(params.get("facing_length", 23.0), 1.0))
     player.update_curve("pulsation", 2 * math.pi * f_reed)
     player.update_curve("dissip", 3000.0 * f_reed / 3700.0)
     return player, mouth_pa
 
 
-def _simulate_reed(geometry, params, embouchure, duration):  # pragma: no cover
+def _simulate_reed(geometry, params, embouchure, duration,
+                   override=None):  # pragma: no cover
     """OpenWind 時間領域リードシミュ → (44.1kHz オーディオ, 実測f0, 吹圧)。"""
     from openwind import simulate
 
-    player, mouth_pa = _reed_player(params, embouchure)
+    player, mouth_pa = _reed_player(params, embouchure, override)
     rec = simulate(
         duration,
         _coarsen(geometry),
@@ -433,17 +443,19 @@ def _simulate_reed(geometry, params, embouchure, duration):  # pragma: no cover
 
 def synthesize(params: dict, size_info: dict,
                embouchure: str = DEFAULT_EMBOUCHURE,
-               duration: float = 0.6) -> tuple[bytes, dict]:
+               duration: float = 0.6,
+               override: dict | None = None) -> tuple[bytes, dict]:
     """単音の物理モデル音（OpenWind 必須）。
 
     音高は指定できない。トーンホールの無い固定ボアは自前の共鳴しか鳴らないため、
     アンブシュア（リード共振）でどのレジスタが立つかが決まる。実際に鳴った f0 を
-    meta で返す。
+    meta で返す。`override` はリード コンポーネントからのリード実形状の反映値。
     """
     if not HAS_OPENWIND:
         raise RuntimeError("OpenWind 未導入のため物理モデル音合成は利用できません")
     geometry = build_resonator(params, size_info)
-    audio, f0, pa = _simulate_reed(geometry, params, embouchure, duration)  # pragma: no cover
+    audio, f0, pa = _simulate_reed(  # pragma: no cover
+        geometry, params, embouchure, duration, override)
     return _wav_bytes(audio), {
         "f0": round(f0, 1), "note": _hz_to_note(f0) if f0 > 0 else "-",
         "duration": round(audio.size / SIM_SR, 3),
@@ -452,7 +464,8 @@ def synthesize(params: dict, size_info: dict,
 
 
 def scale(params: dict, size_info: dict,
-          duration: float = 0.6) -> tuple[bytes, dict]:
+          duration: float = 0.6,
+          override: dict | None = None) -> tuple[bytes, dict]:
     """簡易スケール（倍音レジスタ）。緩め→標準→締めを順に鳴らす（OpenWind 必須）。
 
     リード共振は時間変化させられない（OpenWind の Reed1dof は mouth_pressure 以外
@@ -464,7 +477,7 @@ def scale(params: dict, size_info: dict,
     parts, notes = [], []
     gap = np.zeros(int(SIM_SR * 0.08))
     for emb in ("loose", "normal", "tight"):  # pragma: no cover - 環境依存
-        audio, f0, _ = _simulate_reed(geometry, params, emb, duration)
+        audio, f0, _ = _simulate_reed(geometry, params, emb, duration, override)
         parts.append(audio)
         parts.append(gap)
         notes.append(f"{_hz_to_note(f0)} {f0:.0f}Hz" if f0 > 0 else "-")

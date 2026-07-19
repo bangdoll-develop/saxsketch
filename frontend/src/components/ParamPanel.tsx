@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { ParamSpec } from "../api";
+import type { ParamSpec, ReferenceInfo } from "../api";
 
 interface Props {
   schema: ParamSpec[];
@@ -9,6 +9,44 @@ interface Props {
   onHover?: (key: string | null) => void;
   /** 影響領域が定義されているパラメータのキー集合 */
   regionKeys?: Set<string>;
+  /** 参照コンポーネント（リード/リガチャーのみ。マウスピースでは null） */
+  reference?: ReferenceInfo | null;
+  /** 参照の差替え。ファイル選択ダイアログは呼び出し側が出す */
+  onPickReference?: () => void;
+  /** 参照をテンプレート既定値へ戻す */
+  onResetReference?: () => void;
+}
+
+function ReferenceCard({ reference, onPick, onReset }: {
+  reference: ReferenceInfo; onPick: () => void; onReset: () => void;
+}) {
+  return (
+    <div className="cat refcard">
+      <div className="cat-head"><span>参照マウスピース</span></div>
+      <div className="param">
+        <div className="row1">
+          <label>{reference.label}</label>
+        </div>
+        <div className="effect" title={reference.source ?? ""}>
+          {reference.source ?? "テンプレート既定値（取込元なし）"}
+        </div>
+        <table className="reftable">
+          <tbody>
+            {reference.dims.map(([k, v]) => (
+              <tr key={k}><td>{k}</td><td className="num">{v}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="abrow">
+          <button onClick={onReset} disabled={!reference.source}>既定に戻す</button>
+          <button className="primary" onClick={onPick}>.wproj から取込</button>
+        </div>
+        <div className="effect">
+          取込時点の寸法で固定されます。参照元を後から編集しても自動追従しません。
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function NumberParam({ spec, value, onChange }: {
@@ -40,7 +78,10 @@ function NumberParam({ spec, value, onChange }: {
   );
 }
 
-export default function ParamPanel({ schema, params, onChange, onHover, regionKeys }: Props) {
+export default function ParamPanel({
+  schema, params, onChange, onHover, regionKeys,
+  reference, onPickReference, onResetReference,
+}: Props) {
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -57,6 +98,11 @@ export default function ParamPanel({ schema, params, onChange, onHover, regionKe
 
   return (
     <div onMouseLeave={() => onHover?.(null)}>
+      {reference && (
+        <ReferenceCard reference={reference}
+                       onPick={() => onPickReference?.()}
+                       onReset={() => onResetReference?.()} />
+      )}
       {categories.map((cat) => {
         const open = openCats[cat.name] ?? true;
         return (
