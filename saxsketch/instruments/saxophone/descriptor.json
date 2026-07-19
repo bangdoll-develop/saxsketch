@@ -3,25 +3,31 @@
   "label": "サクソフォン",
   "family": "single_reed",
   "pitch_standard_hz": 440.0,
-  "notes": "欠損円錐体積・ネック共鳴周波数は文献値ベースの推定。実測で校正推奨。",
+  "notes": "欠損円錐体積・ネック共鳴周波数は文献値ベースの推定。実測で校正推奨。 reed_std_* は市販ケーンリードの規格寸法（部品表・仕様書の表記用）。テンプレートのリード初期値は本テンプレートのマウスピース テーブル幅に合わせてあるため、規格値とは一致しないことがある。",
   "sizes": {
     "soprano": {
       "key": "B♭",
       "missing_cone_volume_cc": 6.0,
       "neck_tenon_od_mm": 12.6,
-      "written_low_note_hz": 233.08
+      "written_low_note_hz": 233.08,
+      "reed_std_length_mm": 63.5,
+      "reed_std_tip_width_mm": 12.9
     },
     "alto": {
       "key": "E♭",
       "missing_cone_volume_cc": 12.0,
       "neck_tenon_od_mm": 15.9,
-      "written_low_note_hz": 155.56
+      "written_low_note_hz": 155.56,
+      "reed_std_length_mm": 71.5,
+      "reed_std_tip_width_mm": 13.4
     },
     "tenor": {
       "key": "B♭",
       "missing_cone_volume_cc": 24.0,
       "neck_tenon_od_mm": 17.8,
-      "written_low_note_hz": 116.54
+      "written_low_note_hz": 116.54,
+      "reed_std_length_mm": 78.0,
+      "reed_std_tip_width_mm": 14.8
     }
   }
 }

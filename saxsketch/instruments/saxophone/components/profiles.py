@@ -101,6 +101,15 @@ def outer_radius(p: dict, z: float) -> float:
     return rb * pts[-1][1]
 
 
+def ligature_seat_range(p: dict) -> tuple[float, float]:
+    """リガチャーが座る z 範囲。外形が最大径で一定になる区間（_OUTER_PROFILE 参照）。
+
+    リガチャーの内周生成とリードの踵位置チェックが共用する。
+    """
+    length = p["overall_length"]
+    return 0.42 * length, 0.70 * length
+
+
 def beak_y(p: dict, z: float) -> float:
     """ビークカット平面の Y 座標（この上側を切除）。"""
     ty = table_y(p)

@@ -23,5 +23,20 @@
     "overall_length": 101.0,
     "min_wall": 2.0,
     "material": "resin"
+  },
+  "reed": {
+    "reed_length": 71.5,
+    "tip_width": 14.5,
+    "heel_width": 14.8,
+    "tip_thickness": 0.40,
+    "heel_thickness": 2.80,
+    "vamp_length": 32.0,
+    "profile_curve": "parabolic",
+    "spine_ratio": 1.15,
+    "side_rail_thin": 0.55,
+    "tip_corner_r": 0.8,
+    "file_cut": "unfiled",
+    "material": "pla",
+    "min_layer": 0.08
   }
 }

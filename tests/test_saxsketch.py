@@ -84,6 +84,89 @@ def test_loft_sections_volume_and_watertight(tmp_path):
     assert check_mesh(f)["watertight"]
 
 
+# ------------------------------------------------------------------ リード
+
+@pytest.fixture(scope="module")
+def alto_reed():
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", "alto")}})
+    return comp, {s.key: s.default for s in comp.param_specs()}
+
+
+def _template_params(component_id: str, template_id: str) -> dict:
+    from saxsketch.core.schema import ParamSet
+    comp = get_registry().get("saxophone").make_component(component_id, template_id)
+    return dict(ParamSet(comp.param_specs(),
+                         comp.template.get(component_id, {})).values)
+
+
+def test_reed_profile_shape(alto_reed):
+    """厚みは先端→踵で単調増加、側端は中央以下、バークは全幅一定。"""
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    zv = rp.vamp_start_z(p)
+    ts = [rp.thickness(p, zv * i / 20.0) for i in range(21)]
+    assert ts == sorted(ts)
+    assert ts[0] == pytest.approx(p["tip_thickness"])
+    assert rp.thickness(p, zv) == pytest.approx(p["heel_thickness"])
+    for z in (0.0, zv * 0.5, zv * 0.99):
+        assert rp.edge_thickness(p, z) <= rp.thickness(p, z, 0.0) + 1e-9
+    # バーク（未削部）は幅方向一定
+    zb = (zv + p["reed_length"]) / 2.0
+    assert rp.edge_thickness(p, zb) == pytest.approx(rp.thickness(p, zb, 0.0))
+
+
+def test_reed_solid_valid(alto_reed, tmp_path):
+    from saxsketch.export.models import check_mesh, export_model
+    comp, p = alto_reed
+    part = comp.build(p)
+    assert part.is_valid
+    f = tmp_path / "reed.stl"
+    export_model(part, f, "stl")
+    q = check_mesh(f)
+    assert q["watertight"] and q["winding_consistent"]
+    # 全長・幅・厚みがバウンディングボックスと一致
+    bb = part.bounding_box()
+    assert bb.max.Z - bb.min.Z == pytest.approx(p["reed_length"], abs=0.1)
+    assert bb.max.Y - bb.min.Y == pytest.approx(p["heel_thickness"], abs=0.05)
+    assert bb.min.Y == pytest.approx(0.0, abs=1e-6)  # テーブル面が y=0 で平坦
+
+
+def test_reed_tip_thickness_dimension(alto_reed):
+    """先端近傍を薄板で切り出し、実測の中央厚が指定値に一致すること。"""
+    from build123d import Pos, Solid
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp, p = alto_reed
+    part = comp.build(p)
+    z0, z1 = 0.4, 0.9
+    probe = Pos(-1.0, -1.0, z0) * Solid.make_box(2.0, 5.0, z1 - z0)  # 中央のみ
+    slab = part & probe
+    bb = slab.bounding_box()
+    # 区間内の最大厚（z1 側）と一致するはず
+    assert bb.max.Y == pytest.approx(rp.thickness(p, z1, 0.0), abs=0.02)
+    assert bb.min.Y == pytest.approx(0.0, abs=1e-6)
+
+
+def test_reed_builds_for_all_templates():
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        p = {s.key: s.default for s in comp.param_specs()}
+        assert comp.build(p).is_valid
+        sim = comp.simulate(p)
+        assert sim["kind"] == "reed" and sim["cards"]
+        # 既定同士は適合しているはず（テンプレートの整合性テスト）
+        fit = next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
+        assert fit["status"] == "ok", fit["advice"]
+
+
+def test_reed_filed_cut_removes_material(alto_reed):
+    comp, p = alto_reed
+    unfiled = comp.build({**p, "file_cut": "unfiled"}).volume
+    filed = comp.build({**p, "file_cut": "filed"}).volume
+    assert filed < unfiled
+
+
 # ------------------------------------------------------------------ ジオメトリ
 
 @pytest.fixture(scope="module")
@@ -368,8 +451,8 @@ def test_api_flow(tmp_path):
 
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
-        "component_id": "reed"})
-    assert r.status_code == 400  # 未実装コンポーネント
+        "component_id": "neck"})
+    assert r.status_code == 400  # 未実装コンポーネント（Phase 4）
 
     r = c.get("/api/model.stl?quality=preview")
     assert r.status_code == 200 and len(r.content) > 10000
