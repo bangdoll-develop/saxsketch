@@ -120,6 +120,22 @@ export default function App() {
     } catch (e) { setError(String((e as Error).message)); }
   }, [project]);
 
+  // 参照マウスピースの差替え（リード/リガチャーのみ）。寸法が変わるので形状も作り直す
+  const setReference = useCallback(async (path: string | null) => {
+    if (!project) return;
+    try {
+      const p = await api.setReference(
+        project.reference?.component_id ?? "mouthpiece", path);
+      setProject(p); setParams(p.params); setSim(p.simulation);
+      setModelVersion((v) => v + 1);
+    } catch (e) { setError(String((e as Error).message)); }
+  }, [project]);
+
+  const pickReference = useCallback(async () => {
+    const r = await api.dialog("open");
+    if (r.path) setReference(r.path);
+  }, [setReference]);
+
   const applyProposal = useCallback((proposal: Record<string, number>) => {
     setParams((prev) => ({ ...prev, ...proposal }));
     pushParams(proposal);
@@ -153,7 +169,10 @@ export default function App() {
         <div className="panel">
           {project && (
             <ParamPanel schema={project.schema} params={params} onChange={onParamChange}
-                        onHover={setHoverKey} regionKeys={regionKeys} />
+                        onHover={setHoverKey} regionKeys={regionKeys}
+                        reference={project.reference}
+                        onPickReference={pickReference}
+                        onResetReference={() => setReference(null)} />
           )}
         </div>
         <div className="viewer">

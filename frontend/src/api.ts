@@ -32,6 +32,12 @@ export interface ProjectData {
   component_label: string;
   params: Record<string, unknown>; schema: ParamSpec[]; simulation: Simulation;
   manual_edit: ManualEdit;
+  /** 参照コンポーネント（リード/リガチャーのみ非 null） */
+  reference: ReferenceInfo | null;
+}
+export interface ReferenceInfo {
+  component_id: string; label: string; source: string | null;
+  dims: [string, string][];
 }
 export interface InstrumentSummary {
   id: string; label: string;
@@ -113,6 +119,8 @@ export const api = {
   save: (path: string) => req<{ ok: boolean; path: string }>("/api/project/save", json({ path })),
   open: (path: string) => req<ProjectData>("/api/project/open", json({ path })),
   recent: () => req<string[]>("/api/recent"),
+  setReference: (component: string, path: string | null) =>
+    req<ProjectData>("/api/project/reference", json({ component, path })),
   dialog: (mode: string, suggested = "") =>
     req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),

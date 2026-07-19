@@ -121,7 +121,28 @@ def project_get():
         "schema": STATE.paramset.schema_dicts(),
         "simulation": STATE.simulate(),
         "manual_edit": STATE.manual_edit_summary(),
+        "reference": STATE.reference_summary(),
     }
+
+
+class ReferenceReq(BaseModel):
+    component: str = "mouthpiece"
+    path: str | None = None   # None = テンプレート既定値へ戻す
+
+
+@app.post("/api/project/reference")
+def project_reference(req: ReferenceReq):
+    """参照コンポーネント（リード/リガチャーが従属するマウスピース）を差し替える。"""
+    _require_project()
+    if req.path is not None and not Path(req.path).exists():
+        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+    try:
+        STATE.set_reference(req.component, req.path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+    return project_get()
 
 
 class ParamUpdate(BaseModel):

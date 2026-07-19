@@ -25,10 +25,28 @@ class Component(ABC):
 
     id: str = ""
     label: str = ""  # 日本語名
+    #: 従属先コンポーネントのID。設定するとプロジェクトが参照スナップショットを持つ
+    #: （例: リード/リガチャー → "mouthpiece"）。None なら参照不要。
+    REQUIRES_REF: str | None = None
 
     def __init__(self, descriptor: dict, template: dict):
         self.descriptor = descriptor
         self.template = template
+        self.refs: dict = {}
+
+    # ------------------------------------------------------------ 参照
+
+    def set_refs(self, refs: dict) -> None:
+        self.refs = refs or {}
+
+    def ref_params(self) -> dict:
+        """参照コンポーネントのパラメータ。未設定なら空 dict。"""
+        entry = self.refs.get(self.REQUIRES_REF or "", {})
+        return dict(entry.get("params", {}))
+
+    def ref_dimensions(self) -> list[tuple[str, str]]:
+        """参照の要約表示用の主要寸法（UI カード）。"""
+        return []
 
     @abstractmethod
     def param_specs(self) -> list[ParamSpec]:

@@ -79,6 +79,7 @@ class AppState:
             params=dict(paramset.values))
         self.component = component
         self.paramset = paramset
+        self._bind_refs()
         self._stl_cache.clear()
         self._imp_cache.clear()
         self._wav_cache.clear()
@@ -95,6 +96,7 @@ class AppState:
         self.project = proj
         self.component = component
         self.paramset = paramset
+        self._bind_refs()
         self._stl_cache.clear()
         self._imp_cache.clear()
         self._wav_cache.clear()
@@ -107,6 +109,72 @@ class AppState:
         self.project.save(path)
         self.push_recent(path)
 
+    # ---------------------------------------------------------- 参照コンポーネント
+
+    def _default_ref(self, ref_id: str) -> dict:
+        """参照未設定時の既定値。自テンプレートの当該ブロックを ParamSet で正規化する。
+
+        テンプレートに欠けたキーはコンポーネントの既定値で埋まるため、参照は常に
+        「完全なパラメータ一式」になる（ジオメトリ生成も音響合成もそのまま使える）。
+        """
+        inst = self.registry.get(self.project.instrument_id)
+        ref_comp = inst.make_component(ref_id, self.project.template_id)
+        ps = ParamSet(ref_comp.param_specs(),
+                      ref_comp.template.get(ref_id, {}))
+        tmpl_label = inst.templates[self.project.template_id].get(
+            "label", self.project.template_id)
+        return {
+            "source": None,
+            "label": f"{tmpl_label} テンプレート既定値",
+            "params": dict(ps.values),
+        }
+
+    def _bind_refs(self) -> None:
+        """コンポーネントに参照を結び付ける。未設定なら既定値を入れる。"""
+        ref_id = getattr(self.component, "REQUIRES_REF", None)
+        if ref_id and not self.project.refs.get(ref_id):
+            self.project.refs[ref_id] = self._default_ref(ref_id)
+        self.component.set_refs(self.project.refs)
+
+    def set_reference(self, ref_id: str, path: str | None) -> None:
+        """参照コンポーネントを .wproj から取込む。path=None で既定値へ戻す。"""
+        required = getattr(self.component, "REQUIRES_REF", None)
+        if required != ref_id:
+            raise ValueError(
+                f"{self.component.label} は「{ref_id}」を参照しません")
+        if path is None:
+            self.project.refs[ref_id] = self._default_ref(ref_id)
+        else:
+            src = Project.load(path)
+            if src.component_id != ref_id:
+                raise ValueError(
+                    f"このプロジェクトは「{src.component_id}」です。"
+                    f"「{ref_id}」の .wproj を選んでください。")
+            inst = self.registry.get(src.instrument_id)
+            ref_comp = inst.make_component(ref_id, src.template_id)
+            ps = ParamSet(ref_comp.param_specs(),
+                          ref_comp.template.get(ref_id, {}))
+            ps.apply(src.params)
+            self.project.refs[ref_id] = {
+                "source": path, "label": src.name, "params": dict(ps.values)}
+        self.component.set_refs(self.project.refs)
+        self._stl_cache.clear()
+        self._imp_cache.clear()
+        self._wav_cache.clear()
+
+    def reference_summary(self) -> dict | None:
+        """フロント表示用の参照情報。参照不要なコンポーネントでは None。"""
+        ref_id = getattr(self.component, "REQUIRES_REF", None)
+        if not ref_id:
+            return None
+        entry = self.project.refs.get(ref_id, {})
+        return {
+            "component_id": ref_id,
+            "label": entry.get("label", "-"),
+            "source": entry.get("source"),
+            "dims": [list(d) for d in self.component.ref_dimensions()],
+        }
+
     def apply_params(self, values: dict) -> dict:
         assert self.paramset is not None and self.project is not None
         applied = self.paramset.apply(values)
@@ -118,7 +186,8 @@ class AppState:
     def _params_key(self) -> str:
         payload = json.dumps(
             {"i": self.project.instrument_id, "t": self.project.template_id,
-             "c": self.project.component_id, "p": self.paramset.values},
+             "c": self.project.component_id, "p": self.paramset.values,
+             "r": self.project.refs},
             sort_keys=True, default=str)
         return hashlib.md5(payload.encode()).hexdigest()
 
