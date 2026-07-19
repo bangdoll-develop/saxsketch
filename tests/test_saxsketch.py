@@ -399,6 +399,35 @@ def test_export_all_components(tmp_path):
         assert Path(e.json()["files"]["bom.csv"]).exists()
 
 
+def test_spec_sections_contract():
+    """各コンポーネントが spec_extras で sections を自前で組み立てること。
+
+    共通の export/svg.py が部品固有のキーを知らずに済む形（コアは楽器を知らない）。
+    """
+    from saxsketch.core.schema import ParamSet
+    reg = get_registry().get("saxophone")
+    for cid in ("mouthpiece", "reed", "ligature"):
+        comp = reg.make_component(cid, "alto")
+        if comp.REQUIRES_REF:
+            comp.set_refs({"mouthpiece":
+                           {"params": _template_params("mouthpiece", "alto")}})
+        p = dict(ParamSet(comp.param_specs(), comp.template[cid]).values)
+        sections = comp.spec_extras(p)["sections"]
+        assert sections, cid
+        for s in sections:
+            assert s["title"] and s["svg"].lstrip().startswith("<svg")
+
+
+def test_reed_material_table_is_single_source():
+    """材料の選択肢が reed_model.MATERIALS だけから来ること。"""
+    from saxsketch.acoustics import reed_model
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "material")
+    assert [c.value for c in spec.choices] == list(reed_model.MATERIALS)
+    assert [c.label for c in spec.choices] == \
+        [v[0] for v in reed_model.MATERIALS.values()]
+
+
 def test_ligature_builds_for_all_templates():
     for tid in ("soprano", "alto", "tenor"):
         comp = get_registry().get("saxophone").make_component("ligature", tid)

@@ -6,20 +6,13 @@
 """
 from __future__ import annotations
 
+from saxsketch.acoustics import reed_model
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import loft_sections, yz_profile_cut_solid
 
 from . import profiles
 from . import reed_profiles as rp
-
-MATERIAL_LABELS = {
-    "pla": "PLA(FDM)",
-    "petg": "PETG(FDM)",
-    "resin_flex": "フレキシブルレジン(光造形)",
-    "pp": "ポリプロピレン",
-    "cane": "ケーン（参考値・切削前提）",
-}
 
 
 def _specs(t: dict) -> list[ParamSpec]:
@@ -67,7 +60,8 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- 製造 ---
         ParamSpec(key="material", label="材料プリセット", category="製造",
                   type="choice", default=t["material"],
-                  choices=[Choice(k, v) for k, v in MATERIAL_LABELS.items()],
+                  choices=[Choice(k, v[0])
+                           for k, v in reed_model.MATERIALS.items()],
                   effect="ヤング率・密度から硬さ相当値と共振周波数を算出する"),
         f("min_layer", "積層ピッチ", "製造", "mm", 0.04, 0.20, 0.01,
           "印刷可否の判定に使う。先端厚がこの3倍を下回ると造形できない"),
@@ -135,7 +129,6 @@ class ReedComponent(Component):
                 self._print_card(params)]
 
     def _stiffness_card(self, params: dict) -> dict:
-        from saxsketch.acoustics import reed_model
         props = reed_model.reed_properties(params, self.ref_params())
         rows = [
             ["リード共振 f_reed", f"{props['f_reed_hz']:.0f} Hz"],
@@ -227,7 +220,6 @@ class ReedComponent(Component):
         return m
 
     def _override(self, params: dict) -> dict:
-        from saxsketch.acoustics import reed_model
         return reed_model.reed_override(
             reed_model.reed_properties(params, self.ref_params()), params)
 
@@ -258,11 +250,25 @@ class ReedComponent(Component):
         note = f"口に触れる部品。食品接触適合材料を使用のこと（規格長 {std_len}mm）"
         return [
             {"type": "3Dプリント", "name": f"リード（{size_label}）", "qty": 1,
-             "material": MATERIAL_LABELS.get(params["material"], params["material"]),
+             "material": reed_model.material_label(params["material"]),
              "note": note},
             {"type": "市販品", "name": "リードケース", "qty": 1, "material": "-",
              "note": "反り防止（任意）"},
         ]
+
+    def _section_svg(self, params: dict) -> str:
+        """厚みプロファイル図（テーブル面 y=0 基準）。"""
+        from saxsketch.export.svg import polyline_svg
+        pr = rp.side_profile_polylines(params)
+        zv = pr["vamp_start"]
+        top = max(y for _, y in pr["center"])
+        return polyline_svg([
+            {"pts": pr["center"], "stroke": "#222", "width": 1.5},
+            {"pts": pr["edge"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
+            {"pts": pr["table"], "stroke": "#cc3300", "width": 0.8, "dash": "2 2"},
+            {"pts": [(zv, 0.0), (zv, top)], "stroke": "#888", "width": 0.8, "dash": "3 3"},
+        ], "厚みプロファイル（実線=中央 / 青破線=側端 / 赤破線=テーブル面 / "
+           "灰=ヴァンプ端） 単位:mm")
 
     def spec_extras(self, params: dict) -> dict:
         p = params
@@ -275,11 +281,12 @@ class ReedComponent(Component):
             ("ヴァンプ長", f"{rp.vamp_start_z(p):.1f} mm"),
             ("材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
         ]
-        from saxsketch.acoustics import reed_model
         m = self.ref_params()
         props = reed_model.reed_properties(p, m)
         dims.append(("硬さ相当（推定）", props["strength_label"]))
         dims.append(("リード共振 f_reed（推定）", f"{props['f_reed_hz']:.0f} Hz"))
         if m:
             dims.append(("参照マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"))
-        return {"dimensions": dims, "reed_profile": rp.side_profile_polylines(p)}
+        return {"dimensions": dims,
+                "sections": [{"title": "厚みプロファイル",
+                              "svg": self._section_svg(p)}]}

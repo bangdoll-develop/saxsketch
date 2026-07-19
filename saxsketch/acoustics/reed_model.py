@@ -11,17 +11,34 @@ from __future__ import annotations
 
 import math
 
-from saxsketch.instruments.saxophone.components import reed_profiles as rp
-
-#: 材料: (ヤング率 E [MPa], 密度 ρ [kg/m³], 実用上の最小造形厚 [mm])
-MATERIALS: dict[str, tuple[float, float, float]] = {
-    "cane": (9000.0, 450.0, 0.07),        # ケーン（切削前提。印刷はしない）
-    "pla": (3500.0, 1240.0, 0.35),
-    "petg": (2000.0, 1270.0, 0.40),
-    "resin_flex": (1200.0, 1150.0, 0.30),
-    "pp": (1400.0, 905.0, 0.45),
+#: 材料表の唯一の出所: key → (表示名, ヤング率 E [MPa], 密度 ρ [kg/m³],
+#: 実用上の最小造形厚 [mm])。UI の選択肢も BOM の材料名もここから引く
+#: （物性と表示名が別々の表にあると、片方だけ増やしても実行時エラーにならず
+#: 黙って既定材料の物性が使われる）。
+MATERIALS: dict[str, tuple[str, float, float, float]] = {
+    "pla": ("PLA(FDM)", 3500.0, 1240.0, 0.35),
+    "petg": ("PETG(FDM)", 2000.0, 1270.0, 0.40),
+    "resin_flex": ("フレキシブルレジン(光造形)", 1200.0, 1150.0, 0.30),
+    "pp": ("ポリプロピレン", 1400.0, 905.0, 0.45),
+    "cane": ("ケーン（参考値・切削前提）", 9000.0, 450.0, 0.07),
 }
 DEFAULT_MATERIAL = "pla"
+
+
+def material_label(key: str) -> str:
+    return MATERIALS.get(key, (key,))[0]
+
+
+def _rp():
+    """`reed_profiles` を遅延 import する。
+
+    モジュール先頭で読むと `components/__init__` の初期化中に本モジュールを
+    import できず循環になる（`reed.py` はここから材料表を引く）。
+    `mouthpiece.py` が `openwind_bridge` をメソッド内 import しているのと同じ形。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles
+    return reed_profiles
+
 
 #: 硬さスケールの校正基準。ケーン材で先端厚 0.11mm の標準プロファイルを「3.0」とする。
 _CALIB_STRENGTH = 3.0
@@ -36,7 +53,8 @@ _CALIB_L_EFF = 23.0  # アルト標準マウスピースのフェイシング長
 
 
 def _material(key: str) -> tuple[float, float, float]:
-    return MATERIALS.get(key, MATERIALS[DEFAULT_MATERIAL])
+    """(E, ρ, 最小造形厚)。表示名は material_label() で引く。"""
+    return MATERIALS.get(key, MATERIALS[DEFAULT_MATERIAL])[1:]
 
 
 def effective_length(p: dict, ref_mp: dict) -> float:
@@ -47,6 +65,7 @@ def effective_length(p: dict, ref_mp: dict) -> float:
     30〜40%過大に取ることになり、f_reed が実測相場（2000〜3000Hz）の 1/5 に
     なることを実測で確認したため、フェイシング長を採る。
     """
+    rp = _rp()
     if ref_mp:
         return max(min(ref_mp["facing_length"], rp.vamp_start_z(p)), 5.0)
     return max(rp.vamp_start_z(p) * 0.7, 5.0)
@@ -68,6 +87,7 @@ def _bending(p: dict, l_eff: float, e_mpa: float, samples: int = 48
     等価 I は、この δ を一様断面の閉形式 δ = w·L⁴/(8·E·I) に当てはめて逆算する
     （共振周波数の算出と指標が同じ剛性を指すようにするため）。
     """
+    rp = _rp()
     w = 0.001 * rp.width(p, 0.0)      # 1kPa × 先端幅 [N/mm]
     dz = l_eff / samples
     defl, area = 0.0, 0.0
@@ -154,5 +174,5 @@ def reed_override(props: dict, p: dict) -> dict:
     """
     return {
         "f_reed": props["f_reed_hz"],
-        "width_mm": rp.width(p, 0.0),
+        "width_mm": _rp().width(p, 0.0),
     }

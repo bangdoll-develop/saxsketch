@@ -296,6 +296,22 @@ class LigatureComponent(Component):
                                  .get(p["plate_type"], "-")})
         return rows
 
+    def _section_svg(self, m: dict, params: dict, reed_thickness: float) -> str:
+        """帯の断面図（XY 断面）。"""
+        from saxsketch.export.svg import polyline_svg
+        sec = lp.section_polylines(m, params, reed_thickness)
+        xs = [x for x, _ in sec["outer"]]
+        ty, ry = sec["table_y"], sec["reed_face_y"]
+        return polyline_svg([
+            {"pts": sec["outer"], "stroke": "#222", "width": 1.5},
+            {"pts": sec["inner"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
+            {"pts": [(min(xs), ty), (max(xs), ty)], "stroke": "#cc3300",
+             "width": 0.8, "dash": "2 2"},
+            {"pts": [(min(xs), ry), (max(xs), ry)], "stroke": "#3aa06a",
+             "width": 0.8, "dash": "2 2"},
+        ], "帯の断面（実線=外周 / 青破線=内周 / 赤破線=テーブル面 / "
+           "緑破線=リード裏面） 単位:mm")
+
     def spec_extras(self, params: dict) -> dict:
         m = self.ref_params()
         p = params
@@ -314,5 +330,6 @@ class LigatureComponent(Component):
             z0, z1 = lp.seat_range(m, p)
             dims.insert(0, ("内周径", f"φ{lp.inner_radius(m, p) * 2.0:.2f} mm"))
             dims.append(("装着位置 z", f"{z0:.1f}〜{z1:.1f} mm"))
-            extras["ligature_section"] = lp.section_polylines(m, p, rt)
+            extras["sections"] = [{"title": "帯の断面",
+                                   "svg": self._section_svg(m, p, rt)}]
         return extras

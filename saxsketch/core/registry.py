@@ -65,7 +65,15 @@ class Component(ABC):
         """部品表の行リスト。"""
 
     def spec_extras(self, params: dict) -> dict:
-        """仕様書用の追加情報（主要寸法・断面SVG等）。"""
+        """仕様書用の追加情報。
+
+        Returns:
+            {"dimensions": [(名前, 値), …],
+             "sections":   [{"title": str, "svg": str}, …]}
+
+        断面図は各コンポーネントが `saxsketch.export.svg.polyline_svg()` を使って
+        自分で組み立てる。共通側は図の中身を知らない（コアは楽器を知らない）。
+        """
         return {}
 
     def regions(self, params: dict) -> dict:
