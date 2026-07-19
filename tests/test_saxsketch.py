@@ -55,6 +55,35 @@ def test_stations_monotonic_and_sane(alto):
         assert s["h"] > 0.5 and s["w"] > 0.5
 
 
+# ------------------------------------------------------------------ 汎用ビルダー
+
+def test_flat_bottom_rect_pts_is_flat():
+    """底面が厳密に平坦であること（リードのテーブル密着の前提）。"""
+    from saxsketch.geometry.builders import flat_bottom_rect_pts
+    pts = flat_bottom_rect_pts(w=13.0, h=2.0, y0=0.0, corner_r=0.5)
+    ys = [y for _, y in pts]
+    xs = [x for x, _ in pts]
+    assert min(ys) == 0.0
+    assert [y for y in ys if y == 0.0] == [0.0, 0.0]  # 底辺は2点ちょうど
+    assert max(ys) == pytest.approx(2.0)
+    assert min(xs) == pytest.approx(-6.5) and max(xs) == pytest.approx(6.5)
+    # 角丸なしなら単純な長方形4点
+    assert len(flat_bottom_rect_pts(4.0, 1.0, corner_r=0.0)) == 4
+
+
+def test_loft_sections_volume_and_watertight(tmp_path):
+    """一定断面のロフト体積が解析値と一致し、水密であること。"""
+    from saxsketch.geometry.builders import flat_bottom_rect_pts, loft_sections
+    from saxsketch.export.models import check_mesh, export_model
+    pts = flat_bottom_rect_pts(w=10.0, h=2.0, y0=0.0, corner_r=0.0)
+    solid = loft_sections([{"z": 0.0, "pts": pts}, {"z": 20.0, "pts": pts}])
+    assert solid.is_valid
+    assert solid.volume == pytest.approx(10.0 * 2.0 * 20.0, rel=0.02)
+    f = tmp_path / "slab.stl"
+    export_model(solid, f, "stl")
+    assert check_mesh(f)["watertight"]
+
+
 # ------------------------------------------------------------------ ジオメトリ
 
 @pytest.fixture(scope="module")
