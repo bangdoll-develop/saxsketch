@@ -688,6 +688,94 @@ def test_reference_endpoint(tmp_path):
                         "path": str(bad)}).status_code == 400
 
 
+def test_frozen_refs_marks_stale(tmp_path):
+    """参照差替えが凍結を陳腐化させ、入稿に古い編集モデルが混ざらないこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+
+    # 差替え用に body_dia だけ違うアルトのマウスピースを用意
+    wide = tmp_path / "wide.wproj"
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 30.0}})
+    c.post("/api/project/save", json={"path": str(wide)})
+
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    e = c.post("/api/export", json={"formats": ["stl"], "make_package": False,
+                                    "out_dir": str(tmp_path / "frozen"),
+                                    "freeze": True})
+    assert e.status_code == 200 and not STATE.is_stale()
+
+    r = c.post("/api/project/reference", json={"component": "mouthpiece",
+                                               "path": str(wide)})
+    assert r.status_code == 200
+    assert STATE.is_stale(), "参照を差し替えたのに陳腐化していない"
+    assert r.json()["manual_edit"]["stale"] is True
+
+    # 編集済みモデルを登録した状態なら入稿が止まる
+    STATE.project.derived_stl = b"dummy"
+    STATE.project.derived = {"imported_at": "x", "source_file": "x",
+                             "quality": {}, "analysis": {}}
+    blocked = c.post("/api/export", json={"formats": ["stl"],
+                                          "out_dir": str(tmp_path / "blocked"),
+                                          "make_package": False})
+    assert blocked.status_code == 409
+
+
+def test_frozen_without_refs_is_backward_compatible():
+    """refs キーを持たない Phase 3 以前の凍結でも例外にならず陳腐化しない。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    STATE.project.frozen = {"frozen_at": "2026-01-01T00:00:00Z",
+                            "params": dict(STATE.paramset.values),
+                            "solid_volume_cc": None, "export_dir": None}
+    assert STATE.is_stale() is False
+
+
+def test_impedance_unsupported_returns_422():
+    """音響を持たないコンポーネントは 500 ではなく 422 を返すこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    r = c.get("/api/acoustics/impedance")
+    assert r.status_code == 422
+    assert "インピーダンス" in r.json()["detail"]
+    assert c.get("/api/acoustics/sound.wav").status_code == 422
+
+
+def test_reference_size_mismatch_rejected(tmp_path):
+    """サイズ違いのマウスピースを参照に取れないこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    tenor = tmp_path / "tenor_mp.wproj"
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "tenor",
+                                     "component_id": "mouthpiece"})
+    c.post("/api/project/save", json={"path": str(tenor)})
+
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "reed"})
+    r = c.post("/api/project/reference", json={"component": "mouthpiece",
+                                               "path": str(tenor)})
+    assert r.status_code == 400
+    assert "テナー" in r.json()["detail"] and "アルト" in r.json()["detail"]
+
+
 def test_project_future_version_rejected(tmp_path):
     import json, zipfile
     f = tmp_path / "future.wproj"
