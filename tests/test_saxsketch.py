@@ -499,6 +499,76 @@ def test_project_roundtrip(tmp_path):
     assert loaded.params["tip_opening"] == 2.1
 
 
+def test_project_refs_roundtrip(tmp_path):
+    """参照スナップショットの往復と、refs 無しの旧 .wproj の後方互換。"""
+    import json
+    import zipfile
+    refs = {"mouthpiece": {"source": "/tmp/mp.wproj", "label": "M5",
+                           "params": {"body_dia": 27.5}}}
+    proj = Project(instrument_id="saxophone", template_id="alto",
+                   component_id="reed", name="リード", params={"tip_thickness": 0.5},
+                   refs=refs)
+    f = tmp_path / "r.wproj"
+    proj.save(f)
+    assert Project.load(f).refs == refs
+
+    # refs キーが無い旧形式（Phase 2 以前の .wproj）
+    old = tmp_path / "old.wproj"
+    with zipfile.ZipFile(old, "w") as zf:
+        zf.writestr("project.json", json.dumps({
+            "schema_version": 1, "instrument_id": "saxophone",
+            "template_id": "alto", "component_id": "mouthpiece",
+            "name": "旧", "params": {"tip_opening": 1.9}}))
+    loaded = Project.load(old)
+    assert loaded.refs == {} and loaded.params["tip_opening"] == 1.9
+
+
+def test_reference_endpoint(tmp_path):
+    """参照マウスピースの差替えが寸法に伝播し、不正な .wproj は 400 になること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+
+    # 差し替え元: ボディ径を広げたマウスピース プロジェクト
+    src = tmp_path / "wide.wproj"
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 30.0}})
+    c.post("/api/project/save", json={"path": str(src)})
+
+    r = c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                         "template_id": "alto",
+                                         "component_id": "ligature"})
+    assert r.status_code == 200
+    ref = r.json()["reference"]
+    assert ref["component_id"] == "mouthpiece" and ref["source"] is None
+    p = dict(STATE.paramset.values)
+    before = lp.inner_radius(STATE.component.ref_params(), p)
+
+    r = c.post("/api/project/reference", json={"component": "mouthpiece",
+                                               "path": str(src)})
+    assert r.status_code == 200
+    assert r.json()["reference"]["source"] == str(src)
+    after = lp.inner_radius(STATE.component.ref_params(), p)
+    assert after == pytest.approx(before + (30.0 - 27.5) / 2.0, abs=0.02)
+
+    # 既定へ戻す
+    assert c.post("/api/project/reference",
+                  json={"component": "mouthpiece", "path": None}).status_code == 200
+    assert lp.inner_radius(STATE.component.ref_params(), p) == pytest.approx(
+        before, abs=1e-9)
+
+    # マウスピース以外の .wproj は受け付けない
+    bad = tmp_path / "bad.wproj"
+    c.post("/api/project/save", json={"path": str(bad)})   # 現在=リガチャー
+    assert c.post("/api/project/reference",
+                  json={"component": "mouthpiece",
+                        "path": str(bad)}).status_code == 400
+
+
 def test_project_future_version_rejected(tmp_path):
     import json, zipfile
     f = tmp_path / "future.wproj"
