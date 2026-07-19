@@ -188,10 +188,11 @@ class ReedComponent(Component):
             status = "warn"
             advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
                       "振動部が硬くなり鳴りにくくなります。")
-        elif p["reed_length"] < seat0:
+        elif p["reed_length"] < seat1:
             status = "warn"
-            advice = ("踵がリガチャー座に届いていません。リガチャーで固定できず、"
-                      "リードがずれます。全長を伸ばしてください。")
+            advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
+                      f"リガチャーがリードの無い位置を締めることになり、固定できません。"
+                      f"全長を伸ばしてください。")
         return {"title": "マウスピース適合", "big": None, "status": status,
                 "rows": rows, "advice": advice}
 

@@ -41,6 +41,22 @@ def reed_face_y(ref_p: dict, lig_p: dict, reed_thickness: float) -> float:
     return profiles.table_y(ref_p) - reed_thickness - lig_p["reed_clearance"]
 
 
+def _shelf_y(radius: float, table_y: float) -> float:
+    """テーブル面の棚の Y。円と必ず交わるようにクランプする。"""
+    return max(min(table_y, radius - 0.5), -(radius - 0.5))
+
+
+def _shelf_half_width(radius: float, table_y: float) -> float:
+    """棚の半幅（円と y=棚 の交点の x）。タブ幅の上限を決める。"""
+    yt = _shelf_y(radius, table_y)
+    return math.sqrt(max(radius * radius - yt * yt, 0.0))
+
+
+def _clamp_tab_hw(radius: float, table_y: float, tab_hw: float) -> float:
+    """要求タブ半幅を棚に収まる範囲へ制限する。断面生成と適合判定の唯一の出所。"""
+    return min(tab_hw, _shelf_half_width(radius, table_y) - 0.2)
+
+
 def _wrap_section(radius: float, table_y: float, tab_hw: float, tab_bottom: float,
                   samples: int = 72) -> list[tuple[float, float]]:
     """円弧（テーブル面より上）＋リードのタブ（下）の断面。反時計回り。
@@ -49,10 +65,9 @@ def _wrap_section(radius: float, table_y: float, tab_hw: float, tab_bottom: floa
     タブ底辺を +x 方向 → 右の立ち上がり → テーブル面の棚 → 上側の円弧 →
     左の棚と立ち下がり。
     """
-    yt = min(table_y, radius - 0.5)
-    yt = max(yt, -(radius - 0.5))       # 円と必ず交わるようにする
-    x_c = math.sqrt(max(radius * radius - yt * yt, 0.0))
-    hw = min(tab_hw, x_c - 0.2)         # タブは棚の幅に収める
+    yt = _shelf_y(radius, table_y)
+    x_c = _shelf_half_width(radius, table_y)
+    hw = _clamp_tab_hw(radius, table_y, tab_hw)
     pts = [(-hw, tab_bottom), (hw, tab_bottom), (hw, yt), (x_c, yt)]
     th0 = math.atan2(yt, x_c)           # 負の角度
     span = math.pi - 2.0 * th0          # 上側を回って (-x_c, yt) まで
@@ -97,9 +112,21 @@ def inner_radius(ref_p: dict, lig_p: dict) -> float:
     return profiles.outer_radius(ref_p, (z0 + z1) / 2.0) + lig_p["clearance"]
 
 
-def flat_half_width(ref_p: dict, lig_p: dict, reed_thickness: float) -> float:
-    """リード接触面（タブ底面）の半幅。圧力プレートの寸法根拠。"""
+def requested_tab_half_width(ref_p: dict, lig_p: dict) -> float:
+    """リードを収めるのに必要なタブ半幅（クランプ前）。"""
     return ref_p["reed_width"] / 2.0 + lig_p["clearance"]
+
+
+def flat_half_width(ref_p: dict, lig_p: dict, reed_thickness: float) -> float:
+    """リード接触面（タブ底面）の**実際の**半幅。圧力プレートの寸法根拠。
+
+    棚に収まらない要求幅は断面生成側で切り詰められる。ここで同じクランプを
+    通しておかないと、プレートがタブの外に置かれて側壁を突き抜ける。
+    """
+    z0, z1 = seat_range(ref_p, lig_p)
+    radius = profiles.outer_radius(ref_p, (z0 + z1) / 2.0) + lig_p["clearance"]
+    return _clamp_tab_hw(radius, profiles.table_y(ref_p),
+                         requested_tab_half_width(ref_p, lig_p))
 
 
 # ---------------------------------------------------------------- ネジ・スリット
@@ -131,10 +158,29 @@ def screw_zs(ref_p: dict, lig_p: dict) -> list[float]:
     return [z0 + (z1 - z0) * (i + 1) / (n + 1) for i in range(n)]
 
 
+#: ネジ穴の上下に残す肉厚 [mm]
+SCREW_WALL = 0.6
+
+
+def min_boss_height(lig_p: dict) -> float:
+    """ネジ穴が耳に収まるのに必要な耳の高さ [mm]。"""
+    _, hole_d, _ = screw_spec(lig_p)
+    return hole_d + 2.0 * SCREW_WALL
+
+
 def screw_axis_y(ref_p: dict, lig_p: dict) -> float:
-    """ネジ軸の Y 座標（耳の中ほど）。"""
-    r = inner_radius(ref_p, lig_p)
-    return r + lig_p["band_thickness"] + lig_p["boss_height"] * 0.5
+    """ネジ軸の Y 座標。耳の中ほどを狙いつつ、穴が耳から出ないようクランプする。
+
+    中央固定（boss_height×0.5）だと耳が低いときに穴が上へ突き抜け、閉じた穴では
+    なく上に開いたスロットになってネジが抜ける。
+    """
+    base = inner_radius(ref_p, lig_p) + lig_p["band_thickness"]   # 耳の付け根
+    top = base + lig_p["boss_height"]                             # 耳の頂点
+    _, hole_d, _ = screw_spec(lig_p)
+    margin = hole_d / 2.0 + SCREW_WALL
+    if top - base < 2.0 * margin:      # 耳が低すぎる（カードが warn を出す）
+        return (base + top) / 2.0
+    return min(max(base + lig_p["boss_height"] * 0.5, base + margin), top - margin)
 
 
 def required_screw_length(lig_p: dict) -> float:

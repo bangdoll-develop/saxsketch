@@ -58,14 +58,17 @@ def flat_bottom_rect_pts(w: float, h: float, y0: float = 0.0,
 
     リードのテーブル面はマウスピースへ密着させる必要があり、スーパー楕円では
     わずかに膨らんで密着しない。角丸は上側の2隅にのみ入れる（下側は平坦を保つ）。
+
+    点数は `corner_r` によらず常に `2*samples + 4` 個で一定にする。`loft_sections`
+    のルールドロフトは頂点対応ではなくパラメータ対応で面を張るため、断面ごとに
+    点数が変わると角の位置が辺の途中に写像されて面がねじれる。角丸が実質ゼロの
+    断面でも微小半径を残して点を並べる（形状差は 0.01mm 未満＝造形精度以下）。
     """
     hw = w / 2.0
-    r = max(min(corner_r, hw - 1e-6, h - 1e-6), 0.0)
+    r = min(corner_r, hw - 1e-6, h - 1e-6)
+    r = max(r, min(h, w) * 1e-3)   # 点が重ならない下限。角は実質直角のまま
     top = y0 + h
     pts: list[tuple[float, float]] = [(-hw, y0), (hw, y0)]  # 底辺（平坦）
-    if r <= 1e-9:
-        pts += [(hw, top), (-hw, top)]
-        return pts
     pts.append((hw, top - r))
     for i in range(1, samples + 1):  # 右上の角丸（終点 (hw-r, top) まで含む）
         th = (math.pi / 2.0) * i / samples

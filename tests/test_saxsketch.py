@@ -67,8 +67,22 @@ def test_flat_bottom_rect_pts_is_flat():
     assert [y for y in ys if y == 0.0] == [0.0, 0.0]  # 底辺は2点ちょうど
     assert max(ys) == pytest.approx(2.0)
     assert min(xs) == pytest.approx(-6.5) and max(xs) == pytest.approx(6.5)
-    # 角丸なしなら単純な長方形4点
-    assert len(flat_bottom_rect_pts(4.0, 1.0, corner_r=0.0)) == 4
+
+
+def test_flat_bottom_rect_pts_constant_vertex_count():
+    """点数が corner_r によらず一定であること。
+
+    `loft_sections` のルールドロフトはパラメータ対応で面を張るため、断面ごとに
+    点数が変わると角の位置が辺の途中に写像されて面がねじれる。
+    """
+    from saxsketch.geometry.builders import flat_bottom_rect_pts
+    counts = {len(flat_bottom_rect_pts(13.0, 2.0, 0.0, r))
+              for r in (0.0, 1e-9, 0.01, 0.5, 1.0, 5.0)}   # 5.0 は上限クランプ
+    assert len(counts) == 1
+    # 角丸ゼロ相当でも底面は平坦のまま、上端は h に届く
+    pts = flat_bottom_rect_pts(13.0, 2.0, 0.0, 0.0)
+    assert min(y for _, y in pts) == 0.0
+    assert max(y for _, y in pts) == pytest.approx(2.0, abs=0.01)
 
 
 def test_loft_sections_volume_and_watertight(tmp_path):
@@ -158,6 +172,34 @@ def test_reed_builds_for_all_templates():
         # 既定同士は適合しているはず（テンプレートの整合性テスト）
         fit = next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
         assert fit["status"] == "ok", fit["advice"]
+
+
+def test_reed_sections_uniform_vertex_count():
+    """全ステーションの頂点数が揃っていること（ロフトのねじれ防止）。"""
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        p = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        counts = {len(s["pts"]) for s in rp.sections(p)}
+        assert len(counts) == 1, f"{tid}: 頂点数が不揃い {counts}"
+
+
+def test_reed_heel_reaches_seat_end(alto_reed):
+    """踵がリガチャー座の後端に届かない設定を警告すること。"""
+    comp, p = alto_reed
+    m = comp.ref_params()
+    from saxsketch.instruments.saxophone.components import profiles
+    _, seat1 = profiles.ligature_seat_range(m)
+    assert p["reed_length"] >= seat1                  # 既定は届いている
+
+    def fit(**over):
+        sim = comp.simulate({**p, **over})
+        return next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
+
+    assert fit()["status"] == "ok"
+    short = fit(reed_length=seat1 - 5.0)
+    assert short["status"] == "warn" and "後端" in short["advice"]
 
 
 def test_reed_stiffness_directions(alto_reed):
@@ -271,6 +313,54 @@ def test_ligature_plate_types(alto_ligature):
     vols = {k: comp.build({**p, "plate_type": k}).volume
             for k in ("none", "rail", "plain")}
     assert vols["none"] < vols["rail"] < vols["plain"]
+
+
+def test_ligature_screw_hole_inside_boss():
+    """ネジ穴が耳の中に収まること（全テンプレート×ネジ径×ネジ座下限）。"""
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("ligature", tid)
+        comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        m = comp.ref_params()
+        specs = {s.key: s for s in comp.param_specs()}
+        base = dict(ParamSet(comp.param_specs(), comp.template["ligature"]).values)
+        for size in ("m2.5", "m3"):
+            p = {**base, "screw_size": size,
+                 "boss_height": specs["boss_height"].min}   # スキーマ下限
+            assert p["boss_height"] >= lp.min_boss_height(p), \
+                f"{tid}/{size}: ネジ座の下限がネジ径に足りない"
+            ear_base = lp.inner_radius(m, p) + p["band_thickness"]
+            ear_top = ear_base + p["boss_height"]
+            axis = lp.screw_axis_y(m, p)
+            _, hole_d, _ = lp.screw_spec(p)
+            assert ear_base <= axis - hole_d / 2.0, f"{tid}/{size}: 穴が下へ抜ける"
+            assert axis + hole_d / 2.0 <= ear_top, f"{tid}/{size}: 穴が上へ抜ける"
+
+
+def test_ligature_tab_matches_plate(alto_ligature):
+    """圧力プレートの幅が実際のタブ幅を超えないこと、超える設定は警告すること。"""
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    comp, p = alto_ligature
+    m = comp.ref_params()
+    rt = comp.reed_thickness()
+    assert lp.flat_half_width(m, p, rt) <= lp.requested_tab_half_width(m, p) + 1e-9
+
+    def fit(mp):
+        comp.set_refs({"mouthpiece": {"params": mp}})
+        sim = comp.simulate(p)
+        return next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
+
+    try:
+        assert fit(m)["status"] == "ok"
+        # ボディ径を絞ると棚が狭くなりリードが入らない → 黙って切り詰めず警告する
+        narrow = {**m, "body_dia": 20.0}
+        assert lp.flat_half_width(narrow, p, rt) \
+            < lp.requested_tab_half_width(narrow, p)
+        card = fit(narrow)
+        assert card["status"] == "warn" and "収納幅" in card["advice"]
+    finally:
+        comp.set_refs({"mouthpiece": {"params": m}})
 
 
 def test_ligature_screw_length_is_stock(alto_ligature):

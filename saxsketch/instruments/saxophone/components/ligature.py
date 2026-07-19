@@ -49,8 +49,8 @@ def _specs(t: dict) -> list[ParamSpec]:
                   type="choice", default=t["screw_size"],
                   choices=[Choice("m2.5", "M2.5"), Choice("m3", "M3")],
                   effect="市販の小ねじ。部品表に必要長さを自動計算して載せる"),
-        f("boss_height", "ネジ座の高さ", "締結", "mm", 3.0, 12.0, 0.5,
-          "耳の高さ。高いほど締めやすいが出っ張る"),
+        f("boss_height", "ネジ座の高さ", "締結", "mm", 5.0, 12.0, 0.5,
+          "耳の高さ。高いほど締めやすいが出っ張る。低すぎるとネジ穴が耳から出る"),
         f("slit_width", "スリット幅", "締結", "mm", 1.5, 6.0, 0.5,
           "締め代。広いほど大きく締められるが、締めきると変形が大きい"),
         # --- プレート ---
@@ -192,8 +192,18 @@ class LigatureComponent(Component):
             ["マウスピース ボディ径", f"φ{m['body_dia']:.1f} mm"],
             ["装着位置 z", f"{z0:.1f}〜{z1:.1f} mm"],
             ["リガチャー座", f"{seat0:.1f}〜{seat1:.1f} mm"],
-            ["リード接触面の幅", f"{lp.flat_half_width(m, p, rt) * 2.0:.1f} mm"],
+            ["リード収納幅（要求/実際)",
+             f"{lp.requested_tab_half_width(m, p) * 2.0:.1f} / "
+             f"{lp.flat_half_width(m, p, rt) * 2.0:.1f} mm"],
         ]
+        if lp.flat_half_width(m, p, rt) < lp.requested_tab_half_width(m, p) - 0.01:
+            return {"title": "マウスピース適合", "big": None, "status": "warn",
+                    "rows": rows,
+                    "advice": f"マウスピース外形に対してリードが幅広く、収納幅が "
+                              f"{lp.flat_half_width(m, p, rt) * 2.0:.1f}mm に切り詰め"
+                              f"られています。リードが入りません。ボディ径の大きい"
+                              f"マウスピースを参照するか、はめあい隙間を減らして"
+                              f"ください。"}
         if z1 - z0 < p["band_width"] - 0.05:
             return {"title": "マウスピース適合", "big": None, "status": "warn",
                     "rows": rows,
@@ -214,13 +224,22 @@ class LigatureComponent(Component):
         nominal, hole_d, head_d = lp.screw_spec(p)
         need = lp.required_screw_length(p)
         stock = lp.stock_screw_length(p)
+        need_boss = lp.min_boss_height(p)
         rows = [
             ["ネジ", f"M{nominal:g} × {int(p['screw_count'])} 本"],
             ["必要な首下長さ", f"{need:.1f} mm 以上"],
             ["推奨する市販長さ", f"{stock} mm"],
             ["バカ穴径", f"φ{hole_d:.1f} mm"],
             ["耳の厚み", f"{lp.ear_thickness(p):.1f} mm"],
+            ["ネジ座の高さ / 下限",
+             f"{p['boss_height']:.1f} / {need_boss:.1f} mm"],
         ]
+        if p["boss_height"] < need_boss:
+            return {"title": "締結", "big": f"M{nominal:g}×{stock}", "status": "bad",
+                    "rows": rows,
+                    "advice": f"ネジ座が低くバカ穴（φ{hole_d:.1f}）が耳から出ます。"
+                              f"閉じた穴にならずネジが抜けます。ネジ座の高さを "
+                              f"{need_boss:.1f}mm 以上にするか、ネジを細くしてください。"}
         if stock < need:
             return {"title": "締結", "big": f"M{nominal:g}×{stock}", "status": "bad",
                     "rows": rows,
