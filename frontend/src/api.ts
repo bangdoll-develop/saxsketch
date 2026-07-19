@@ -22,10 +22,23 @@ export interface Suggestion {
   param: string; label: string; direction: string; per_step: number;
   step: number; unit: string;
 }
-export interface Simulation {
+/** 汎用シミュレーション カード（リード/リガチャー） */
+export interface SimCard {
+  title: string; big: string | null; status: "ok" | "warn" | "bad";
+  rows: [string, string][]; advice: string;
+}
+export interface MouthpieceSimulation {
+  kind: "mouthpiece";
   tier1: Tier1; tier2: Tier2; harmonics: Harmonics;
   sensitivity: { table: Record<string, unknown>; suggestions: Record<string, Suggestion> };
 }
+export interface CardSimulation {
+  kind: "reed" | "ligature";
+  cards: SimCard[];
+  /** リードのみ。音プレビュー（印象合成）用 */
+  harmonics?: Harmonics;
+}
+export type Simulation = MouthpieceSimulation | CardSimulation;
 export interface ProjectData {
   name: string; notes: string; path: string | null;
   instrument_id: string; template_id: string; component_id: string;

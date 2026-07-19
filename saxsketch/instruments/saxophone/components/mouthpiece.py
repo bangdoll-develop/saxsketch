@@ -155,6 +155,7 @@ class MouthpieceComponent(Component):
         sens = ac_brightness.sensitivity(params, self.param_specs())
         harm = ac_harmonics.harmonic_series(tier2)
         return {
+            "kind": "mouthpiece",
             "tier1": tier1,
             "tier2": tier2,
             "sensitivity": sens,

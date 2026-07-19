@@ -281,6 +281,34 @@ def test_ligature_screw_length_is_stock(alto_ligature):
     assert stock >= lp.required_screw_length(p)
 
 
+def test_export_all_components(tmp_path):
+    """3部品とも 出力一式（STL・仕様書・BOM）が通ること。
+
+    仕様書は断面図とシミュレーション節をコンポーネントごとに切り替える。
+    """
+    import re
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    for comp in ("mouthpiece", "reed", "ligature"):
+        r = c.post("/api/project/new", json={
+            "instrument_id": "saxophone", "template_id": "alto",
+            "component_id": comp})
+        assert r.status_code == 200, r.text
+        assert (r.json()["reference"] is None) == (comp == "mouthpiece")
+        e = c.post("/api/export", json={
+            "formats": ["stl"], "out_dir": str(tmp_path / comp),
+            "make_package": False})
+        assert e.status_code == 200, e.text
+        assert e.json()["mesh_quality"]["watertight"]
+        html = Path(e.json()["files"]["spec.html"]).read_text(encoding="utf-8")
+        assert html.count("<svg") == 1          # 断面図が1枚出ている
+        heads = re.findall(r"<h2>(.*?)</h2>", html)
+        assert any("音響予測" in h for h in heads) == (comp == "mouthpiece")
+        assert any("シミュレーション" in h for h in heads)
+        assert Path(e.json()["files"]["bom.csv"]).exists()
+
+
 def test_ligature_builds_for_all_templates():
     for tid in ("soprano", "alto", "tenor"):
         comp = get_registry().get("saxophone").make_component("ligature", tid)

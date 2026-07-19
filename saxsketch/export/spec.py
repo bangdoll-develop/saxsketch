@@ -30,6 +30,30 @@ PRINT_RECOMMENDATIONS = {
             "食品接触グレードのフィラメントを選定、印刷後の洗浄を徹底",
         ],
     },
+    "resin_flex": {
+        "label": "フレキシブルレジン（光造形）",
+        "items": [
+            "積層ピッチ 0.03〜0.05mm。薄い先端部を造形するため最小ピッチを推奨",
+            "造形向き: リードを寝かせず立て、テーブル面をサポートから逃がす",
+            "二次硬化を過剰にかけると硬化して柔軟性が失われる。時間管理を厳密に",
+            "口に触れる部品のため、食品接触適合（歯科用等）レジンを選定すること",
+        ],
+    },
+    "pp": {
+        "label": "ポリプロピレン（FDM・上級者向け）",
+        "items": [
+            "反りが強く定着が難しい。PP専用ビルドシート必須",
+            "積層ピッチ 0.10mm、庫内温度を保てる密閉プリンタを推奨",
+            "耐薬品性・耐疲労性が高く、繰り返し曲がるリードに向く",
+        ],
+    },
+    "cane": {
+        "label": "ケーン（切削・参考）",
+        "items": [
+            "3Dプリントではなく切削・成形が前提。出力データは形状の参照用",
+            "モデルの寸法はリードメイキングマシンの型出しに使用できる",
+        ],
+    },
     "nylon_sls": {
         "label": "ナイロン PA12（SLS・外注推奨）",
         "items": [
@@ -41,38 +65,38 @@ PRINT_RECOMMENDATIONS = {
 }
 
 
-def _svg_section(profile: dict, width_px: int = 760) -> str:
-    """side_profile_polylines の出力から断面 SVG を組み立てる。"""
-    pts_all = (profile["outer_top"] + profile["outer_bot"]
-               + profile["cavity_top"] + profile["cavity_bot"])
-    zs = [z for z, _ in pts_all]
-    ys = [y for _, y in pts_all]
-    z0, z1 = min(zs), max(zs)
-    y0, y1 = min(ys) - 2, max(ys) + 2
-    scale = (width_px - 40) / (z1 - z0)
-    h_px = int((y1 - y0) * scale) + 40
+def _acoustics_section(sim: dict) -> str:
+    """音響予測セクション。マウスピースは Tier1/2 の表、他は汎用カードの表。"""
+    t1 = sim.get("tier1")
+    t2 = sim.get("tier2", {})
+    if t1:
+        tone_rows = "".join(
+            f"<tr><th>{t2['labels'][k]}</th><td>{t2[k]:.1f} / 10</td></tr>\n"
+            for k in ["brightness", "power", "resistance", "flexibility", "edge"]
+            if k in t2)
+        return f"""<h2>4. 音響予測（設計時シミュレーション）</h2>
+<table>
+<tr><th>内容積（実効）</th><td>{t1.get('effective_cc', '-')} cc（目標 {t1.get('target_cc', '-')} cc）</td></tr>
+<tr><th>音程傾向</th><td>{t1.get('deviation_cents', '-')} セント（{t1.get('advice', '')}）</td></tr>
+{tone_rows}
+</table>
+<p class="note">※ 指標は文献傾向に基づく推定値。絶対値ではなく設計比較の目安。</p>"""
 
-    def path(pts):
-        d = " ".join(f"{'M' if i == 0 else 'L'}{20 + (z - z0) * scale:.1f},"
-                     f"{h_px - 20 - (y - y0) * scale:.1f}" for i, (z, y) in enumerate(pts))
-        return d
-
-    ty = profile["table_y"]
-    table_line = path([(z0, ty), (z1 * 0.63, ty)])
-    return f"""<svg viewBox="0 0 {width_px} {h_px}" xmlns="http://www.w3.org/2000/svg"
-     style="background:#fff;border:1px solid #ccc">
-  <path d="{path(profile['outer_top'])}" fill="none" stroke="#222" stroke-width="1.5"/>
-  <path d="{path(profile['outer_bot'])}" fill="none" stroke="#222" stroke-width="1.5"/>
-  <path d="{path(profile['cavity_top'])}" fill="none" stroke="#0066cc" stroke-width="1.2" stroke-dasharray="5 3"/>
-  <path d="{path(profile['cavity_bot'])}" fill="none" stroke="#0066cc" stroke-width="1.2" stroke-dasharray="5 3"/>
-  <path d="{table_line}" fill="none" stroke="#cc3300" stroke-width="0.8" stroke-dasharray="2 2"/>
-  <text x="24" y="16" font-size="11" fill="#555">側面断面図（実線=外形 / 青破線=内部空洞 / 赤破線=テーブル面） 単位:mm</text>
-</svg>"""
+    blocks = ""
+    for card in sim.get("cards", []):
+        rows = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>\n" for k, v in card["rows"])
+        big = f"<p><b>{card['big']}</b></p>\n" if card.get("big") else ""
+        blocks += (f"<h3>{card['title']}</h3>\n{big}<table>{rows}</table>\n"
+                   f"<p class=\"note\">{card.get('advice', '')}</p>\n")
+    if not blocks:
+        return ""
+    return f"<h2>4. 設計時シミュレーション</h2>\n{blocks}"
 
 
 def spec_html(project_name: str, instrument_label: str, component_label: str,
               template_label: str, params: dict, specs: list, dimensions: list,
-              bom_rows: list[dict], sim: dict, profile: dict, material: str) -> str:
+              bom_rows: list[dict], sim: dict, sections: list[dict],
+              material: str) -> str:
     rec = PRINT_RECOMMENDATIONS.get(material, PRINT_RECOMMENDATIONS["resin"])
 
     spec_map = {s.key: s for s in specs}
@@ -95,13 +119,8 @@ def spec_html(project_name: str, instrument_label: str, component_label: str,
         f"<tr><td>{r['type']}</td><td>{r['name']}</td><td>{r['qty']}</td>"
         f"<td>{r['material']}</td><td>{r['note']}</td></tr>\n" for r in bom_rows)
     rec_items = "".join(f"<li>{i}</li>\n" for i in rec["items"])
-
-    t1 = sim.get("tier1", {})
-    t2 = sim.get("tier2", {})
-    tone_rows = "".join(
-        f"<tr><th>{t2['labels'][k]}</th><td>{t2[k]:.1f} / 10</td></tr>\n"
-        for k in ["brightness", "power", "resistance", "flexibility", "edge"]
-        if k in t2)
+    section_html = "\n".join(f"<h3>{s['title']}</h3>\n{s['svg']}" for s in sections) \
+        or '<p class="note">この部品には断面図がありません。</p>'
 
     return f"""<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
@@ -127,19 +146,13 @@ def spec_html(project_name: str, instrument_label: str, component_label: str,
 <table>{dim_rows}</table>
 
 <h2>2. 断面図</h2>
-{_svg_section(profile)}
+{section_html}
 
 <h2>3. 設計パラメータ全値</h2>
 <table><tr><th>カテゴリ</th><th>パラメータ</th><th>値</th></tr>
 {param_rows}</table>
 
-<h2>4. 音響予測（設計時シミュレーション）</h2>
-<table>
-<tr><th>内容積（実効）</th><td>{t1.get('effective_cc', '-')} cc（目標 {t1.get('target_cc', '-')} cc）</td></tr>
-<tr><th>音程傾向</th><td>{t1.get('deviation_cents', '-')} セント（{t1.get('advice', '')}）</td></tr>
-{tone_rows}
-</table>
-<p class="note">※ 指標は文献傾向に基づく推定値。絶対値ではなく設計比較の目安。</p>
+{_acoustics_section(sim)}
 
 <h2>5. 部品表（BOM）</h2>
 <table><tr><th>区分</th><th>品名</th><th>数量</th><th>材料</th><th>備考</th></tr>

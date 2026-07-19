@@ -91,7 +91,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 .simcard h3 { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
 .simcard .big { font-size: 20px; font-weight: 700; }
 .simcard .ok { color: var(--accent2); }
-.simcard .sharp, .simcard .flat { color: var(--warn); }
+.simcard .sharp, .simcard .flat, .simcard .warn { color: var(--warn); }
+.simcard .bad { color: #f2708a; }
 .simcard .advice { color: var(--muted); font-size: 11.5px; line-height: 1.6; margin-top: 6px; }
 .simcard table { width: 100%; font-size: 12px; border-collapse: collapse; }
 .simcard td { padding: 2px 4px; }

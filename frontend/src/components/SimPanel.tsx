@@ -1,13 +1,42 @@
-import type { Simulation, Tier2 } from "../api";
+import type { SimCard, Simulation, Tier2 } from "../api";
 import RadarChart from "./RadarChart";
 import SoundPreview from "./SoundPreview";
 import ImpedancePanel from "./ImpedancePanel";
 
 const METRIC_ORDER = ["brightness", "power", "resistance", "flexibility", "edge"] as const;
 
+/** 汎用カード（リード/リガチャー）。マウスピースの .simcard スタイルを流用する */
+function Card({ card }: { card: SimCard }) {
+  return (
+    <div className="simcard">
+      <h3>{card.title}</h3>
+      {card.big && <div className={`big ${card.status}`}>{card.big}</div>}
+      <table>
+        <tbody>
+          {card.rows.map(([k, v]) => (
+            <tr key={k}><td>{k}</td><td className="num">{v}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      {card.advice && <div className="advice">{card.advice}</div>}
+    </div>
+  );
+}
+
 export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
   sim: Simulation; compare?: Tier2 | null; paramsKey: string; onGoalSeek: () => void;
 }) {
+  if (sim.kind !== "mouthpiece") {
+    // リード/リガチャー: 汎用カード。リードのみ音プレビューを出す
+    // （インピーダンスとゴールシークはマウスピース設計の機能なので出さない）
+    return (
+      <div>
+        {sim.cards.map((c) => <Card key={c.title} card={c} />)}
+        {sim.harmonics && <SoundPreview harmonics={sim.harmonics} />}
+      </div>
+    );
+  }
+
   const t1 = sim.tier1;
   const sugg = sim.sensitivity?.suggestions ?? {};
   return (

@@ -219,7 +219,7 @@ export default function App() {
                           onClose={() => setDialog(null)}
                           allowClose={project !== null} />
       )}
-      {dialog === "goalseek" && sim && project && (
+      {dialog === "goalseek" && sim?.kind === "mouthpiece" && project && (
         <GoalSeekDialog tier2={sim.tier2} schema={project.schema}
                         onApply={applyProposal} onClose={() => setDialog(null)} />
       )}

@@ -21,6 +21,7 @@ from saxsketch.acoustics import goalseek as gs
 from saxsketch.export.bom import bom_csv
 from saxsketch.export.models import check_mesh, export_model
 from saxsketch.export.package import build_package, readme_text
+from saxsketch.export import svg as spec_svg
 from saxsketch.export.spec import spec_html
 from .state import STATE
 
@@ -405,7 +406,8 @@ async def export(req: ExportReq):
         params=params, specs=comp.param_specs(),
         dimensions=extras.get("dimensions", []),
         bom_rows=bom_rows, sim=sim,
-        profile=extras.get("profile", {}), material=params.get("material", "resin"))
+        sections=spec_svg.sections_for(extras),
+        material=params.get("material", "resin"))
     (out_dir / "spec.html").write_text(html, encoding="utf-8")
     files["spec.html"] = out_dir / "spec.html"
 
