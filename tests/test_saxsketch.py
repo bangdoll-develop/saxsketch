@@ -160,6 +160,65 @@ def test_reed_builds_for_all_templates():
         assert fit["status"] == "ok", fit["advice"]
 
 
+def test_reed_stiffness_directions(alto_reed):
+    """硬さ相当・共振周波数の変化方向（絶対値ではなく単調性を検証する）。"""
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    m = comp.ref_params()
+
+    def props(**over):
+        return reed_model.reed_properties({**p, **over}, m)
+
+    base = props()
+    thick = props(tip_thickness=p["tip_thickness"] + 0.2)
+    thin = props(tip_thickness=p["tip_thickness"] - 0.1)
+    assert thin["strength_equiv"] < base["strength_equiv"] < thick["strength_equiv"]
+    assert thin["f_reed_hz"] < base["f_reed_hz"] < thick["f_reed_hz"]
+
+    # ヴァンプを伸ばす＝削り面が長い＝柔らかい
+    assert props(vamp_length=p["vamp_length"] + 8.0)["strength_equiv"] \
+        < base["strength_equiv"]
+    # 柔らかい材料ほど柔らかい
+    assert props(material="resin_flex")["strength_equiv"] < base["strength_equiv"]
+    # 校正: ケーンの標準リードが 3 前後になること（スケールの妥当性）
+    calib = reed_model.reed_properties(
+        dict(reed_model._CALIB_PARAMS), {"facing_length": reed_model._CALIB_L_EFF})
+    assert 2.5 < calib["strength_equiv"] < 3.5
+
+
+def test_reed_printability_flag(alto_reed):
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    m = comp.ref_params()
+    assert reed_model.reed_properties({**p, "tip_thickness": 0.40}, m)["printable"]
+    assert not reed_model.reed_properties(
+        {**p, "tip_thickness": 0.20, "material": "pla"}, m)["printable"]
+
+
+def test_reed_override_changes_sound(alto_reed):
+    """リード実形状が物理モデル音に効いていること（Phase 3 の価値の核）。
+
+    リード共振を大きく変えると発振するレジスタが変わる。OpenWind 必須なので
+    WSL でのみ実行される。
+    """
+    pytest.importorskip("openwind")
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    m = comp.ref_params()
+
+    def play(tip):
+        pp = {**p, "material": "cane", "tip_thickness": tip}
+        ov = reed_model.reed_override(reed_model.reed_properties(pp, m), pp)
+        _, meta = ob.synthesize(m, comp.size_info, "normal",
+                                duration=0.15, override=ov)
+        return meta["f0"]
+
+    soft, hard = play(0.30), play(0.55)
+    assert soft > 0 and hard > 0            # どちらも自励発振している
+    assert abs(hard - soft) / soft > 0.05   # レジスタ/音高が動いた
+
+
 def test_reed_filed_cut_removes_material(alto_reed):
     comp, p = alto_reed
     unfiled = comp.build({**p, "file_cut": "unfiled"}).volume

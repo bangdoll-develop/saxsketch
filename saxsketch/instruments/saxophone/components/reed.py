@@ -119,10 +119,45 @@ class ReedComponent(Component):
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
-        return {"kind": "reed", "cards": self._cards(params)}
+        sim = {"kind": "reed", "cards": self._cards(params)}
+        m = self.ref_params()
+        if m:
+            # 音プレビュー（印象合成）は参照マウスピースの音色指標から導く。
+            # リード単体では音色を語れないので、組み合わせた状態の音を示す。
+            from saxsketch.acoustics import brightness as ac_brightness
+            from saxsketch.acoustics import harmonics as ac_harmonics
+            sim["harmonics"] = ac_harmonics.harmonic_series(
+                ac_brightness.tone_metrics(m))
+        return sim
 
     def _cards(self, params: dict) -> list[dict]:
-        return [self._fit_card(params), self._print_card(params)]
+        return [self._stiffness_card(params), self._fit_card(params),
+                self._print_card(params)]
+
+    def _stiffness_card(self, params: dict) -> dict:
+        from saxsketch.acoustics import reed_model
+        props = reed_model.reed_properties(params, self.ref_params())
+        rows = [
+            ["リード共振 f_reed", f"{props['f_reed_hz']:.0f} Hz"],
+            ["自由振動長", f"{props['l_eff_mm']:.1f} mm"],
+            ["曲げ剛性 EI", f"{props['ei_n_mm2']:.0f} N·mm²"],
+            ["先端たわみ", f"{props['tip_compliance_mm_per_kpa']:.2f} mm / kPa"],
+        ]
+        s = props["strength_equiv"]
+        if s < 1.5:
+            status, advice = "warn", (
+                "柔らかすぎます。先端が閉じきって音が詰まりやすく、耐久も落ちます。"
+                "先端厚を上げるか、ヴァンプを短くしてください。")
+        elif s > 5.0:
+            status, advice = "warn", (
+                "硬すぎます。鳴らすのに強い吹圧が要り、低音が出にくくなります。"
+                "先端厚を下げるか、ヴァンプを長くしてください。")
+        else:
+            status, advice = "ok", (
+                "一般的な硬さのレンジです。数値は片持ち梁近似による推定なので、"
+                "絶対値ではなくパラメータを動かしたときの変化方向を見てください。")
+        return {"title": "硬さ・剛性", "big": props["strength_label"],
+                "status": status, "rows": rows, "advice": advice}
 
     def _fit_card(self, params: dict) -> dict:
         """参照マウスピースとの適合。ここが Phase 3 の「自動整合」の可視化。"""
@@ -182,6 +217,35 @@ class ReedComponent(Component):
                 "advice": "実績のある先端厚レンジです。積層方向はリード長手方向に"
                           "平行（面内）にしてください。"}
 
+    # ------------------------------------------------------------ Tier3（物理モデル音）
+
+    def _require_ref(self) -> dict:
+        m = self.ref_params()
+        if not m:
+            raise RuntimeError("参照マウスピースが未設定のため音合成できません")
+        return m
+
+    def _override(self, params: dict) -> dict:
+        from saxsketch.acoustics import reed_model
+        return reed_model.reed_override(
+            reed_model.reed_properties(params, self.ref_params()), params)
+
+    def impedance(self, params: dict) -> dict:
+        """参照マウスピースの共鳴管インピーダンス（リードには依存しない）。"""
+        from saxsketch.acoustics import openwind_bridge as ob
+        return ob.impedance(self._require_ref(), self.size_info)
+
+    def synthesize(self, params: dict, embouchure: str) -> tuple[bytes, dict]:
+        """参照マウスピースの共鳴管に、このリードの実形状を結合して合成する。"""
+        from saxsketch.acoustics import openwind_bridge as ob
+        return ob.synthesize(self._require_ref(), self.size_info, embouchure,
+                             override=self._override(params))
+
+    def scale(self, params: dict) -> tuple[bytes, dict]:
+        from saxsketch.acoustics import openwind_bridge as ob
+        return ob.scale(self._require_ref(), self.size_info,
+                        override=self._override(params))
+
     # ------------------------------------------------------------ 領域・BOM・仕様書
 
     def regions(self, params: dict) -> dict:
@@ -210,7 +274,11 @@ class ReedComponent(Component):
             ("ヴァンプ長", f"{rp.vamp_start_z(p):.1f} mm"),
             ("材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
         ]
+        from saxsketch.acoustics import reed_model
         m = self.ref_params()
+        props = reed_model.reed_properties(p, m)
+        dims.append(("硬さ相当（推定）", props["strength_label"]))
+        dims.append(("リード共振 f_reed（推定）", f"{props['f_reed_hz']:.0f} Hz"))
         if m:
             dims.append(("参照マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"))
         return {"dimensions": dims, "reed_profile": rp.side_profile_polylines(p)}
