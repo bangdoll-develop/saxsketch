@@ -1,0 +1,27 @@
+{
+  "id": "saxophone",
+  "label": "サクソフォン",
+  "family": "single_reed",
+  "pitch_standard_hz": 440.0,
+  "notes": "欠損円錐体積・ネック共鳴周波数は文献値ベースの推定。実測で校正推奨。",
+  "sizes": {
+    "soprano": {
+      "key": "B♭",
+      "missing_cone_volume_cc": 6.0,
+      "neck_tenon_od_mm": 12.6,
+      "written_low_note_hz": 233.08
+    },
+    "alto": {
+      "key": "E♭",
+      "missing_cone_volume_cc": 12.0,
+      "neck_tenon_od_mm": 15.9,
+      "written_low_note_hz": 155.56
+    },
+    "tenor": {
+      "key": "B♭",
+      "missing_cone_volume_cc": 24.0,
+      "neck_tenon_od_mm": 17.8,
+      "written_low_note_hz": 116.54
+    }
+  }
+}

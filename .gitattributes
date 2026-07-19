@@ -1,0 +1,7 @@
+# WSL(Linux) と Windows の2環境で同一ファイルを触るため改行を LF に固定する。
+# 特に scripts/*.sh は CRLF になると WSL の bash が \r で死ぬ。
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.stl binary
+*.wav binary

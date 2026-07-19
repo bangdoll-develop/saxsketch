@@ -1,0 +1,27 @@
+{
+  "label": "ソプラノサクソフォン",
+  "size": "soprano",
+  "note": "初期値は市販標準（Yamaha 4C 相当）ベース",
+  "mouthpiece": {
+    "tip_opening": 1.4,
+    "facing_length": 19.0,
+    "facing_curve": "elliptic",
+    "tip_rail_width": 0.9,
+    "side_rail_width": 0.9,
+    "baffle_type": "rollover",
+    "baffle_height": 2.2,
+    "rollover_radius": 6.0,
+    "throat_ratio": 1.0,
+    "chamber_shape": "round",
+    "bore_dia": 12.6,
+    "bore_length": 38.0,
+    "cork_depth": 20.0,
+    "window_length": 30.0,
+    "reed_width": 12.5,
+    "beak_height": 19.0,
+    "body_dia": 23.5,
+    "overall_length": 86.0,
+    "min_wall": 1.8,
+    "material": "resin"
+  }
+}

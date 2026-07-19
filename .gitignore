@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Node / フロントビルド成果物（wsl_sync.sh が再生成する）
+frontend/node_modules/
+frontend/dist/
+
+# SaxSketch の生成物
+exports/
+*.wproj
+*.stl
+*.step
+*.stp
+*.3mf
+*.wav
+
+# 端末固有（絶対パスの許可リスト。共有すると他環境で無意味）
+.claude/settings.local.json
+
+# OS
+Thumbs.db
+desktop.ini

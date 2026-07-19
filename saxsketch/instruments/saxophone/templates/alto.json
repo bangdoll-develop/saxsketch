@@ -1,0 +1,27 @@
+{
+  "label": "アルトサクソフォン",
+  "size": "alto",
+  "note": "初期値は市販標準（Meyer 5M / Yamaha 4C 相当）ベース",
+  "mouthpiece": {
+    "tip_opening": 1.8,
+    "facing_length": 23.0,
+    "facing_curve": "elliptic",
+    "tip_rail_width": 1.0,
+    "side_rail_width": 1.0,
+    "baffle_type": "rollover",
+    "baffle_height": 2.0,
+    "rollover_radius": 8.0,
+    "throat_ratio": 1.0,
+    "chamber_shape": "round",
+    "bore_dia": 15.8,
+    "bore_length": 45.0,
+    "cork_depth": 22.0,
+    "window_length": 35.0,
+    "reed_width": 14.5,
+    "beak_height": 22.0,
+    "body_dia": 27.5,
+    "overall_length": 101.0,
+    "min_wall": 2.0,
+    "material": "resin"
+  }
+}

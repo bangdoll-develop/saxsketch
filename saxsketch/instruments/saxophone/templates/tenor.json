@@ -1,0 +1,27 @@
+{
+  "label": "テナーサクソフォン",
+  "size": "tenor",
+  "note": "初期値は市販標準（Otto Link 6 / Yamaha 4C 相当）ベース",
+  "mouthpiece": {
+    "tip_opening": 2.2,
+    "facing_length": 25.0,
+    "facing_curve": "elliptic",
+    "tip_rail_width": 1.1,
+    "side_rail_width": 1.1,
+    "baffle_type": "rollover",
+    "baffle_height": 1.8,
+    "rollover_radius": 10.0,
+    "throat_ratio": 1.0,
+    "chamber_shape": "round",
+    "bore_dia": 17.8,
+    "bore_length": 50.0,
+    "cork_depth": 24.0,
+    "window_length": 39.0,
+    "reed_width": 16.5,
+    "beak_height": 24.0,
+    "body_dia": 30.5,
+    "overall_length": 110.0,
+    "min_wall": 2.2,
+    "material": "resin"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "saxsketch",
+      "runtimeExecutable": "C:\\HOME\\<user>\\develop\\claude\\mp_design\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "saxsketch.server.app"],
+      "port": 8712
+    }
+  ]
+}
