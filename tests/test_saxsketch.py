@@ -226,6 +226,74 @@ def test_reed_filed_cut_removes_material(alto_reed):
     assert filed < unfiled
 
 
+# ------------------------------------------------------------------ リガチャー
+
+@pytest.fixture(scope="module")
+def alto_ligature():
+    comp = get_registry().get("saxophone").make_component("ligature", "alto")
+    comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", "alto")}})
+    return comp, {s.key: s.default for s in comp.param_specs()}
+
+
+def test_ligature_inner_follows_mouthpiece(alto_ligature):
+    """内周が参照マウスピースのボディ径 + はめあい隙間に一致し、追従すること。"""
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.instruments.saxophone.components import profiles
+    comp, p = alto_ligature
+    m = comp.ref_params()
+    z0, z1 = lp.seat_range(m, p)
+    expect = profiles.outer_radius(m, (z0 + z1) / 2.0) + p["clearance"]
+    assert lp.inner_radius(m, p) == pytest.approx(expect, abs=1e-9)
+    assert lp.inner_radius(m, p) == pytest.approx(m["body_dia"] / 2.0 + p["clearance"],
+                                                  abs=0.05)
+    # ボディ径を変えると内周が追従する（＝自動整合）
+    comp.set_refs({"mouthpiece": {"params": {**m, "body_dia": m["body_dia"] + 2.0}}})
+    assert lp.inner_radius(comp.ref_params(), p) == pytest.approx(
+        lp.inner_radius(m, p) + 1.0, abs=0.02)
+    comp.set_refs({"mouthpiece": {"params": m}})   # 後続テストのため戻す
+
+
+def test_ligature_solid_valid(alto_ligature, tmp_path):
+    from saxsketch.export.models import check_mesh, export_model
+    comp, p = alto_ligature
+    for n in (1, 2):
+        part = comp.build({**p, "screw_count": n})
+        assert part.is_valid
+        assert part.volume > 100.0
+        f = tmp_path / f"lig{n}.stl"
+        export_model(part, f, "stl")
+        assert check_mesh(f)["watertight"]
+
+
+def test_ligature_plate_types(alto_ligature):
+    """プレートの有無で体積が順序どおり（なし < レール < 全面）になること。"""
+    comp, p = alto_ligature
+    vols = {k: comp.build({**p, "plate_type": k}).volume
+            for k in ("none", "rail", "plain")}
+    assert vols["none"] < vols["rail"] < vols["plain"]
+
+
+def test_ligature_screw_length_is_stock(alto_ligature):
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    comp, p = alto_ligature
+    stock = lp.stock_screw_length(p)
+    assert stock in lp.STOCK_SCREW_LENGTHS
+    assert stock >= lp.required_screw_length(p)
+
+
+def test_ligature_builds_for_all_templates():
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("ligature", tid)
+        comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        p = {s.key: s.default for s in comp.param_specs()}
+        assert comp.build(p).is_valid
+        sim = comp.simulate(p)
+        assert sim["kind"] == "ligature"
+        # 既定同士は適合しているはず（テンプレートの整合性テスト）
+        assert all(c["status"] == "ok" for c in sim["cards"]), sim["cards"]
+        assert any("なべ小ねじ" in r["name"] for r in comp.bom(p))
+
+
 # ------------------------------------------------------------------ ジオメトリ
 
 @pytest.fixture(scope="module")

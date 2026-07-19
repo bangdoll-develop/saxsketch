@@ -28,8 +28,8 @@
     "reed_length": 71.5,
     "tip_width": 14.5,
     "heel_width": 14.8,
-    "tip_thickness": 0.40,
-    "heel_thickness": 2.80,
+    "tip_thickness": 0.4,
+    "heel_thickness": 2.8,
     "vamp_length": 32.0,
     "profile_curve": "parabolic",
     "spine_ratio": 1.15,
@@ -38,5 +38,19 @@
     "file_cut": "unfiled",
     "material": "pla",
     "min_layer": 0.08
+  },
+  "ligature": {
+    "band_width": 16.0,
+    "band_thickness": 2.4,
+    "seat_offset": 4.0,
+    "clearance": 0.25,
+    "reed_clearance": 0.15,
+    "screw_count": 2,
+    "screw_size": "m3",
+    "boss_height": 6.0,
+    "slit_width": 3.0,
+    "plate_type": "rail",
+    "material": "petg",
+    "min_wall": 1.6
   }
 }
