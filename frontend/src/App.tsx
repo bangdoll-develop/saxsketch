@@ -127,6 +127,9 @@ export default function App() {
       const p = await api.setReference(
         project.reference?.component_id ?? "mouthpiece", path);
       setProject(p); setParams(p.params); setSim(p.simulation);
+      // 参照が変われば形状も凍結との関係も変わる（陳腐化バッジの更新に必要）
+      setManualEdit(p.manual_edit);
+      setViewDerived(false);
       setModelVersion((v) => v + 1);
     } catch (e) { setError(String((e as Error).message)); }
   }, [project]);

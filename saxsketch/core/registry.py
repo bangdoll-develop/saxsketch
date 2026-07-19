@@ -86,6 +86,20 @@ class Component(ABC):
             "warnings": [],
         }
 
+    # --- Tier3（音響）。対応するコンポーネントだけがオーバーライドする ---
+
+    def impedance(self, params: dict) -> dict:
+        """入力インピーダンス曲線。"""
+        raise NotImplementedError(f"{self.label} にはインピーダンス計算がありません")
+
+    def synthesize(self, params: dict, embouchure: str) -> tuple[bytes, dict]:
+        """物理モデルによる単音の WAV。"""
+        raise NotImplementedError(f"{self.label} には音合成がありません")
+
+    def scale(self, params: dict) -> tuple[bytes, dict]:
+        """物理モデルによる簡易スケールの WAV。"""
+        raise NotImplementedError(f"{self.label} には音合成がありません")
+
     def cavity_volume(self, params: dict) -> dict:
         """内部空洞体積の高速近似 {"total_cc","effective_cc"}（ゴールシーク用）。"""
         raise NotImplementedError

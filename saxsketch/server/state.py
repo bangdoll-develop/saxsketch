@@ -1,6 +1,8 @@
 """アプリケーション状態（シングルユーザー・ローカルアプリ）。"""
 from __future__ import annotations
 
+import contextlib
+import copy
 import hashlib
 import json
 import tempfile
@@ -129,6 +131,14 @@ class AppState:
             "params": dict(ps.values),
         }
 
+    def _template_label(self, proj: Project) -> str:
+        """プロジェクトのテンプレート表示名（エラーメッセージ用）。"""
+        try:
+            inst = self.registry.get(proj.instrument_id)
+            return inst.templates[proj.template_id].get("label", proj.template_id)
+        except KeyError:
+            return proj.template_id
+
     def _bind_refs(self) -> None:
         """コンポーネントに参照を結び付ける。未設定なら既定値を入れる。"""
         ref_id = getattr(self.component, "REQUIRES_REF", None)
@@ -150,6 +160,13 @@ class AppState:
                 raise ValueError(
                     f"このプロジェクトは「{src.component_id}」です。"
                     f"「{ref_id}」の .wproj を選んでください。")
+            # 楽器・サイズが違う参照は通さない。自コンポーネントの size_info（規格寸法）や
+            # BOM のサイズ表記は自テンプレート由来のままなので、形だけ別サイズになる。
+            if (src.instrument_id != self.project.instrument_id
+                    or src.template_id != self.project.template_id):
+                raise ValueError(
+                    f"このマウスピースは「{self._template_label(src)}」用です。"
+                    f"「{self._template_label(self.project)}」のものを選んでください。")
             inst = self.registry.get(src.instrument_id)
             ref_comp = inst.make_component(ref_id, src.template_id)
             ps = ParamSet(ref_comp.param_specs(),
@@ -258,13 +275,33 @@ class AppState:
     # ---------------------------------------------------------- 外部編集（凍結・再取込）
 
     def is_stale(self) -> bool:
-        """凍結後にパラメータが変更されたか。"""
+        """凍結後にパラメータ**または参照コンポーネント**が変更されたか。
+
+        リード/リガチャーは参照マウスピースの寸法で形が決まるため、自パラメータが
+        同じでも参照を差し替えれば凍結時とは別の形状になる。参照を見ないと、
+        古い外部編集モデルがそのまま入稿パッケージに入ってしまう。
+        """
         if self.project is None or self.project.frozen is None:
             return False
         frozen_params = self.project.frozen["params"]
         cur = self.paramset.values
         for k, v in frozen_params.items():
             if cur.get(k) != v:
+                return True
+        return self._refs_changed()
+
+    def _refs_changed(self) -> bool:
+        """凍結時の参照パラメータと現在の差分。
+
+        比較するのは `params` だけ（`source`/`label` は形状に影響しない）。
+        `refs` を持たない Phase 3 以前の凍結スナップショットは比較をスキップする。
+        """
+        frozen_refs = self.project.frozen.get("refs")
+        if frozen_refs is None:
+            return False
+        for ref_id, entry in frozen_refs.items():
+            cur = self.project.refs.get(ref_id, {})
+            if entry.get("params") != cur.get("params"):
                 return True
         return False
 
@@ -292,6 +329,8 @@ class AppState:
         self.project.frozen = {
             "frozen_at": datetime.now(timezone.utc).isoformat(),
             "params": dict(self.paramset.values),
+            # 参照も凍結する。リード/リガチャーは参照マウスピースで形が決まるため
+            "refs": copy.deepcopy(self.project.refs),
             "solid_volume_cc": solid_volume_cc,
             "export_dir": export_dir,
         }
@@ -310,6 +349,25 @@ class AppState:
 
     _pending_derived: dict | None = None  # {stl_bytes, source_file, quality, analysis}
 
+    @contextlib.contextmanager
+    def _frozen_refs(self):
+        """凍結時の参照でコンポーネントを一時的に動かす。
+
+        比較の基準形状は凍結時のものでなければならない。現在の参照で作ると、
+        参照を差し替えた後の解析が「編集による差分」と「参照差替えによる差分」を
+        混ぜてしまう。
+        """
+        frozen_refs = (self.project.frozen or {}).get("refs")
+        if frozen_refs is None:
+            yield
+            return
+        current = self.component.refs
+        self.component.set_refs(copy.deepcopy(frozen_refs))
+        try:
+            yield
+        finally:
+            self.component.set_refs(current)
+
     def analyze_derived(self, path: str) -> dict:
         """編集済みモデルを読み込み解析（まだ登録しない）。"""
         from saxsketch.analysis import meshdiff
@@ -319,12 +377,12 @@ class AppState:
         edited = meshdiff.load_mesh(path)
         quality = meshdiff.mesh_quality(edited)
 
-        with self.build_lock:
-            ref_part = self.component.build(frozen_params)
-        ref_mesh = meshdiff.part_to_mesh(ref_part, tolerance=0.03)
-        ref_vol_cc = float(ref_mesh.volume / 1000.0)
-
-        analysis = self.component.analyze_import(frozen_params, ref_mesh, edited)
+        with self._frozen_refs():
+            with self.build_lock:
+                ref_part = self.component.build(frozen_params)
+            ref_mesh = meshdiff.part_to_mesh(ref_part, tolerance=0.03)
+            ref_vol_cc = float(ref_mesh.volume / 1000.0)
+            analysis = self.component.analyze_import(frozen_params, ref_mesh, edited)
 
         vol_row = None
         if quality["volume_cc"] is not None:

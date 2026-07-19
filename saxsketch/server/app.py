@@ -449,7 +449,10 @@ async def export(req: ExportReq):
 @app.get("/api/acoustics/impedance")
 def acoustics_impedance():
     _require_project()
-    return STATE.impedance()
+    try:
+        return STATE.impedance()
+    except Exception as e:  # 音響を持たないコンポーネント / OpenWind 不在
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _wav_response(wav: bytes, meta: dict) -> Response:
