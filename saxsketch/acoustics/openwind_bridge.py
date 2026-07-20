@@ -32,6 +32,9 @@ MAX_PEAKS = 12
 
 RHO = 1.2          # 密度 kg/m^3
 C_SOUND = 343.0    # 音速 m/s
+#: マウスピースのボアからネック小端へ絞る区間の長さ [m]。実物は段差だが、
+#: x 単調増加のジオメトリ表現では段差を書けないので短いテーパで代用する。
+NECK_STEP = 0.0005
 MU = 1.85e-5       # 粘性係数 Pa·s
 GAMMA = 1.4        # 比熱比
 PR = 0.71          # プラントル数
@@ -76,11 +79,15 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
         xs.append(s["z"] / 1000.0)
         rs.append(r_eq / 1000.0)
 
-    # (b) 円筒ボア（cavity_stations 終端 zb からシャンク端 overall_length まで）
+    # (b) 円筒ボア。終端はシャンク端ではなく**コーク線**（= overall_length - cork_depth）。
+    # シャンク端までを空気柱として数えると、ネックのテノンが埋めている体積まで
+    # 気柱に含めてしまう（ソプラノで 3.6cc ＝ マウスピース内容積の 44%）。
+    # cavity_volume_cc() は同じ分を neck_occupied として差し引いており、こちらだけ
+    # 数えていて Tier1 と Tier3 が食い違っていた。
     r_bore = profiles.bore_radius(p) / 1000.0
-    x_shank = p["overall_length"] / 1000.0
-    if x_shank > xs[-1]:
-        xs.append(x_shank)
+    x_cork = max(p["overall_length"] - p["cork_depth"], xs[-1] * 1000.0) / 1000.0
+    if x_cork > xs[-1]:
+        xs.append(x_cork)
         rs.append(r_bore)
 
     # (c) 欠損円錐延長
@@ -97,8 +104,16 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
     # （体積定数から逆算していたのをやめた。出所が一本化される）
     tan_theta = cone["tan_theta"]
 
-    r_bell = r_bore + tan_theta * l_ext
-    xs.append(x_shank + l_ext)
+    # 延長円錐はコーク線の**ネック小端内径**から始まる。マウスピースのボア径は
+    # コルクを逃がすぶん太いので、そこから広げ始めると管全体が太くなる。
+    # l_ext は「ネック小端からベルまで」として求めた長さなので、始端半径も
+    # 同じ r0 でなければ円錐が自己矛盾する。
+    # x 単調増加のリストでは段差を表せないので、テノン端の絞りを短いテーパで表す。
+    r_neck = cone["throat_radius_mm"] / 1000.0
+    xs.append(x_cork + NECK_STEP)
+    rs.append(r_neck)
+    r_bell = r_neck + tan_theta * l_ext
+    xs.append(x_cork + l_ext)
     rs.append(r_bell)
 
     # x 単調増加を保証（数値誤差で潰れた区間を除去）

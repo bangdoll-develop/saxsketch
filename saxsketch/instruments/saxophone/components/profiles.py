@@ -34,8 +34,31 @@ def window_width(p: dict) -> float:
 
 
 def throat_radius(p: dict) -> float:
-    """スロート（チェンバー最狭部）の等価半径。断面積 = throat_ratio × ボア断面積。"""
-    return bore_radius(p) * math.sqrt(p["throat_ratio"])
+    """スロート（チェンバー最狭部）の等価半径。断面積 = throat_ratio × ボア断面積。
+
+    半径比 `r_b·√ratio` では駄目で、面積から解く必要がある。スロートの断面指数は
+    チェンバーに合わせた 2.1 前後、ボアは真円 2.0 で形が違うため、同じ半径でも
+    断面積が 1.8% ずれ、比 1.0 でスロートがボアより広くなっていた。
+    （`chamber_ratio` で同じ誤りを Phase 3.5 で直している。ラベルどおり面積で定義する。）
+
+    真円（指数 2.0）では k = π/4 なので `r_b·√ratio` に一致し、従来の値と変わらない。
+    """
+    k = _superellipse_shape_factor(_throat_n(p))
+    return bore_radius(p) * math.sqrt(p["throat_ratio"] * math.pi / (4.0 * k))
+
+
+def throat_ratio_from_radius(p: dict, r_t: float) -> float:
+    """実測したスロート等価半径から `throat_ratio` を逆算する（`throat_radius` の逆関数）。"""
+    k = _superellipse_shape_factor(_throat_n(p))
+    rb = bore_radius(p)
+    return (r_t / rb) ** 2 * 4.0 * k / math.pi if rb > 0 else 1.0
+
+
+def _superellipse_shape_factor(n: float) -> float:
+    """スーパー楕円の面積係数 k（A = w·h·k）。真円 n=2 で π/4。"""
+    g1 = math.gamma(1.0 + 1.0 / n)
+    g2 = math.gamma(1.0 + 2.0 / n)
+    return (g1 * g1) / g2
 
 
 # ---------------------------------------------------------------- フェイシング
@@ -363,6 +386,18 @@ def _contain(p: dict, s: dict) -> dict:
     return {**s, "yc": (top + bot) / 2.0, "h": top - bot, "w": w}
 
 
+def chamber_max_station(stations: list[dict]) -> dict:
+    """チェンバー区間のうち断面積が最大のステーション。
+
+    `chamber_size()` が返すのは「最大部」の寸法だが、窓直後のステーションは
+    ビークの下にあって外殻に強く切り詰められ、スロートより狭くなることがある
+    （実物も窓の直後は絞られている）。最大部を指す場所は index ではなく
+    断面積で選ぶ。逆算（measure）と検証がこの一箇所を共用する。
+    """
+    ch = stations_by_role(stations, "chamber")
+    return max(ch, key=lambda s: superellipse_area(s["w"], s["h"], s["n"]))
+
+
 def stations_by_role(stations: list[dict], role: str) -> list[dict]:
     """role でステーションを絞る。ステーション構成が変わっても壊れない引き方。"""
     return [s for s in stations if s.get("role") == role]
@@ -370,9 +405,7 @@ def stations_by_role(stations: list[dict], role: str) -> list[dict]:
 
 def superellipse_area(w: float, h: float, n: float) -> float:
     """スーパー楕円の面積。A = w·h·Γ(1+1/n)² / Γ(1+2/n)"""
-    g1 = math.gamma(1.0 + 1.0 / n)
-    g2 = math.gamma(1.0 + 2.0 / n)
-    return w * h * (g1 * g1) / g2
+    return w * h * _superellipse_shape_factor(n)
 
 
 def cavity_volume_cc(p: dict) -> dict:

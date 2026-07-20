@@ -199,7 +199,8 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     r_t_meas = None
     if all(d is not None and d < rb * 2.5 for d in dx):
         r_t_meas = (dx[0] + dx[1]) / 2.0
-        est["throat_ratio"] = ((r_t_meas / rb) ** 2, "スロート幅レイ")
+        est["throat_ratio"] = (profiles.throat_ratio_from_radius(p, r_t_meas),
+                               "スロート幅レイ")
 
     # チェンバー拡大比: 最大部の幅を実測し、断面積比へ逆算する。
     # 肉厚制限で頭打ちのときは形が比を反映していないので逆算不能（実測しても
@@ -207,7 +208,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     if profiles.chamber_saturated(p):
         warnings.append("チェンバーが肉厚制限で頭打ちのため、断面積比は形状から逆算できません。")
     else:
-        s_ch = profiles.stations_by_role(stations, "chamber")[0]
+        s_ch = profiles.chamber_max_station(stations)
         o = [0.0, s_ch["yc"], s_ch["z"] + z_off]
         dxc = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
         if r_t_meas and all(d is not None and d < rb * 3.0 for d in dxc):
