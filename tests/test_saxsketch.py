@@ -682,6 +682,27 @@ def test_openwind_first_peak_reasonable(alto):
     assert 40.0 < res["peaks"][0]["freq"] < 400.0
 
 
+def test_resonator_extension_replaces_missing_cone():
+    """欠損円錐長を差し引いた延長になっていること（マウスピース物理長ではなく）。
+
+    物理長を引くと管が過長になり、3サイズとも約 270 セント低く出ていた。
+    第1共鳴が目標の 1 半音以内に入ることで、その系統誤差が消えたことを固定する。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import volume as ac_volume
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        si = _size_info(tid)
+        geo = ob.build_resonator(p, si)
+        l_total = ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
+        apex = ac_volume.missing_cone(si)["apex_distance_mm"] / 1000.0
+        assert geo[-1][0] == pytest.approx(
+            p["overall_length"] / 1000.0 + l_total - apex, abs=1e-4), tid
+
+        res = ob.impedance(p, si)
+        assert abs(res["first_cents_vs_target"]) < 100.0, (tid, res["first_note"])
+
+
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
 
 def test_coarsen_keeps_ends_and_spacing(alto):

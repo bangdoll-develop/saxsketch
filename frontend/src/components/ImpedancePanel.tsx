@@ -100,7 +100,7 @@ export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
           <table>
             <tbody>
               <tr><td>第1共鳴</td><td className="num">{imp.first_note}</td></tr>
-              <tr><td>目標（書かれた低音）</td><td className="num">{imp.target_note}</td></tr>
+              <tr><td>目標（記譜最低音の実音）</td><td className="num">{imp.target_note}</td></tr>
               {imp.inharmonicity_cents != null && (
                 <tr><td>倍音整列度（ずれRMS）</td>
                   <td className="num">{imp.inharmonicity_cents} cent</td></tr>
