@@ -27,21 +27,36 @@ def missing_cone(size_info: dict) -> dict:
     文献値（ソプラノ 1.74° / テナー 1.52°）、ネック小端内径はユーザーがノギスで
     測れる量なので、どちらも後から実測で置き換えられる。
 
-    Returns: {"cc", "apex_distance_mm", "throat_radius_mm", "tan_theta"}
+    公表実測の頂点距離が `missing_cone_length_mm` にあればそれを優先する。導出は
+    半頂角とネック内径の推定に二重に依存し、アルトでは実測 217.5mm に対し 241.7mm と
+    11% 長く出る。実測がある箇所だけ差し替え、無い箇所は導出のまま残して食い違いを表示する
+    （無い箇所を実測に合わせて逆算すると、どの量が間違っていたのか分からなくなる）。
+
+    Returns: {"cc", "apex_distance_mm", "throat_radius_mm", "tan_theta", "source",
+              "derived_apex_mm"}
     """
     r0 = size_info["neck_bore_id_mm"] / 2.0
-    tan_theta = math.tan(math.radians(size_info["cone_half_angle_deg"]))
-    x0 = r0 / tan_theta
+    derived = r0 / math.tan(math.radians(size_info["cone_half_angle_deg"]))
+    measured = size_info.get("missing_cone_length_mm")
+    x0 = float(measured) if measured else derived
     return {
         "cc": math.pi * r0 * r0 * x0 / 3.0 / 1000.0,
         "apex_distance_mm": x0,
         "throat_radius_mm": r0,
-        "tan_theta": tan_theta,
+        # 採用した頂点距離と整合する広がり。実測を採ると半頂角は公称と少しずれるが、
+        # 円錐として自己矛盾しない方を優先する（共鳴管の生成が同じ値を使うため）。
+        "tan_theta": r0 / x0,
+        "source": "measured" if measured else "derived",
+        "derived_apex_mm": derived,
     }
 
 
-def tier1_report(cavity_vol: dict, size_info: dict) -> dict:
-    """cavity_vol: {"total_cc": float, "effective_cc": float}"""
+def tier1_report(cavity_vol: dict, size_info: dict, saturated: bool = False) -> dict:
+    """cavity_vol: {"total_cc": float, "effective_cc": float}
+
+    saturated: チェンバーが肉厚制限で頭打ちなら True。届かない理由を助言に出すために使う。
+    容積を増やす助言を出しておいて実はスライダが効かない、という状態を避ける。
+    """
     cone = missing_cone(size_info)
     target = cone["cc"]
     effective = cavity_vol["effective_cc"] + REED_EQUIVALENT_CC
@@ -54,10 +69,24 @@ def tier1_report(cavity_vol: dict, size_info: dict) -> dict:
         status = "sharp"
         advice = (f"実効容積が欠損円錐より約{-ratio * 100:.0f}%小さく高め傾向。"
                   f"コークを浅め（抜き気味）にするか、スロート断面積比/ウィンドウ長の拡大を検討。")
+        if saturated:
+            advice += ("なおチェンバーは既に肉厚制限で頭打ちで、断面積比を上げても形は変わらない。"
+                       "これ以上増やすにはボディ径を上げるか最小肉厚を下げる必要がある。")
     else:
         status = "flat"
         advice = (f"実効容積が欠損円錐より約{ratio * 100:.0f}%大きく低め傾向。"
                   f"コークを深めに挿すか、スロート断面積比の縮小を検討。")
+
+    if cone["source"] == "measured":
+        origin = (f"欠損円錐長は公表実測 {cone['apex_distance_mm']:.1f}mm を採用"
+                  f"（同じネック内径 {size_info['neck_bore_id_mm']}mm と半頂角 "
+                  f"{size_info['cone_half_angle_deg']}° から導出すると "
+                  f"{cone['derived_apex_mm']:.0f}mm で "
+                  f"{(cone['apex_distance_mm'] / cone['derived_apex_mm'] - 1) * 100:+.0f}% ずれる）。")
+    else:
+        origin = (f"欠損円錐長は半頂角 {size_info['cone_half_angle_deg']}°・ネック小端内径 "
+                  f"{size_info['neck_bore_id_mm']}mm から導出（頂点まで "
+                  f"{cone['apex_distance_mm']:.0f}mm）。このサイズには公表実測が無い。")
 
     return {
         "total_cc": round(cavity_vol["total_cc"], 2),
@@ -66,7 +95,6 @@ def tier1_report(cavity_vol: dict, size_info: dict) -> dict:
         "deviation_cents": round(cents, 1),
         "status": status,
         "advice": advice,
-        "note": (f"欠損円錐は半頂角 {size_info['cone_half_angle_deg']}°・ネック小端内径 "
-                 f"{size_info['neck_bore_id_mm']}mm から導出（頂点まで "
-                 f"{cone['apex_distance_mm']:.0f}mm）。どちらも実測で校正できる（±は目安）。"),
+        "note": (origin + "ネック内径はテノン外径からの推定値なので、自分のネック小端を"
+                 "ノギスで測って置き換えるのが最も確実（±は目安）。"),
     }

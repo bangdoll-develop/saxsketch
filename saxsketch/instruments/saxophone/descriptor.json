@@ -24,6 +24,8 @@
       "cone_half_angle_deg": 1.6,
       "neck_bore_id_mm": 13.5,
       "neck_tenon_od_mm": 15.9,
+      "missing_cone_length_mm": 217.5,
+      "missing_cone_length_source": "Selmer Balanced Action アルトの公表実測値。導出値 241.7mm より 11% 短い。",
       "reed_std_length_mm": 71.5,
       "reed_std_tip_width_mm": 13.4,
       "facing_length_range_mm": [
