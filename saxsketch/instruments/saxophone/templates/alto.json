@@ -14,7 +14,7 @@
     "throat_ratio": 1.0,
     "chamber_shape": "round",
     "bore_dia": 15.8,
-    "bore_length": 27.0,
+    "bore_length": 26.0,
     "cork_depth": 22.0,
     "window_length": 29.0,
     "reed_width": 13.4,
@@ -23,7 +23,7 @@
     "overall_length": 81.2,
     "min_wall": 2.0,
     "material": "resin",
-    "chamber_ratio": 1.57
+    "chamber_ratio": 2.19
   },
   "reed": {
     "reed_length": 71.5,

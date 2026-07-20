@@ -88,8 +88,8 @@ _OUTER_PROFILE = [  # (z/L, r/rb) 制御点
     (1.00, 0.86),
 ]
 # 最大径区間（r/rb == 1.0 の平坦部）がリガチャー座になる。後端を 0.88 に置くのは
-# リードの踵がそこへ来るため: アルトのリード規格長 71.5mm / 全長 81mm = 0.88。
-# 全サイズで同じ比になる（soprano 63.5/72.0、tenor 78.0/88.5）。
+# リードの踵がそこへ来るため。逆に言うとテンプレートの全長はこの比から決まる:
+# 全長 = リード規格長 / 0.88 → soprano 63.5/72.2、alto 71.5/81.2、tenor 78.0/88.6。
 
 
 def outer_radius(p: dict, z: float) -> float:
@@ -147,9 +147,47 @@ def _baffle_progress(p: dict, t: float) -> float:
     return t
 
 
-def chamber_radius(p: dict) -> float:
-    """チェンバー最大部の等価半径。スロート最狭部を `chamber_ratio` 倍に広げた値。"""
-    return throat_radius(p) * p.get("chamber_ratio", 1.15)
+#: チェンバー断面の基準形（スロート等価半径に対する 幅・高さ の倍率）。
+#: 実物のチェンバーは横長なので幅を取り高さを抑える。
+_CHAMBER_W = 2.0 * 1.05
+_CHAMBER_H = 1.7
+
+
+def chamber_size(p: dict) -> tuple[float, float]:
+    """チェンバー最大部の (幅, 高さ) [mm]。
+
+    `chamber_ratio` は**断面積比**として定義する（半径比ではない）。チェンバーは
+    横長のスーパー楕円、スロートはほぼ円で形が違うため、半径を同じ倍率にしても
+    面積が逆転しうる（実際ソプラノで最大部が最狭部より狭くなっていた）。
+    音響的に効くのは断面積なので、面積で定義すれば比 1.0 が必ず「同じ広さ」になる。
+    """
+    r_t = throat_radius(p)
+    n_ch = _chamber_n(p)
+    a_throat = superellipse_area(2.0 * r_t, 2.0 * r_t, _throat_n(p))
+    w0, h0 = _CHAMBER_W * r_t, _CHAMBER_H * r_t
+    scale = math.sqrt(p.get("chamber_ratio", 1.15) * a_throat
+                      / superellipse_area(w0, h0, n_ch))
+    return w0 * scale, h0 * scale
+
+
+def chamber_ratio_from_width(p: dict, w_meas: float, r_t_meas: float) -> float:
+    """実測したチェンバー幅とスロート半径から `chamber_ratio` を逆算する。
+
+    `chamber_size()` の逆関数。逆算（measure.py）が断面形の係数を再実装しないよう
+    ここに置く。高さは幅と固定比なので幅だけから断面積が決まる。
+    """
+    h_meas = w_meas * _CHAMBER_H / _CHAMBER_W
+    a_ch = superellipse_area(w_meas, h_meas, _chamber_n(p))
+    a_th = superellipse_area(2.0 * r_t_meas, 2.0 * r_t_meas, _throat_n(p))
+    return a_ch / a_th if a_th > 0 else 1.0
+
+
+def _chamber_n(p: dict) -> float:
+    return 2.2 if p.get("chamber_shape", "round") == "round" else 3.8
+
+
+def _throat_n(p: dict) -> float:
+    return (_chamber_n(p) + 2.0) / 2.0
 
 
 def cavity_stations(p: dict) -> list[dict]:
@@ -167,7 +205,7 @@ def cavity_stations(p: dict) -> list[dict]:
     z_we = min(z_we, zb - 8.0)  # チェンバー遷移の余地を確保
     rb_bore = bore_radius(p)
     r_t = throat_radius(p)
-    r_ch = chamber_radius(p)
+    w_ch, h_ch = chamber_size(p)
     w_win = window_width(p)
     h_b = p["baffle_height"]
     min_wall = p["min_wall"]
@@ -175,7 +213,7 @@ def cavity_stations(p: dict) -> list[dict]:
     # チェンバー最大部（窓の直後）
     z_c1 = z_we + 3.0
     c1_bot = ty + 1.5
-    c1_top = c1_bot + 1.7 * r_ch
+    c1_top = c1_bot + h_ch
     # ボア円
     b_bot, b_top = -rb_bore, rb_bore
 
@@ -185,7 +223,7 @@ def cavity_stations(p: dict) -> list[dict]:
     ch_top_target = c1_top
 
     n_window = 3.5
-    n_chamber = 2.2 if p.get("chamber_shape", "round") == "round" else 3.8
+    n_chamber = _chamber_n(p)
 
     stations: list[dict] = []
     window_ts = [0.0, 0.12, 0.25, 0.40, 0.55, 0.70, 0.82, 0.92, 1.0]
@@ -210,8 +248,8 @@ def cavity_stations(p: dict) -> list[dict]:
     t_bot = -r_t
     t_top = r_t
     chamber = [
-        (z_c1, c1_bot, c1_top, 2.0 * r_ch * 1.05, n_chamber, "chamber"),
-        (z_th, t_bot, t_top, 2.0 * r_t, (n_chamber + 2.0) / 2, "throat"),
+        (z_c1, c1_bot, c1_top, w_ch, n_chamber, "chamber"),
+        (z_th, t_bot, t_top, 2.0 * r_t, _throat_n(p), "throat"),
         (zb, b_bot, b_top, 2.0 * rb_bore, 2.0, "bore"),
     ]
     for z, bot, top, w, n, role in chamber:

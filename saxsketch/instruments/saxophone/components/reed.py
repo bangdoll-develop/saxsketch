@@ -13,6 +13,7 @@ from saxsketch.geometry.builders import loft_sections, yz_profile_cut_solid
 
 from . import profiles
 from . import reed_profiles as rp
+from . import reference_check
 
 # 踵がリガチャー座の後端に届いているかの許容差 [mm]。
 # 校正後のテンプレートは踵位置＝座の後端で設計してあり（リード規格長が全長を決めている）、
@@ -131,6 +132,7 @@ class ReedComponent(Component):
 
     def _cards(self, params: dict) -> list[dict]:
         return [self._stiffness_card(params), self._fit_card(params),
+                reference_check.reed_card(params, self.size_info),
                 self._print_card(params)]
 
     def _stiffness_card(self, params: dict) -> dict:

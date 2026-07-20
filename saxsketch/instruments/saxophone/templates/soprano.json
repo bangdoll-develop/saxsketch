@@ -15,7 +15,7 @@
     "chamber_shape": "round",
     "bore_dia": 12.6,
     "bore_length": 28.0,
-    "cork_depth": 22.0,
+    "cork_depth": 23.0,
     "window_length": 33.0,
     "reed_width": 12.9,
     "beak_height": 19.0,
@@ -23,7 +23,7 @@
     "overall_length": 72.2,
     "min_wall": 1.8,
     "material": "resin",
-    "chamber_ratio": 1.04
+    "chamber_ratio": 1.1
   },
   "reed": {
     "reed_length": 63.5,

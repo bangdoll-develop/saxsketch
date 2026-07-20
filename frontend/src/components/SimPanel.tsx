@@ -79,6 +79,8 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
         <div className="advice">{sim.tier2.note}</div>
       </div>
 
+      {sim.cards?.map((c) => <Card key={c.title} card={c} />)}
+
       <ImpedancePanel paramsKey={paramsKey} />
 
       <SoundPreview harmonics={sim.harmonics} />

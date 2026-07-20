@@ -202,13 +202,14 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         r_t_meas = (dx[0] + dx[1]) / 2.0
         est["throat_ratio"] = ((r_t_meas / rb) ** 2, "スロート幅レイ")
 
-    # チェンバー拡大比: 最大部の幅を最狭部との比で見る（w = 2·r_ch·1.05）
+    # チェンバー拡大比: 最大部の幅を実測し、断面積比へ逆算する
     s_ch = profiles.stations_by_role(stations, "chamber")[0]
     o = [0.0, s_ch["yc"], s_ch["z"] + z_off]
     dxc = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
     if r_t_meas and all(d is not None and d < rb * 3.0 for d in dxc):
-        r_ch_meas = (dxc[0] + dxc[1]) / 2.1
-        est["chamber_ratio"] = (r_ch_meas / r_t_meas, "チェンバー幅レイ／スロート幅レイ")
+        est["chamber_ratio"] = (
+            profiles.chamber_ratio_from_width(p, dxc[0] + dxc[1], r_t_meas),
+            "チェンバー幅レイ／スロート幅レイ")
 
     # ---- 判定表の構築
     rows = []

@@ -18,6 +18,7 @@ from saxsketch.geometry.builders import (
     yz_profile_cut_solid,
 )
 from . import profiles
+from . import reference_check
 from saxsketch.acoustics import brightness as ac_brightness
 from saxsketch.acoustics import harmonics as ac_harmonics
 from saxsketch.acoustics import volume as ac_volume
@@ -59,8 +60,8 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- チェンバー ---
         f("throat_ratio", "スロート断面積比", "チェンバー", "比", 0.60, 1.35, 0.01,
           "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い"),
-        f("chamber_ratio", "チェンバー拡大比", "チェンバー", "比", 1.00, 2.00, 0.01,
-          "スロート最狭部に対するチェンバー最大部の比。大=内容積が増えダークで太い"),
+        f("chamber_ratio", "チェンバー断面積比", "チェンバー", "比", 1.00, 3.00, 0.05,
+          "スロート最狭部に対するチェンバー最大部の断面積比。大=内容積が増えダークで太い"),
         ParamSpec(key="chamber_shape", label="チェンバー形状", category="チェンバー",
                   type="choice", default=t["chamber_shape"],
                   choices=[Choice("round", "ラウンド"), Choice("square", "スクエア")],
@@ -162,6 +163,7 @@ class MouthpieceComponent(Component):
             "tier2": tier2,
             "sensitivity": sens,
             "harmonics": harm,
+            "cards": [reference_check.mouthpiece_card(params, self.size_info)],
         }
 
     def cavity_volume(self, params: dict) -> dict:
