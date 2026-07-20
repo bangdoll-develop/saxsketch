@@ -79,8 +79,13 @@ def _specs(t: dict) -> list[ParamSpec]:
         f("reed_width", "リード幅", "ウィンドウ", "mm", 10.0, 18.0, 0.1,
           "使用リード規格の幅。テーブル・窓幅の基準", advanced=True),
         # --- 外形 ---
-        f("beak_height", "ビーク高さ", "外形", "mm", 15.0, 28.0, 0.5,
-          "くわえたときの口の開き量。奏者の好みに合わせる"),
+        # レンジをボディ径基準にするのは、胴の全高 0.9·body_dia を超える値が形状として
+        # 意味を持たない（ビーク面が本体の外に出る）ため。既定 0.55·body_dia は幾何的な
+        # 暫定値で実測ではない → ノギスでの上書きが本筋。
+        f("beak_height", "ビーク高さ", "外形", "mm",
+          round(0.35 * t["body_dia"], 1), round(0.75 * t["body_dia"], 1), 0.5,
+          "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
+          "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨"),
         f("body_dia", "ボディ径", "外形", "mm", 20.0, 34.0, 0.1,
           "リガチャー適合寸法", advanced=True),
         f("overall_length", "全長", "外形", "mm", 70.0, 130.0, 0.5,
@@ -124,13 +129,11 @@ class MouthpieceComponent(Component):
                  for i in range(n_st)]
         body = revolve_profile(radii)
 
-        # 2) ビークカット（上面斜めカット）
-        beak_pts = [
-            (-3.0, profiles.beak_y(p, -3.0)),
-            (length + 3.0, profiles.beak_y(p, length + 3.0)),
-            (length + 3.0, 80.0),
-            (-3.0, 80.0),
-        ]
+        # 2) ビークカット（上面）。曲線なので端点2点では平面になってしまう。
+        n_bk = 40
+        beak_pts = [(-3.0 + (length + 6.0) * i / (n_bk - 1), 0.0) for i in range(n_bk)]
+        beak_pts = [(z, profiles.beak_y(p, z)) for z, _ in beak_pts]
+        beak_pts += [(length + 3.0, 80.0), (-3.0, 80.0)]
         beak_cut = yz_profile_cut_solid(beak_pts, half_width=p["body_dia"])
 
         # 3) テーブル/フェイシングカット（下面）
@@ -153,7 +156,8 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
-        tier1 = ac_volume.tier1_report(profiles.cavity_volume_cc(params), self.size_info)
+        tier1 = ac_volume.tier1_report(profiles.cavity_volume_cc(params), self.size_info,
+                                       saturated=profiles.chamber_saturated(params))
         tier2 = ac_brightness.tone_metrics(params)
         sens = ac_brightness.sensitivity(params, self.param_specs())
         harm = ac_harmonics.harmonic_series(tier2)
@@ -231,7 +235,8 @@ class MouthpieceComponent(Component):
             {"pts": pr["outer_bot"], "stroke": "#222", "width": 1.5},
             {"pts": pr["cavity_top"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["cavity_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
-            {"pts": [(min(zs), ty), (max(zs) * 0.63, ty)], "stroke": "#cc3300",
+            {"pts": [(min(zs), ty), (profiles.table_cut_end_z(params), ty)],
+             "stroke": "#cc3300",
              "width": 0.8, "dash": "2 2"},
         ], "側面断面図（実線=外形 / 青破線=内部空洞 / 赤破線=テーブル面） 単位:mm")
 

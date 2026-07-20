@@ -58,12 +58,13 @@ def facing_rise(p: dict, z: float) -> float:
 def cut_top_y(p: dict, z: float) -> float:
     """テーブル/フェイシングカット面の上端 Y。
 
-    テーブルはリガチャー座の下まで平面、その先はランプで胴の丸みに消える。
+    テーブルはリード踵（＝リガチャー座の後端）まで平面、その先はランプで胴の丸みに消える。
+    ランプ位置を比率リテラルで持たないのは、外形プロファイルを動かしたときに置き忘れて
+    テーブルがリードの下まで届かなくなる事故を起こしたため（Phase 3.5）。
     """
     ty = table_y(p)
-    length = p["overall_length"]
-    ramp_start = 0.55 * length
-    ramp_end = 0.63 * length
+    ramp_start = ligature_seat_range(p)[1]
+    ramp_end = table_cut_end_z(p)
     if z <= ramp_start:
         return ty + facing_rise(p, z)
     if z >= ramp_end:
@@ -72,8 +73,14 @@ def cut_top_y(p: dict, z: float) -> float:
     return ty - 4.0 * t
 
 
+#: テーブル平面をリード踵より後ろへ延ばす余裕 [mm]。踵ちょうどで終わると
+#: リードの最後端が宙に浮く。
+TABLE_RUNOUT = 2.0
+
+
 def table_cut_end_z(p: dict) -> float:
-    return 0.63 * p["overall_length"]
+    """テーブル終端 z。リード踵（リガチャー座の後端）より必ず後ろにする。"""
+    return ligature_seat_range(p)[1] + TABLE_RUNOUT
 
 
 # ---------------------------------------------------------------- 外形・ビーク
@@ -115,14 +122,46 @@ def ligature_seat_range(p: dict) -> tuple[float, float]:
     return min(flat) * length, max(flat) * length
 
 
+#: ティップ先端のくさび厚（ティップ開きの上に残る肉）[mm]
+_TIP_WEDGE = 2.6
+#: ビークが外形の丸みに溶け込む位置（全長比）。ここより後ろは切らない。
+_BEAK_SHOULDER = 0.55
+#: バイトポイントの目安位置（全長比）
+_BEAK_BITE = 0.25
+
+
 def beak_y(p: dict, z: float) -> float:
-    """ビークカット平面の Y 座標（この上側を切除）。"""
+    """ビークカット面の Y 座標（この上側を切除）。
+
+    ティップのくさび → バイトポイント → ショルダー（外形に接して消える）の3点を通す。
+    直線にしていたときは、`beak_height` が胴の全高 `0.9·body_dia` に近い既定値だったため
+    ビーク面が全長の 1/4 で外形を追い越し、テーパが消えるうえに空洞の天井 clamp
+    （`beak_y - min_wall`）まで無効化されて本体が貫通した。3点通過なら
+    `beak_height` の値によらずショルダーまで必ず本体の内側にある。
+    """
     ty = table_y(p)
-    y0 = ty + p["tip_opening"] + 2.6          # ティップ先端のくさび厚
-    z_bite = 0.25 * p["overall_length"]       # バイトポイント目安
+    length = p["overall_length"]
+    y0 = ty + p["tip_opening"] + _TIP_WEDGE
+    z_bite = _BEAK_BITE * length
     y_bite = ty + p["beak_height"]
-    m = (y_bite - y0) / z_bite
-    return y0 + m * z
+    z_sh = _BEAK_SHOULDER * length
+    y_sh = outer_radius(p, z_sh)
+    if z <= 0.0:
+        return y0 + (y_bite - y0) * (z / z_bite)      # ティップ手前は直線外挿
+    if z < z_bite:
+        return y0 + (y_bite - y0) * _smoothstep_half(z / z_bite)
+    if z < z_sh:
+        t = (z - z_bite) / (z_sh - z_bite)
+        return y_bite + (y_sh - y_bite) * _smoothstep(t)
+    # ショルダーより後ろ: 外形の外側に置いて何も切らない
+    return outer_radius(p, z) + 1.0
+
+
+def _smoothstep_half(t: float) -> float:
+    """0で傾き最大・1で水平（smoothstep の後半だけ）。ティップから立ち上がり、
+    バイトポイントで傾きが緩む実物のビーク断面に合わせる。"""
+    t = min(max(t, 0.0), 1.0)
+    return t * (2.0 - t)
 
 
 # ---------------------------------------------------------------- 内部空洞
@@ -130,6 +169,25 @@ def beak_y(p: dict, z: float) -> float:
 def _smoothstep(t: float) -> float:
     t = min(max(t, 0.0), 1.0)
     return t * t * (3 - 2 * t)
+
+
+def shell_limit(p: dict, z: float) -> dict:
+    """z における空洞の許容包絡 {top, bot, half_width}（すべて min_wall だけ内側）。
+
+    外形回転体とビークカットから決まる「残る材料」の内寸。空洞ステーションは必ず
+    ここを通す。Phase 3.5 で外形だけ縮めた結果、チェンバーが本体の左右と上を貫通し、
+    しかも体積積分が外へ出た分まで数えて Tier1 が「合格」した事故の再発防止。
+
+    テーブルカットは含めない。窓はカット面より下へ抜けて初めて開口になるので、
+    下端まで拘束すると窓が閉じる（`cavity_stations` が role で使い分ける）。
+    """
+    ro = outer_radius(p, z)
+    mw = p["min_wall"]
+    return {
+        "top": min(ro, beak_y(p, z)) - mw,
+        "bot": -(ro - mw),
+        "half_width": ro - mw,
+    }
 
 
 def _baffle_progress(p: dict, t: float) -> float:
@@ -152,14 +210,22 @@ def _baffle_progress(p: dict, t: float) -> float:
 _CHAMBER_W = 2.0 * 1.05
 _CHAMBER_H = 1.7
 
+#: チェンバー定断面区間の後端（ボア開始からの距離）[mm]
+_CHAMBER_RUN = 8.0
+#: スロート狭窄の位置（ボア開始からの距離）[mm]。実物の狭窄は短い。
+_THROAT_RUN = 3.0
+
 
 def chamber_size(p: dict) -> tuple[float, float]:
-    """チェンバー最大部の (幅, 高さ) [mm]。
+    """チェンバー最大部の要求 (幅, 高さ) [mm]。外殻による頭打ちは含まない。
 
     `chamber_ratio` は**断面積比**として定義する（半径比ではない）。チェンバーは
     横長のスーパー楕円、スロートはほぼ円で形が違うため、半径を同じ倍率にしても
     面積が逆転しうる（実際ソプラノで最大部が最狭部より狭くなっていた）。
     音響的に効くのは断面積なので、面積で定義すれば比 1.0 が必ず「同じ広さ」になる。
+
+    実際に生成される寸法は `cavity_stations()` が `shell_limit()` で切り詰めた後の値。
+    頭打ちが起きているかは `chamber_saturated()` で判定する。
     """
     r_t = throat_radius(p)
     n_ch = _chamber_n(p)
@@ -168,6 +234,27 @@ def chamber_size(p: dict) -> tuple[float, float]:
     scale = math.sqrt(p.get("chamber_ratio", 1.15) * a_throat
                       / superellipse_area(w0, h0, n_ch))
     return w0 * scale, h0 * scale
+
+
+def chamber_saturated(p: dict) -> bool:
+    """チェンバーが肉厚制限で頭打ちになっているか。
+
+    True のときは `chamber_ratio` を上げても形が変わらない。UI がスライダの
+    効かない範囲を黙って持つのは不親切なので、Tier1 の助言がこれを見て一言添える。
+
+    判定は clamp 条件を書き写すのではなく、比を少し上げて実際に断面積が動くかを見る。
+    チェンバーは複数ステーションあり、幅だけ頭打ちで高さにはまだ余地がある、といった
+    中間状態を取るので、条件を再実装すると必ずずれる。
+    """
+    step = 1.05
+    now = _chamber_areas(p)
+    more = _chamber_areas(dict(p, chamber_ratio=p.get("chamber_ratio", 1.15) * step))
+    return all(b - a < 1e-6 for a, b in zip(now, more))
+
+
+def _chamber_areas(p: dict) -> list[float]:
+    return [superellipse_area(s["w"], s["h"], s["n"])
+            for s in stations_by_role(cavity_stations(p), "chamber")]
 
 
 def chamber_ratio_from_width(p: dict, w_meas: float, r_t_meas: float) -> float:
@@ -202,7 +289,7 @@ def cavity_stations(p: dict) -> list[dict]:
     z_start = p["tip_rail_width"] + 0.2
     z_we = z_start + p["window_length"]
     zb = bore_start_z(p)
-    z_we = min(z_we, zb - 8.0)  # チェンバー遷移の余地を確保
+    z_we = min(z_we, zb - _CHAMBER_RUN - 5.0)  # チェンバー区間の余地を確保
     rb_bore = bore_radius(p)
     r_t = throat_radius(p)
     w_ch, h_ch = chamber_size(p)
@@ -236,29 +323,44 @@ def cavity_stations(p: dict) -> list[dict]:
         u = _baffle_progress(p, t)
         ceil_ = c_tip + (ch_top_target - c_tip) * u
         ceil_ -= h_b * 0.55 * (1.0 - t)             # 高バッフル = 天井をリードに近づける
-        ceil_ = min(ceil_, beak_y(p, z) - min_wall)
-        ceil_ = max(ceil_, floor + 1.0)
         w = w_win * (0.82 + 0.18 * t)
         stations.append({"z": z, "yc": (floor + ceil_) / 2, "h": ceil_ - floor,
                          "w": w, "n": n_window, "role": "window"})
 
-    # 窓終端 → チェンバー最大部 → スロート最狭部 → ボア開始。
-    # スロートはボア直前に置く（実物も最狭部はボアへの入口にある）。
-    z_th = max(zb - 4.0, (z_c1 + zb) / 2.0)
-    t_bot = -r_t
-    t_top = r_t
+    # 窓終端 → チェンバー（定断面区間）→ スロート最狭部 → ボア開始。
+    # 実物は「一定断面のチェンバー → 短い狭窄 → ボア」で、狭窄を長く取ると
+    # 内容積を無駄に失う。スロートはボア直前に置く。
+    z_c2 = zb - _CHAMBER_RUN
+    z_th = zb - _THROAT_RUN
     chamber = [
         (z_c1, c1_bot, c1_top, w_ch, n_chamber, "chamber"),
-        (z_th, t_bot, t_top, 2.0 * r_t, _throat_n(p), "throat"),
+        (z_c2, c1_bot, c1_top, w_ch, n_chamber, "chamber"),
+        (z_th, -r_t, r_t, 2.0 * r_t, _throat_n(p), "throat"),
         (zb, b_bot, b_top, 2.0 * rb_bore, 2.0, "bore"),
     ]
     for z, bot, top, w, n, role in chamber:
-        # 外壁肉厚の確保
-        lim = -(outer_radius(p, z) - min_wall)
-        bot = max(bot, lim)
         stations.append({"z": z, "yc": (bot + top) / 2, "h": top - bot,
                          "w": w, "n": n, "role": role})
-    return stations
+
+    return [_contain(p, s) for s in stations]
+
+
+def _contain(p: dict, s: dict) -> dict:
+    """ステーションを `shell_limit()` の内側へ切り詰める。
+
+    窓（role == "window"）の下端だけは拘束しない。窓はテーブルカット面より下へ
+    抜けて初めて開口になるので、下端を clamp すると窓が閉じてしまう。下側の材料は
+    テーブルカットが除去済みなので、はみ出しても本体は破れない。
+    """
+    lim = shell_limit(p, s["z"])
+    top = min(s["yc"] + s["h"] / 2.0, lim["top"])
+    bot = s["yc"] - s["h"] / 2.0
+    if s["role"] != "window":
+        bot = max(bot, lim["bot"])
+    # ロフトが潰れないための下限。天井は外殻の拘束なので、広げるなら床を下げる。
+    bot = min(bot, top - 1.0)
+    w = min(s["w"], 2.0 * lim["half_width"])
+    return {**s, "yc": (top + bot) / 2.0, "h": top - bot, "w": w}
 
 
 def stations_by_role(stations: list[dict], role: str) -> list[dict]:
@@ -336,7 +438,7 @@ def param_regions(p: dict) -> dict:
         "reed_width":      r(z_start, z_we, "bottom", "テーブル・窓幅"),
         # 外形
         "beak_height":     r(0.0, 0.30 * length, "top", "ビーク（上面）"),
-        "body_dia":        r(0.42 * length, 0.70 * length, "all", "ボディ（リガチャー座）"),
+        "body_dia":        r(*ligature_seat_range(p), "all", "ボディ（リガチャー座）"),
         "overall_length":  r(0.0, length, "all", "全体"),
         # 製造
         "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
