@@ -4,7 +4,7 @@
 
 **照合先に選んだ量の基準**: 出所が確かで、かつ設計値から独立に決まるものだけを使う。
   - リードの規格寸法（全長・先端幅）… 市販品の規格。descriptor の reed_std_*
-  - ネックのテノン外径 … はめあい寸法。ボア径がこれと合わないと装着できない
+  - ネックのテノン外径＋コルク厚 … はめあい寸法。ボアがこれ未満だと装着できない
   - フェイシング長の公表レンジ … 各社フェイシングチャートの実測公表値
   - リガチャー座の後端 vs リード全長 … 踵が座に収まるという幾何拘束
 
@@ -31,12 +31,32 @@ def _row(label: str, value: float, ref: float, unit: str,
     return ([label, f"{value:.1f} / {ref:.1f} {unit}  {v}"], v)
 
 
+def required_bore_dia(size_info: dict) -> float:
+    """ネックに挿さるために必要なボア径 [mm]。
+
+    テノンにはコルクが巻かれているので、テノン外径そのものでは挿さらない。
+    コルク厚は descriptor が持つ一つの値を使う（neck_bore_id_mm の導出も
+    同じ値を使っており、ここで別の数字を置くと二つの前提がずれる）。
+    """
+    return size_info["neck_tenon_od_mm"] + 2.0 * size_info["neck_cork_thickness_mm"]
+
+
 def mouthpiece_card(p: dict, size_info: dict) -> dict:
     """マウスピースの規格照合。設計値 / 規格値 と判定を並べる。"""
     rows, verdicts = [], []
+
+    # ボアだけは判定が非対称。大きすぎればコルクが潰れて収まるが、小さいと
+    # 物理的に挿さらない。他の項目と同じ対称公差で「軽微」と言ってはいけない。
+    need = required_bore_dia(size_info)
+    bore = p["bore_dia"]
+    if bore < need - 0.3:
+        v = "乖離"
+    else:
+        v = _verdict(bore - need, 0.3, 1.0)
+    rows.append(["ボア径 / テノン外径＋コルク", f"{bore:.1f} / {need:.1f} mm  {v}"])
+    verdicts.append(v)
+
     for r, v in (
-        _row("ボア径 / ネック テノン外径", p["bore_dia"],
-             size_info["neck_tenon_od_mm"], "mm", 0.3, 0.8),
         _row("テーブル幅 / 規格リード先端幅", p["reed_width"],
              size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8),
         _row("リガチャー座の後端 / 規格リード全長",
