@@ -3,31 +3,49 @@
   "label": "サクソフォン",
   "family": "single_reed",
   "pitch_standard_hz": 440.0,
-  "notes": "欠損円錐体積・ネック共鳴周波数は文献値ベースの推定。実測で校正推奨。 reed_std_* は市販ケーンリードの規格寸法（部品表・仕様書の表記用）。テンプレートのリード初期値は本テンプレートのマウスピース テーブル幅に合わせてあるため、規格値とは一致しないことがある。",
+  "notes": "欠損円錐は cone_half_angle_deg と neck_bore_id_mm から acoustics/volume.missing_cone() が導出する（体積を定数で持たない）。半頂角はソプラノ 1.74°/テナー 1.52° の実測文献値、アルトはその間を採る。neck_bore_id_mm はネック小端の内径で、テノン外径から コルク0.8mm＋管肉厚0.4mm を両側分引いた推定値（3サイズ同一の規則）。この値でアルトの欠損円錐長は 242mm になる。公表されている SBA アルトの実測 217.5mm より 11% 長い。同オーダーではあるが一致はしていない。半頂角と内径のどちらも実測で 上書きできる量なので、自分の楽器のネック小端をノギスで測って置き換えるのが最も確実。facing_length_range_mm は各社公表フェイシングチャートの実測レンジ（アルト: Meyer 21mm / V16 A7M 23mm / Florida Link 20–20.5mm）。測定基準のフィーラー厚がメーカーごとに違うため厳密な比較はできない。reed_std_* は市販ケーンリードの規格寸法。 low_note_sounding_hz は記譜最低音 B♭3 の実音（移調後）。旧 written_low_note_hz は調の主音を並べただけの代用値で、アルトで 155.56Hz(E♭3) と実際の D♭3 から 2 半音ずれていた。",
   "sizes": {
     "soprano": {
       "key": "B♭",
-      "missing_cone_volume_cc": 6.0,
+      "cone_half_angle_deg": 1.74,
+      "neck_bore_id_mm": 10.2,
       "neck_tenon_od_mm": 12.6,
-      "written_low_note_hz": 233.08,
       "reed_std_length_mm": 63.5,
-      "reed_std_tip_width_mm": 12.9
+      "reed_std_tip_width_mm": 12.9,
+      "facing_length_range_mm": [
+        16,
+        20
+      ],
+      "low_note_sounding_hz": 207.65,
+      "low_note_label": "A♭3"
     },
     "alto": {
       "key": "E♭",
-      "missing_cone_volume_cc": 12.0,
+      "cone_half_angle_deg": 1.6,
+      "neck_bore_id_mm": 13.5,
       "neck_tenon_od_mm": 15.9,
-      "written_low_note_hz": 155.56,
       "reed_std_length_mm": 71.5,
-      "reed_std_tip_width_mm": 13.4
+      "reed_std_tip_width_mm": 13.4,
+      "facing_length_range_mm": [
+        19,
+        24
+      ],
+      "low_note_sounding_hz": 138.59,
+      "low_note_label": "D♭3"
     },
     "tenor": {
       "key": "B♭",
-      "missing_cone_volume_cc": 24.0,
+      "cone_half_angle_deg": 1.52,
+      "neck_bore_id_mm": 15.4,
       "neck_tenon_od_mm": 17.8,
-      "written_low_note_hz": 116.54,
       "reed_std_length_mm": 78.0,
-      "reed_std_tip_width_mm": 14.8
+      "reed_std_tip_width_mm": 14.8,
+      "facing_length_range_mm": [
+        22,
+        28
+      ],
+      "low_note_sounding_hz": 103.83,
+      "low_note_label": "A♭2"
     }
   }
 }

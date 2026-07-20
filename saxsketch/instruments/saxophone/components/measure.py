@@ -131,7 +131,9 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
                     float(a * 0.25 * L + b) - ty_meas, "ビーク斜面p95回帰")
 
     # ---- ボディ径（リガチャー座の最大半径。彫刻は径を減らす方向なので上位percentile）
-    mid = (pts[:, 2] > 0.45 * L) & (pts[:, 2] < 0.62 * L)
+    #      測定帯は座の範囲から取る（外形プロファイルの比率を二重に持たない）
+    seat0, seat1 = profiles.ligature_seat_range(p)
+    mid = (pts[:, 2] > seat0 + 2.0) & (pts[:, 2] < seat1 - 2.0)
     if mid.sum() >= 100:
         r = np.hypot(pts[mid, 0], pts[mid, 1])
         est["body_dia"] = (2.0 * float(np.percentile(r, 99.5)), "最大半径")
@@ -170,8 +172,10 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
 
     # バッフル高さ: 窓区間の空洞天井を実測し、天井式 ceil -= h_b·0.55·(1-t) を逆算
     stations = profiles.cavity_stations(p)
+    win_st = profiles.stations_by_role(stations, "window")
+    # 窓ステーションは profiles._STATION 系の t 列と 1:1。天井式の逆算に t が要る
     window_ts = [0.12, 0.25, 0.40]
-    st_by_t = {0.12: stations[1], 0.25: stations[2], 0.40: stations[3]}
+    st_by_t = dict(zip(window_ts, win_st[1:4]))
     deltas = []
     for t in window_ts:
         s = st_by_t[t]
@@ -189,13 +193,23 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         if float(np.std(deltas)) > 0.6:
             warnings.append("バッフル形状が設計プロファイルと不整合です（断面間のばらつき大）。")
 
-    # スロート断面積比: チェンバー入口断面の幅を実測
-    s_c1 = stations[-3]  # チェンバー第1ステーション
-    o = [0.0, s_c1["yc"], s_c1["z"] + z_off]
+    # スロート断面積比: 最狭部の幅を実測（w = 2·r_t なので係数不要）
+    s_th = profiles.stations_by_role(stations, "throat")[0]
+    o = [0.0, s_th["yc"], s_th["z"] + z_off]
     dx = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
+    r_t_meas = None
     if all(d is not None and d < rb * 2.5 for d in dx):
-        r_t_meas = (dx[0] + dx[1]) / 2.1  # w = 2·r_t·1.05
-        est["throat_ratio"] = ((r_t_meas / rb) ** 2, "チェンバー入口幅レイ")
+        r_t_meas = (dx[0] + dx[1]) / 2.0
+        est["throat_ratio"] = ((r_t_meas / rb) ** 2, "スロート幅レイ")
+
+    # チェンバー拡大比: 最大部の幅を実測し、断面積比へ逆算する
+    s_ch = profiles.stations_by_role(stations, "chamber")[0]
+    o = [0.0, s_ch["yc"], s_ch["z"] + z_off]
+    dxc = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
+    if r_t_meas and all(d is not None and d < rb * 3.0 for d in dxc):
+        est["chamber_ratio"] = (
+            profiles.chamber_ratio_from_width(p, dxc[0] + dxc[1], r_t_meas),
+            "チェンバー幅レイ／スロート幅レイ")
 
     # ---- 判定表の構築
     rows = []

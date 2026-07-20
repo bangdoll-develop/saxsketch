@@ -16,6 +16,112 @@ def alto():
     return comp, params
 
 
+# ------------------------------------------------------------------ 実物基準の校正（Phase 3.5）
+
+SIZES = ("soprano", "alto", "tenor")
+
+
+def _size_info(template_id: str) -> dict:
+    return get_registry().get("saxophone").make_component(
+        "mouthpiece", template_id).size_info
+
+
+def test_missing_cone_derived_not_constant():
+    """欠損円錐は半頂角とネック内径から導出され、定数を持たないこと。"""
+    from saxsketch.acoustics import volume as ac_volume
+    for tid in SIZES:
+        si = _size_info(tid)
+        assert "missing_cone_volume_cc" not in si     # 定数は廃止
+        cone = ac_volume.missing_cone(si)
+        assert cone["cc"] > 0 and cone["apex_distance_mm"] > 0
+    # アルトの欠損円錐長は 242mm。公表されている SBA アルトの実測 217.5mm より
+    # 11% 長い（ネック内径をテノン外径からの一律規則で推定しているため）。
+    # 一致は主張しない。桁が合っていること＝規則が破綻していないことだけを見る。
+    alto_cone = ac_volume.missing_cone(_size_info("alto"))
+    assert 180.0 < alto_cone["apex_distance_mm"] < 280.0
+
+    # サイズ順に単調（ソプラノ < アルト < テナー）
+    ccs = [ac_volume.missing_cone(_size_info(t))["cc"] for t in SIZES]
+    assert ccs[0] < ccs[1] < ccs[2]
+
+
+def test_tier1_within_tolerance_all_sizes():
+    """校正後のテンプレートは3サイズとも音程判定が良好であること。"""
+    from saxsketch.acoustics import volume as ac_volume
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
+        assert rep["status"] == "ok", (tid, rep["deviation_cents"])
+        assert abs(rep["deviation_cents"]) < 10.0
+
+
+def test_ligature_seat_matches_reed_heel():
+    """全長はリード規格長から決まる。座の後端に踵が来ること。"""
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        _, seat1 = profiles.ligature_seat_range(p)
+        assert seat1 == pytest.approx(_size_info(tid)["reed_std_length_mm"], abs=1.5)
+
+
+def test_cavity_station_roles():
+    """空洞は 窓→チェンバー(最大)→スロート(最狭)→ボア の三段であること。"""
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        st = profiles.cavity_stations(p)
+        assert all("role" in s for s in st)
+        assert [s["role"] for s in st][-3:] == ["chamber", "throat", "bore"]
+
+        def area(role):
+            s = profiles.stations_by_role(st, role)[0]
+            return profiles.superellipse_area(s["w"], s["h"], s["n"])
+
+        assert area("throat") < area("chamber"), tid
+        # z は単調増加（ロフトが潰れない）
+        assert all(a["z"] < b["z"] for a, b in zip(st, st[1:])), tid
+
+
+def test_reference_card_all_match():
+    """規格照合カードが3サイズ×2部品すべてで「一致」になること。"""
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        mp = reg.make_component("mouthpiece", tid)
+        cards = mp.simulate({s.key: s.default for s in mp.param_specs()})["cards"]
+        card = next(c for c in cards if "照合" in c["title"])
+        assert card["status"] == "ok", (tid, card["rows"])
+
+        reed = reg.make_component("reed", tid)
+        reed.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        cards = reed.simulate({s.key: s.default for s in reed.param_specs()})["cards"]
+        card = next(c for c in cards if "照合" in c["title"])
+        assert card["status"] == "ok", (tid, card["rows"])
+
+
+def test_reed_recommended_tip_matches_cane_reality(alto_reed):
+    """ケーンの推奨先端厚が実物のケーンリード（約0.10mm）付近に出ること。
+
+    材料表に推奨厚を書かず二分法で解いているので、これは物理モデルの検算になる。
+    """
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    m = comp.ref_params()
+    cane = reed_model.reed_properties(dict(p, material="cane"), m)
+    assert 0.07 < cane["recommended_tip_mm"] < 0.15
+    # 硬い材料ほど薄くないと同じ硬さにならない（単調性）
+    pla = reed_model.reed_properties(dict(p, material="pla"), m)
+    petg = reed_model.reed_properties(dict(p, material="petg"), m)
+    assert cane["recommended_tip_mm"] < pla["recommended_tip_mm"] \
+        < petg["recommended_tip_mm"]
+
+
+def test_reed_cane_with_printed_thickness_warns(alto_reed):
+    """cane + 印刷用の厚さ（0.40mm）はレンジ外なので警告すること。"""
+    comp, p = alto_reed
+    sim = comp.simulate(dict(p, material="cane", tip_thickness=0.40))
+    card = next(c for c in sim["cards"] if c["title"] == "硬さ・剛性")
+    assert card["status"] == "warn"
+    assert "0.1" in card["advice"] or "0.09" in card["advice"]
+
+
 # ------------------------------------------------------------------ プロファイル（純数学）
 
 def test_facing_rise_boundary(alto):
@@ -543,10 +649,14 @@ def test_impedance_param_sensitivity(alto):
     from saxsketch.acoustics import openwind_bridge as ob
     comp, p = alto
     si = comp.goal_seek_size_info()
-    base = ob.impedance(p, si)["peaks"][0]["freq"]
-    narrow = dict(p); narrow["throat_ratio"] = 0.7
-    moved = ob.impedance(narrow, si)["peaks"][0]["freq"]
-    assert abs(moved - base) > 1.0       # スロート変更でピークが動く
+    # スロートはマウスピース内部だけを変える。組み立て管 1.1m のうち 81mm しか
+    # 占めないので第1共鳴はほとんど動かず、上位共鳴ほど大きく動く（実物と同じ振る舞い）。
+    # Phase 2 では throat_ratio が本体の円錐テーパーまで書き換えていたため
+    # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
+    base = ob.impedance(p, si)["peaks"]
+    narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
+    assert abs(narrow[5]["freq"] - base[5]["freq"]) > 5.0     # 上位共鳴が動く
+    assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 
 def test_acoustics_impedance_endpoint():
@@ -570,6 +680,27 @@ def test_openwind_first_peak_reasonable(alto):
     res = ob.impedance(p, comp.goal_seek_size_info())
     assert res["engine"] == "openwind"
     assert 40.0 < res["peaks"][0]["freq"] < 400.0
+
+
+def test_resonator_extension_replaces_missing_cone():
+    """欠損円錐長を差し引いた延長になっていること（マウスピース物理長ではなく）。
+
+    物理長を引くと管が過長になり、3サイズとも約 270 セント低く出ていた。
+    第1共鳴が目標の 1 半音以内に入ることで、その系統誤差が消えたことを固定する。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import volume as ac_volume
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        si = _size_info(tid)
+        geo = ob.build_resonator(p, si)
+        l_total = ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
+        apex = ac_volume.missing_cone(si)["apex_distance_mm"] / 1000.0
+        assert geo[-1][0] == pytest.approx(
+            p["overall_length"] / 1000.0 + l_total - apex, abs=1e-4), tid
+
+        res = ob.impedance(p, si)
+        assert abs(res["first_cents_vs_target"]) < 100.0, (tid, res["first_note"])
 
 
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
@@ -672,7 +803,8 @@ def test_reference_endpoint(tmp_path):
     assert r.status_code == 200
     assert r.json()["reference"]["source"] == str(src)
     after = lp.inner_radius(STATE.component.ref_params(), p)
-    assert after == pytest.approx(before + (30.0 - 27.5) / 2.0, abs=0.02)
+    base_dia = _template_params("mouthpiece", "alto")["body_dia"]
+    assert after == pytest.approx(before + (30.0 - base_dia) / 2.0, abs=0.02)
 
     # 既定へ戻す
     assert c.post("/api/project/reference",

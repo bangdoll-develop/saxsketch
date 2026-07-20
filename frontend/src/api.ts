@@ -31,6 +31,8 @@ export interface MouthpieceSimulation {
   kind: "mouthpiece";
   tier1: Tier1; tier2: Tier2; harmonics: Harmonics;
   sensitivity: { table: Record<string, unknown>; suggestions: Record<string, Suggestion> };
+  /** 規格・実物との照合。リード/リガチャーの cards と同じ形式 */
+  cards?: SimCard[];
 }
 export interface CardSimulation {
   kind: "reed" | "ligature";

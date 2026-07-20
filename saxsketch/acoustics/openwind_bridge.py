@@ -23,8 +23,13 @@ import wave
 import numpy as np
 
 from saxsketch.instruments.saxophone.components import profiles
+from saxsketch.acoustics import volume as ac_volume
 
 # ------------------------------------------------------------------ 物理定数（空気, 20℃前後）
+# 返す共鳴ピークの本数。時間領域シミュは高次レジスタで鳴くことがあり、
+# 実測 f0 をピーク集合と照合するには 8 本では足りない。
+MAX_PEAKS = 12
+
 RHO = 1.2          # 密度 kg/m^3
 C_SOUND = 343.0    # 音速 m/s
 MU = 1.85e-5       # 粘性係数 Pa·s
@@ -56,7 +61,7 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
       (a) マウスピース内部空洞: cavity_stations の各断面積 → 等価半径 sqrt(A/pi)
       (b) 円筒ボア: シャンク端まで
       (c) 欠損円錐延長: スロート断面から本体側へ広がる円錐。
-          taper は missing_cone_volume で、全長は written_low_note_hz で決める
+          taper は descriptor の半頂角そのもの、全長は記譜最低音の実音で決める
           （組み立て管の第1共鳴が実低音付近に来るように）。
     """
     p = params
@@ -79,17 +84,18 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
         rs.append(r_bore)
 
     # (c) 欠損円錐延長
-    f1 = float(size_info["written_low_note_hz"])
-    l_total = C_SOUND / (2.0 * f1)                     # 全長 ≈ 半波長（円錐管の第1共鳴）
-    l_mp = x_shank                                     # マウスピースの音響長（近似）
-    l_ext = max(l_total - l_mp, 0.05)
+    # 円錐管の第1共鳴は**頂点から**測った全長で決まる。マウスピースが代替するのは
+    # 欠損円錐（頂点〜ネック小端）なので、差し引くのはマウスピースの物理長ではなく
+    # 欠損円錐長。物理長を引くと管が欠損円錐長との差だけ長くなり、アルトで
+    # 161mm 過長 ≒ 270 セント低く出る（3サイズとも同じ量ずれるので系統誤差と分かる）。
+    cone = ac_volume.missing_cone(size_info)
+    f1 = float(size_info["low_note_sounding_hz"])
+    l_total = C_SOUND / (2.0 * f1)                     # 頂点からベルまでの音響長
+    l_ext = max(l_total - cone["apex_distance_mm"] / 1000.0, 0.05)
 
-    r_t = profiles.throat_radius(p) / 1000.0           # スロート等価半径 m
-    v_missing = float(size_info["missing_cone_volume_cc"]) * 1e-6  # m^3
-    # 欠損円錐: V = (1/3) π r_t^2 x0 → 頂点までの距離 x0、半頂角 tanθ = r_t/x0
-    x0 = 3.0 * v_missing / (math.pi * r_t * r_t)
-    tan_theta = r_t / x0
-    tan_theta = min(tan_theta, 0.20)                   # 非現実的な急拡大を抑制
+    # 円錐の半頂角は descriptor の実測文献値をそのまま使う
+    # （体積定数から逆算していたのをやめた。出所が一本化される）
+    tan_theta = cone["tan_theta"]
 
     r_bell = r_bore + tan_theta * l_ext
     xs.append(x_shank + l_ext)
@@ -222,9 +228,9 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
                and mag[i] > 0.05 * np.max(mag)]
         idx = np.array(idx, dtype=int)
 
-    f_target = float(size_info["written_low_note_hz"])
+    f_target = float(size_info["low_note_sounding_hz"])
     peaks = []
-    for i in list(idx)[:8]:
+    for i in list(idx)[:MAX_PEAKS]:
         fp = float(freqs[i])
         peaks.append({
             "freq": round(fp, 1),

@@ -13,6 +13,12 @@ from saxsketch.geometry.builders import loft_sections, yz_profile_cut_solid
 
 from . import profiles
 from . import reed_profiles as rp
+from . import reference_check
+
+# 踵がリガチャー座の後端に届いているかの許容差 [mm]。
+# 校正後のテンプレートは踵位置＝座の後端で設計してあり（リード規格長が全長を決めている）、
+# 丸め誤差で警告が出ないよう遊びを持たせる。座はバンド幅より広いので 1mm ずれても締まる。
+SEAT_REACH_TOL = 1.0
 
 
 def _specs(t: dict) -> list[ParamSpec]:
@@ -126,6 +132,7 @@ class ReedComponent(Component):
 
     def _cards(self, params: dict) -> list[dict]:
         return [self._stiffness_card(params), self._fit_card(params),
+                reference_check.reed_card(params, self.size_info),
                 self._print_card(params)]
 
     def _stiffness_card(self, params: dict) -> dict:
@@ -135,6 +142,8 @@ class ReedComponent(Component):
             ["自由振動長", f"{props['l_eff_mm']:.1f} mm"],
             ["曲げ剛性 EI", f"{props['ei_n_mm2']:.0f} N·mm²"],
             ["先端たわみ", f"{props['tip_compliance_mm_per_kpa']:.2f} mm / kPa"],
+            [f"3番相当にする先端厚（{reed_model.material_label(params['material'])}）",
+             f"{props['recommended_tip_mm']:.2f} mm（現在 {params['tip_thickness']:.2f}）"],
         ]
         s = props["strength_equiv"]
         if s < 1.5:
@@ -142,9 +151,11 @@ class ReedComponent(Component):
                 "柔らかすぎます。先端が閉じきって音が詰まりやすく、耐久も落ちます。"
                 "先端厚を上げるか、ヴァンプを短くしてください。")
         elif s > 5.0:
+            rec = props["recommended_tip_mm"]
             status, advice = "warn", (
                 "硬すぎます。鳴らすのに強い吹圧が要り、低音が出にくくなります。"
-                "先端厚を下げるか、ヴァンプを長くしてください。")
+                f"この材料なら先端厚 {rec:.2f}mm で 3番相当になります"
+                f"（現在 {params['tip_thickness']:.2f}mm）。")
         else:
             status, advice = "ok", (
                 "一般的な硬さのレンジです。数値は片持ち梁近似による推定なので、"
@@ -181,7 +192,7 @@ class ReedComponent(Component):
             status = "warn"
             advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
                       "振動部が硬くなり鳴りにくくなります。")
-        elif p["reed_length"] < seat1:
+        elif p["reed_length"] < seat1 - SEAT_REACH_TOL:
             status = "warn"
             advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
                       f"リガチャーがリードの無い位置を締めることになり、固定できません。"

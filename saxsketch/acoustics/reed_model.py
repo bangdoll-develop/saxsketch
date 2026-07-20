@@ -127,7 +127,42 @@ def reed_properties(p: dict, ref_mp: dict) -> dict:
         "tip_compliance_mm_per_kpa": tip_defl_mm,
         "min_thickness_mm": min_t,
         "printable": p.get("material") == "cane" or p["tip_thickness"] >= min_t,
+        "recommended_tip_mm": tip_thickness_for_strength(p, ref_mp),
     }
+
+
+def tip_thickness_for_strength(p: dict, ref_mp: dict,
+                               target: float = _CALIB_STRENGTH) -> float:
+    """指定の硬さ相当値になる先端厚を解く [mm]。
+
+    材料ごとの推奨先端厚を表で持たない理由: ヤング率だけでなく形状（ヴァンプ長・
+    背骨比・幅）にも依存するので、表にすると他のパラメータを動かした瞬間に嘘になる。
+    硬さは先端厚に対し単調増加なので二分法で解ける。
+
+    ケーンの 0.11mm が 3.0 という校正基準（_CALIB_*）と同じ土俵に乗るため、
+    「この材料で 3番相当にするなら何mm か」が直接出る。
+    """
+    _, _, min_t = _material(p.get("material", DEFAULT_MATERIAL))
+    lo, hi = 0.02, 1.20
+
+    def strength(t: float) -> float:
+        q = dict(p, tip_thickness=t)
+        l_eff = effective_length(q, ref_mp)
+        return _strength_equiv(_bending(q, l_eff, _material(
+            q.get("material", DEFAULT_MATERIAL))[0])[0])
+
+    if strength(hi) < target:
+        return hi
+    if strength(lo) > target:
+        return lo
+    for _ in range(32):
+        mid = (lo + hi) / 2.0
+        if strength(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    # 造形下限を割る解は印刷できないので下限へ丸める（カード側で警告する）
+    return max((lo + hi) / 2.0, min_t)
 
 
 def _strength_equiv(tip_defl_mm: float) -> float:
