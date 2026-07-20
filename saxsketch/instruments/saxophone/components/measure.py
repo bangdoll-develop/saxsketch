@@ -156,7 +156,6 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         # (≥ty+0.4、クランプ時でも)にヒットする → しきい値 ty+0.35。
         # ティップレール面はカーブで持ち上がり誤判定するため z_start より後方から走査。
         z_start = p["tip_rail_width"] + 0.2
-        z_we_frozen = min(z_start + p["window_length"], zb - 8.0)
         z_scan = np.arange(z_start + 0.5,
                            min(z_start + p["window_length"] + 10.0, zb - 4.0), 1.0)
         origins = [[0.0, ty_meas - 6.0, z + z_off] for z in z_scan]
@@ -202,14 +201,19 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         r_t_meas = (dx[0] + dx[1]) / 2.0
         est["throat_ratio"] = ((r_t_meas / rb) ** 2, "スロート幅レイ")
 
-    # チェンバー拡大比: 最大部の幅を実測し、断面積比へ逆算する
-    s_ch = profiles.stations_by_role(stations, "chamber")[0]
-    o = [0.0, s_ch["yc"], s_ch["z"] + z_off]
-    dxc = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
-    if r_t_meas and all(d is not None and d < rb * 3.0 for d in dxc):
-        est["chamber_ratio"] = (
-            profiles.chamber_ratio_from_width(p, dxc[0] + dxc[1], r_t_meas),
-            "チェンバー幅レイ／スロート幅レイ")
+    # チェンバー拡大比: 最大部の幅を実測し、断面積比へ逆算する。
+    # 肉厚制限で頭打ちのときは形が比を反映していないので逆算不能（実測しても
+    # 外殻の内寸が返るだけ）。黙って小さい値を返さず、測れないと言う。
+    if profiles.chamber_saturated(p):
+        warnings.append("チェンバーが肉厚制限で頭打ちのため、断面積比は形状から逆算できません。")
+    else:
+        s_ch = profiles.stations_by_role(stations, "chamber")[0]
+        o = [0.0, s_ch["yc"], s_ch["z"] + z_off]
+        dxc = _first_hit_dists(mesh, [o, o], [[1, 0, 0], [-1, 0, 0]])
+        if r_t_meas and all(d is not None and d < rb * 3.0 for d in dxc):
+            est["chamber_ratio"] = (
+                profiles.chamber_ratio_from_width(p, dxc[0] + dxc[1], r_t_meas),
+                "チェンバー幅レイ／スロート幅レイ")
 
     # ---- 判定表の構築
     rows = []
