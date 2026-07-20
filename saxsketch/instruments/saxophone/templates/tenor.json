@@ -13,7 +13,7 @@
     "rollover_radius": 10.0,
     "throat_ratio": 1.0,
     "chamber_shape": "round",
-    "bore_dia": 17.8,
+    "bore_dia": 19.4,
     "bore_length": 26.0,
     "cork_depth": 22.0,
     "window_length": 33.0,
@@ -23,7 +23,7 @@
     "overall_length": 88.6,
     "min_wall": 2.2,
     "material": "resin",
-    "chamber_ratio": 1.75
+    "chamber_ratio": 1.5
   },
   "reed": {
     "reed_length": 78.0,

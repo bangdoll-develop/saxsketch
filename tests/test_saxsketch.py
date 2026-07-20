@@ -60,7 +60,7 @@ def test_missing_cone_derived_not_constant():
 # 目標側の疑いも残る: テナーのネック小端内径 15.4mm はテノン外径からの推定値で、
 # 公表実測が無い（アルトは 217.5mm の実測があり、導出値より 11% 短かった）。
 # ユーザーが自分のネックをノギスで測れば（Phase 4-A）解消しうる。
-TIER1_RESIDUAL_CENTS = {"soprano": -6.7, "alto": 9.2, "tenor": 59.8}
+TIER1_RESIDUAL_CENTS = {"soprano": -1.0, "alto": -0.5, "tenor": 53.9}
 
 
 def test_tier1_matches_recorded_residual():
@@ -166,6 +166,44 @@ def test_table_reaches_reed_heel():
         assert profiles.cut_top_y(p, heel - 1.0) == pytest.approx(profiles.table_y(p))
 
 
+def test_bore_clears_corked_tenon():
+    """ボアがコルクを巻いたテノンに挿さること。
+
+    以前は bore_dia がテノン外径そのものだった。コルク分の隙間が無く、実物の
+    ネックには物理的に入らないマウスピースが出ていた。照合カードもテノン外径と
+    直接比べて「一致」と言っていたので誤りが固定されていた。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    for tid in SIZES:
+        si = _size_info(tid)
+        p = _template_params("mouthpiece", tid)
+        need = reference_check.required_bore_dia(si)
+        assert need == pytest.approx(si["neck_tenon_od_mm"]
+                                     + 2.0 * si["neck_cork_thickness_mm"])
+        assert p["bore_dia"] >= need - 0.05, (tid, p["bore_dia"], need)
+        # コルク厚は neck_bore_id_mm の導出とも整合していること（前提が二つに割れない）
+        assert si["neck_bore_id_mm"] == pytest.approx(
+            si["neck_tenon_od_mm"] - 2.0 * (si["neck_cork_thickness_mm"] + 0.4))
+        # 外壁の肉厚が残ること
+        assert p["body_dia"] / 2.0 - p["bore_dia"] / 2.0 > p["min_wall"], tid
+
+
+def test_undersized_bore_is_rejected_not_excused():
+    """小さすぎるボアを「軽微」で済ませないこと。
+
+    判定は非対称。大きすぎればコルクが潰れて収まるが、小さいと挿さらない。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    si = _size_info("alto")
+    p = dict(_template_params("mouthpiece", "alto"),
+             bore_dia=reference_check.required_bore_dia(si) - 0.6)
+    card = reference_check.mouthpiece_card(p, si)
+    assert card["status"] == "bad", card["rows"]
+    # 同じだけ大きい側は挿さるので bad にはしない
+    p2 = dict(p, bore_dia=reference_check.required_bore_dia(si) + 0.6)
+    assert reference_check.mouthpiece_card(p2, si)["status"] != "bad"
+
+
 def test_ligature_seat_matches_reed_heel():
     """全長はリード規格長から決まる。座の後端に踵が来ること。"""
     for tid in SIZES:
@@ -182,11 +220,24 @@ def test_cavity_station_roles():
         assert all("role" in s for s in st)
         assert [s["role"] for s in st][-3:] == ["chamber", "throat", "bore"]
 
-        def area(role):
-            s = profiles.stations_by_role(st, role)[0]
+        def area(s):
             return profiles.superellipse_area(s["w"], s["h"], s["n"])
 
-        assert area("throat") < area("chamber"), tid
+        # チェンバー最大部はスロートより広い。窓直後のステーションはビークの下で
+        # 外殻に切り詰められスロートより狭くなりうるので、index でなく最大部を見る。
+        chamber = profiles.chamber_max_station(st)
+        throat = profiles.stations_by_role(st, "throat")[0]
+        assert area(throat) < area(chamber), tid
+        # スロートはチェンバー最大部からボアまでの最狭部
+        after = [s for s in st if s["z"] >= chamber["z"]]
+        assert min(after, key=area) is throat, (tid, [(s["role"], round(area(s))) for s in after])
+        # throat_ratio は面積比。半径比で定義していたとき、指数の違う真円ボアとの間で
+        # 比 1.0 でもスロートの方が 1.8% 広くなり、最狭部が最狭でなくなっていた。
+        p10 = dict(p, throat_ratio=1.0)
+        st10 = profiles.cavity_stations(p10)
+        th10 = profiles.stations_by_role(st10, "throat")[0]
+        bo10 = profiles.stations_by_role(st10, "bore")[0]
+        assert area(th10) == pytest.approx(area(bo10), rel=1e-6), tid
         # z は単調増加（ロフトが潰れない）
         assert all(a["z"] < b["z"] for a, b in zip(st, st[1:])), tid
 
@@ -808,10 +859,13 @@ def test_openwind_first_peak_reasonable(alto):
 
 
 def test_resonator_extension_replaces_missing_cone():
-    """欠損円錐長を差し引いた延長になっていること（マウスピース物理長ではなく）。
+    """気柱がコーク線で終わり、延長円錐がネック小端内径から始まること。
 
-    物理長を引くと管が過長になり、3サイズとも約 270 セント低く出ていた。
-    第1共鳴が目標の 1 半音以内に入ることで、その系統誤差が消えたことを固定する。
+    かつて延長長にマウスピースの**物理長**を使っていて 3サイズとも約 270 セント
+    低かった。それを欠損円錐長に直した後も -44〜-96 セント残っていたが、原因は
+    気柱をシャンク端まで数えていたこと（ネックのテノンが埋めている体積を空気として
+    数えていた。ソプラノで 3.6cc ＝ マウスピース内容積の 44%）と、円錐の始端が
+    マウスピースのボア半径だったこと（コルクを逃がすぶん太い）。
     """
     from saxsketch.acoustics import openwind_bridge as ob
     from saxsketch.acoustics import volume as ac_volume
@@ -819,13 +873,18 @@ def test_resonator_extension_replaces_missing_cone():
         p = _template_params("mouthpiece", tid)
         si = _size_info(tid)
         geo = ob.build_resonator(p, si)
+        cone = ac_volume.missing_cone(si)
         l_total = ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
-        apex = ac_volume.missing_cone(si)["apex_distance_mm"] / 1000.0
+        x_cork = (p["overall_length"] - p["cork_depth"]) / 1000.0
         assert geo[-1][0] == pytest.approx(
-            p["overall_length"] / 1000.0 + l_total - apex, abs=1e-4), tid
+            x_cork + l_total - cone["apex_distance_mm"] / 1000.0, abs=1e-4), tid
+        # 円錐の始端はネック小端内径。マウスピースのボアより細い
+        r_neck = cone["throat_radius_mm"] / 1000.0
+        assert geo[-2][1] == pytest.approx(r_neck, abs=1e-6), tid
+        assert r_neck < profiles.bore_radius(p) / 1000.0, tid
 
         res = ob.impedance(p, si)
-        assert abs(res["first_cents_vs_target"]) < 100.0, (tid, res["first_note"])
+        assert abs(res["first_cents_vs_target"]) < 20.0, (tid, res["first_note"])
 
 
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
