@@ -543,10 +543,14 @@ def test_impedance_param_sensitivity(alto):
     from saxsketch.acoustics import openwind_bridge as ob
     comp, p = alto
     si = comp.goal_seek_size_info()
-    base = ob.impedance(p, si)["peaks"][0]["freq"]
-    narrow = dict(p); narrow["throat_ratio"] = 0.7
-    moved = ob.impedance(narrow, si)["peaks"][0]["freq"]
-    assert abs(moved - base) > 1.0       # スロート変更でピークが動く
+    # スロートはマウスピース内部だけを変える。組み立て管 1.1m のうち 81mm しか
+    # 占めないので第1共鳴はほとんど動かず、上位共鳴ほど大きく動く（実物と同じ振る舞い）。
+    # Phase 2 では throat_ratio が本体の円錐テーパーまで書き換えていたため
+    # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
+    base = ob.impedance(p, si)["peaks"]
+    narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
+    assert abs(narrow[5]["freq"] - base[5]["freq"]) > 5.0     # 上位共鳴が動く
+    assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 
 def test_acoustics_impedance_endpoint():
@@ -672,7 +676,8 @@ def test_reference_endpoint(tmp_path):
     assert r.status_code == 200
     assert r.json()["reference"]["source"] == str(src)
     after = lp.inner_radius(STATE.component.ref_params(), p)
-    assert after == pytest.approx(before + (30.0 - 27.5) / 2.0, abs=0.02)
+    base_dia = _template_params("mouthpiece", "alto")["body_dia"]
+    assert after == pytest.approx(before + (30.0 - base_dia) / 2.0, abs=0.02)
 
     # 既定へ戻す
     assert c.post("/api/project/reference",

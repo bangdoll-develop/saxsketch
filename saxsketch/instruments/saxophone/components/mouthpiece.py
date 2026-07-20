@@ -59,6 +59,8 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- チェンバー ---
         f("throat_ratio", "スロート断面積比", "チェンバー", "比", 0.60, 1.35, 0.01,
           "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い"),
+        f("chamber_ratio", "チェンバー拡大比", "チェンバー", "比", 1.00, 2.00, 0.01,
+          "スロート最狭部に対するチェンバー最大部の比。大=内容積が増えダークで太い"),
         ParamSpec(key="chamber_shape", label="チェンバー形状", category="チェンバー",
                   type="choice", default=t["chamber_shape"],
                   choices=[Choice("round", "ラウンド"), Choice("square", "スクエア")],
@@ -66,8 +68,8 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- ボア ---
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
           "ネックコルクとの適合寸法。音程の基準に直結", advanced=True),
-        f("bore_length", "ボア長", "ボア", "mm", 30.0, 60.0, 1.0,
-          "円筒ボア部の長さ", advanced=True),
+        f("bore_length", "ボア長", "ボア", "mm", 18.0, 60.0, 1.0,
+          "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True),
         f("cork_depth", "コーク挿入深さ", "ボア", "mm", 12.0, 32.0, 1.0,
           "ネックの標準挿入量。音程チェックの基準位置"),
         # --- ウィンドウ ---

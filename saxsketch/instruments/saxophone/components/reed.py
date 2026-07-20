@@ -14,6 +14,11 @@ from saxsketch.geometry.builders import loft_sections, yz_profile_cut_solid
 from . import profiles
 from . import reed_profiles as rp
 
+# 踵がリガチャー座の後端に届いているかの許容差 [mm]。
+# 校正後のテンプレートは踵位置＝座の後端で設計してあり（リード規格長が全長を決めている）、
+# 丸め誤差で警告が出ないよう遊びを持たせる。座はバンド幅より広いので 1mm ずれても締まる。
+SEAT_REACH_TOL = 1.0
+
 
 def _specs(t: dict) -> list[ParamSpec]:
     """テンプレート値 t を初期値としてスキーマを構築。"""
@@ -181,7 +186,7 @@ class ReedComponent(Component):
             status = "warn"
             advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
                       "振動部が硬くなり鳴りにくくなります。")
-        elif p["reed_length"] < seat1:
+        elif p["reed_length"] < seat1 - SEAT_REACH_TOL:
             status = "warn"
             advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
                       f"リガチャーがリードの無い位置を締めることになり、固定できません。"

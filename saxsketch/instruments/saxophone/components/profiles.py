@@ -80,13 +80,16 @@ def table_cut_end_z(p: dict) -> float:
 
 _OUTER_PROFILE = [  # (z/L, r/rb) 制御点
     (0.00, 0.70),
-    (0.15, 0.82),
-    (0.32, 0.96),
-    (0.42, 1.00),
-    (0.70, 1.00),
-    (0.86, 0.93),
-    (1.00, 0.84),
+    (0.20, 0.84),
+    (0.45, 0.96),
+    (0.66, 1.00),   # ← 最大径（リガチャー座）の始まり
+    (0.88, 1.00),   # ← 最大径の終わり。リード踵がここに来る
+    (0.95, 0.93),
+    (1.00, 0.86),
 ]
+# 最大径区間（r/rb == 1.0 の平坦部）がリガチャー座になる。後端を 0.88 に置くのは
+# リードの踵がそこへ来るため: アルトのリード規格長 71.5mm / 全長 81mm = 0.88。
+# 全サイズで同じ比になる（soprano 63.5/72.0、tenor 78.0/88.5）。
 
 
 def outer_radius(p: dict, z: float) -> float:
@@ -102,12 +105,14 @@ def outer_radius(p: dict, z: float) -> float:
 
 
 def ligature_seat_range(p: dict) -> tuple[float, float]:
-    """リガチャーが座る z 範囲。外形が最大径で一定になる区間（_OUTER_PROFILE 参照）。
+    """リガチャーが座る z 範囲。外形が最大径で一定になる区間。
 
-    リガチャーの内周生成とリードの踵位置チェックが共用する。
+    比率は `_OUTER_PROFILE` から導出する（数値を二重に持たない）。リガチャーの
+    内周生成・リードの踵位置チェック・逆算の測定帯がすべて本関数を共用する。
     """
+    flat = [t for t, r in _OUTER_PROFILE if r >= 1.0 - 1e-9]
     length = p["overall_length"]
-    return 0.42 * length, 0.70 * length
+    return min(flat) * length, max(flat) * length
 
 
 def beak_y(p: dict, z: float) -> float:
@@ -142,10 +147,18 @@ def _baffle_progress(p: dict, t: float) -> float:
     return t
 
 
+def chamber_radius(p: dict) -> float:
+    """チェンバー最大部の等価半径。スロート最狭部を `chamber_ratio` 倍に広げた値。"""
+    return throat_radius(p) * p.get("chamber_ratio", 1.15)
+
+
 def cavity_stations(p: dict) -> list[dict]:
     """内部空洞ロフトの断面ステーション列。
 
-    各要素: {z, yc, h, w, n}（スーパー楕円）。ティップ側→ボア側の順。
+    各要素: {z, yc, h, w, n, role}（スーパー楕円）。ティップ側→ボア側の順。
+    role は "window" / "chamber" / "throat" / "bore"。実物の
+    「窓 → チェンバー(最大) → スロート(最狭) → ボア」を再現する。
+    逆算（measure.py）は index でなく role でステーションを引く。
     """
     ty = table_y(p)
     z_start = p["tip_rail_width"] + 0.2
@@ -154,14 +167,15 @@ def cavity_stations(p: dict) -> list[dict]:
     z_we = min(z_we, zb - 8.0)  # チェンバー遷移の余地を確保
     rb_bore = bore_radius(p)
     r_t = throat_radius(p)
+    r_ch = chamber_radius(p)
     w_win = window_width(p)
     h_b = p["baffle_height"]
     min_wall = p["min_wall"]
 
-    # チェンバー円（窓の直後）
+    # チェンバー最大部（窓の直後）
     z_c1 = z_we + 3.0
     c1_bot = ty + 1.5
-    c1_top = c1_bot + 1.7 * r_t
+    c1_top = c1_bot + 1.7 * r_ch
     # ボア円
     b_bot, b_top = -rb_bore, rb_bore
 
@@ -188,22 +202,30 @@ def cavity_stations(p: dict) -> list[dict]:
         ceil_ = max(ceil_, floor + 1.0)
         w = w_win * (0.82 + 0.18 * t)
         stations.append({"z": z, "yc": (floor + ceil_) / 2, "h": ceil_ - floor,
-                         "w": w, "n": n_window})
+                         "w": w, "n": n_window, "role": "window"})
 
-    # チェンバー遷移（窓終端 → ボア開始）
-    z_c2 = (z_c1 + zb) / 2.0
+    # 窓終端 → チェンバー最大部 → スロート最狭部 → ボア開始。
+    # スロートはボア直前に置く（実物も最狭部はボアへの入口にある）。
+    z_th = max(zb - 4.0, (z_c1 + zb) / 2.0)
+    t_bot = -r_t
+    t_top = r_t
     chamber = [
-        (z_c1, c1_bot, c1_top, 2.0 * r_t * 1.05, n_chamber),
-        (z_c2, (c1_bot + b_bot) / 2, (c1_top + b_top) / 2,
-         (2.0 * r_t * 1.05 + 2.0 * rb_bore) / 2, (n_chamber + 2.0) / 2),
-        (zb, b_bot, b_top, 2.0 * rb_bore, 2.0),
+        (z_c1, c1_bot, c1_top, 2.0 * r_ch * 1.05, n_chamber, "chamber"),
+        (z_th, t_bot, t_top, 2.0 * r_t, (n_chamber + 2.0) / 2, "throat"),
+        (zb, b_bot, b_top, 2.0 * rb_bore, 2.0, "bore"),
     ]
-    for z, bot, top, w, n in chamber:
+    for z, bot, top, w, n, role in chamber:
         # 外壁肉厚の確保
         lim = -(outer_radius(p, z) - min_wall)
         bot = max(bot, lim)
-        stations.append({"z": z, "yc": (bot + top) / 2, "h": top - bot, "w": w, "n": n})
+        stations.append({"z": z, "yc": (bot + top) / 2, "h": top - bot,
+                         "w": w, "n": n, "role": role})
     return stations
+
+
+def stations_by_role(stations: list[dict], role: str) -> list[dict]:
+    """role でステーションを絞る。ステーション構成が変わっても壊れない引き方。"""
+    return [s for s in stations if s.get("role") == role]
 
 
 def superellipse_area(w: float, h: float, n: float) -> float:
@@ -263,7 +285,8 @@ def param_regions(p: dict) -> dict:
         "rollover_radius": r(z_start, z_start + 0.5 * (z_we - z_start), "all",
                              "バッフル肩の丸み"),
         # チェンバー
-        "throat_ratio":    r(z_we, zb, "all", "チェンバー〜スロート"),
+        "throat_ratio":    r(zb - 6.0, zb, "all", "スロート（最狭部）"),
+        "chamber_ratio":   r(z_we, zb - 4.0, "all", "チェンバー（最大部）"),
         "chamber_shape":   r(z_we, zb, "all", "チェンバー断面"),
         # ボア
         "bore_dia":        r(zb, length, "all", "ボア（円筒部）"),

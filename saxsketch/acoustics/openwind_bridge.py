@@ -23,8 +23,13 @@ import wave
 import numpy as np
 
 from saxsketch.instruments.saxophone.components import profiles
+from saxsketch.acoustics import volume as ac_volume
 
 # ------------------------------------------------------------------ 物理定数（空気, 20℃前後）
+# 返す共鳴ピークの本数。時間領域シミュは高次レジスタで鳴くことがあり、
+# 実測 f0 をピーク集合と照合するには 8 本では足りない。
+MAX_PEAKS = 12
+
 RHO = 1.2          # 密度 kg/m^3
 C_SOUND = 343.0    # 音速 m/s
 MU = 1.85e-5       # 粘性係数 Pa·s
@@ -56,7 +61,7 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
       (a) マウスピース内部空洞: cavity_stations の各断面積 → 等価半径 sqrt(A/pi)
       (b) 円筒ボア: シャンク端まで
       (c) 欠損円錐延長: スロート断面から本体側へ広がる円錐。
-          taper は missing_cone_volume で、全長は written_low_note_hz で決める
+          taper は descriptor の半頂角そのもの、全長は written_low_note_hz で決める
           （組み立て管の第1共鳴が実低音付近に来るように）。
     """
     p = params
@@ -84,12 +89,9 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
     l_mp = x_shank                                     # マウスピースの音響長（近似）
     l_ext = max(l_total - l_mp, 0.05)
 
-    r_t = profiles.throat_radius(p) / 1000.0           # スロート等価半径 m
-    v_missing = float(size_info["missing_cone_volume_cc"]) * 1e-6  # m^3
-    # 欠損円錐: V = (1/3) π r_t^2 x0 → 頂点までの距離 x0、半頂角 tanθ = r_t/x0
-    x0 = 3.0 * v_missing / (math.pi * r_t * r_t)
-    tan_theta = r_t / x0
-    tan_theta = min(tan_theta, 0.20)                   # 非現実的な急拡大を抑制
+    # 円錐の半頂角は descriptor の実測文献値をそのまま使う
+    # （体積定数から逆算していたのをやめた。出所が一本化される）
+    tan_theta = ac_volume.missing_cone(size_info)["tan_theta"]
 
     r_bell = r_bore + tan_theta * l_ext
     xs.append(x_shank + l_ext)
@@ -224,7 +226,7 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
 
     f_target = float(size_info["written_low_note_hz"])
     peaks = []
-    for i in list(idx)[:8]:
+    for i in list(idx)[:MAX_PEAKS]:
         fp = float(freqs[i])
         peaks.append({
             "freq": round(fp, 1),
