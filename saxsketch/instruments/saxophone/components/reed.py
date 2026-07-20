@@ -140,6 +140,8 @@ class ReedComponent(Component):
             ["自由振動長", f"{props['l_eff_mm']:.1f} mm"],
             ["曲げ剛性 EI", f"{props['ei_n_mm2']:.0f} N·mm²"],
             ["先端たわみ", f"{props['tip_compliance_mm_per_kpa']:.2f} mm / kPa"],
+            [f"3番相当にする先端厚（{reed_model.material_label(params['material'])}）",
+             f"{props['recommended_tip_mm']:.2f} mm（現在 {params['tip_thickness']:.2f}）"],
         ]
         s = props["strength_equiv"]
         if s < 1.5:
@@ -147,9 +149,11 @@ class ReedComponent(Component):
                 "柔らかすぎます。先端が閉じきって音が詰まりやすく、耐久も落ちます。"
                 "先端厚を上げるか、ヴァンプを短くしてください。")
         elif s > 5.0:
+            rec = props["recommended_tip_mm"]
             status, advice = "warn", (
                 "硬すぎます。鳴らすのに強い吹圧が要り、低音が出にくくなります。"
-                "先端厚を下げるか、ヴァンプを長くしてください。")
+                f"この材料なら先端厚 {rec:.2f}mm で 3番相当になります"
+                f"（現在 {params['tip_thickness']:.2f}mm）。")
         else:
             status, advice = "ok", (
                 "一般的な硬さのレンジです。数値は片持ち梁近似による推定なので、"
