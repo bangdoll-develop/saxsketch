@@ -34,25 +34,136 @@ def test_missing_cone_derived_not_constant():
         assert "missing_cone_volume_cc" not in si     # 定数は廃止
         cone = ac_volume.missing_cone(si)
         assert cone["cc"] > 0 and cone["apex_distance_mm"] > 0
-    # アルトの欠損円錐長は 242mm。公表されている SBA アルトの実測 217.5mm より
+    # アルトだけ公表実測（SBA 217.5mm）があるのでそれを採る。導出すると 242mm で
     # 11% 長い（ネック内径をテノン外径からの一律規則で推定しているため）。
-    # 一致は主張しない。桁が合っていること＝規則が破綻していないことだけを見る。
+    # 実測がある箇所だけ差し替え、無い箇所は導出のまま残す方針。
     alto_cone = ac_volume.missing_cone(_size_info("alto"))
-    assert 180.0 < alto_cone["apex_distance_mm"] < 280.0
+    assert alto_cone["source"] == "measured"
+    assert alto_cone["apex_distance_mm"] == pytest.approx(217.5)
+    assert alto_cone["derived_apex_mm"] == pytest.approx(241.7, abs=1.0)
+    # 採用した頂点距離と広がりが自己矛盾しないこと（共鳴管の生成が同じ値を使う）
+    assert alto_cone["throat_radius_mm"] / alto_cone["tan_theta"] == pytest.approx(217.5)
+    assert ac_volume.missing_cone(_size_info("tenor"))["source"] == "derived"
 
     # サイズ順に単調（ソプラノ < アルト < テナー）
     ccs = [ac_volume.missing_cone(_size_info(t))["cc"] for t in SIZES]
     assert ccs[0] < ccs[1] < ccs[2]
 
 
-def test_tier1_within_tolerance_all_sizes():
-    """校正後のテンプレートは3サイズとも音程判定が良好であること。"""
+# 実測した残差 [cent]。テナーだけ届かない。
+#
+# 空洞を外殻に封じ込めた（Phase 3.6）結果、実物寸法の胴に入る容積が上限になった。
+# テナーは目標 18.0cc に対し到達上限が 13.7cc しかない。以前は封じ込め拘束が無く、
+# チェンバーが本体の外へ膨らんだ分まで体積積分が数えて「-0.1 cent」と表示していた。
+# 合格の方が嘘だったので、緩めるのではなく事実を記録する。
+#
+# 目標側の疑いも残る: テナーのネック小端内径 15.4mm はテノン外径からの推定値で、
+# 公表実測が無い（アルトは 217.5mm の実測があり、導出値より 11% 短かった）。
+# ユーザーが自分のネックをノギスで測れば（Phase 4-A）解消しうる。
+TIER1_RESIDUAL_CENTS = {"soprano": -6.7, "alto": 9.2, "tenor": 59.8}
+
+
+def test_tier1_matches_recorded_residual():
+    """Tier1 の残差が記録値どおりであること。良好かどうかではなく、変化の検知が目的。"""
     from saxsketch.acoustics import volume as ac_volume
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
-        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
-        assert rep["status"] == "ok", (tid, rep["deviation_cents"])
-        assert abs(rep["deviation_cents"]) < 10.0
+        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid),
+                                     saturated=profiles.chamber_saturated(p))
+        assert rep["deviation_cents"] == pytest.approx(
+            TIER1_RESIDUAL_CENTS[tid], abs=2.0), (tid, rep)
+    # ソプラノとアルトは実際に良好。テナーは正直に sharp を出す。
+    def status(tid):
+        p = _template_params("mouthpiece", tid)
+        return ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))["status"]
+    assert status("soprano") == "ok"
+    assert status("alto") == "ok"
+    assert status("tenor") == "sharp"
+
+
+def test_tier1_advice_admits_saturation():
+    """届かないのに「チェンバーを広げろ」とだけ言わないこと。
+
+    肉厚制限で頭打ちならスライダを上げても形は変わらない。効かない操作を勧めるのは
+    ユーザーの時間を捨てさせる。
+    """
+    from saxsketch.acoustics import volume as ac_volume
+    p = _template_params("mouthpiece", "tenor")
+    assert profiles.chamber_saturated(p)
+    rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info("tenor"),
+                                 saturated=True)
+    assert "頭打ち" in rep["advice"]
+
+
+# ------------------------------------------------------- 外殻への封じ込め（Phase 3.6）
+
+def _breaches(p: dict) -> list[str]:
+    """外殻を突き抜けているステーションを列挙する。"""
+    bad = []
+    for s in profiles.cavity_stations(p):
+        lim = profiles.shell_limit(p, s["z"])
+        top, bot = s["yc"] + s["h"] / 2.0, s["yc"] - s["h"] / 2.0
+        if s["w"] / 2.0 > lim["half_width"] + 1e-6:
+            bad.append(f"{s['role']}@{s['z']:.1f} 幅 {s['w']/2:.2f}>{lim['half_width']:.2f}")
+        if top > lim["top"] + 1e-6:
+            bad.append(f"{s['role']}@{s['z']:.1f} 天井 {top:.2f}>{lim['top']:.2f}")
+        # 窓の下端だけは自由（テーブルカット面より下へ抜けて開口になる）
+        if s["role"] != "window" and bot < lim["bot"] - 1e-6:
+            bad.append(f"{s['role']}@{s['z']:.1f} 床 {bot:.2f}<{lim['bot']:.2f}")
+    return bad
+
+
+def test_cavity_inside_shell():
+    """空洞がどのパラメータ組合せでも本体を貫通しないこと。
+
+    Phase 3.5 で外形だけ実物寸法へ縮めた結果、チェンバーが本体の左右と上を突き抜け、
+    しかも体積積分が外へ出た分まで数えて Tier1 が「合格」した。マウスピースとして
+    成立しないモデルが既定値で出ていた。このテスト1本がその再発を構造的に防ぐ。
+    """
+    keys = ("chamber_ratio", "throat_ratio", "baffle_height", "window_length",
+            "beak_height", "min_wall", "body_dia", "bore_length")
+    for tid in SIZES:
+        comp = get_registry().get("saxophone").make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        base = _template_params("mouthpiece", tid)
+        assert _breaches(base) == [], (tid, "既定値", _breaches(base))
+        for k in keys:
+            spec = specs[k]
+            for v in (spec.min, spec.default, spec.max):
+                p = dict(base, **{k: v})
+                assert _breaches(p) == [], (tid, k, v, _breaches(p))
+
+
+def test_beak_taper_spans_body():
+    """ビークがティップからショルダーまで本体を切り続けること。
+
+    ビーク面を直線にしていたときは、`beak_height` が胴の全高に近い既定値だったため
+    全長の 1/4 で外形を追い越し、テーパが消えてただの円筒になっていた。
+    同時に空洞天井の clamp（`beak_y - min_wall`）まで無効化されていた。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        L = p["overall_length"]
+        for t in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5):
+            z = t * L
+            assert profiles.beak_y(p, z) < profiles.outer_radius(p, z), (tid, t)
+        # 単調に立ち上がる（くさび→バイトポイント→ショルダー）
+        ys = [profiles.beak_y(p, t * L) for t in (0.0, 0.15, 0.3, 0.45)]
+        assert all(a < b for a, b in zip(ys, ys[1:])), (tid, ys)
+
+
+def test_table_reaches_reed_heel():
+    """テーブル平面がリード踵より後ろまで届くこと。
+
+    外形プロファイルのリガチャー座を動かしたとき、テーブル終端の比率リテラルを
+    置き忘れてリードの後端 20mm が宙に浮いていた。比率は profiles が単独で持つ。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        heel = _size_info(tid)["reed_std_length_mm"]
+        assert profiles.table_cut_end_z(p) > heel, tid
+        # 踵の直前ではまだ平面（ランプが始まっていない）
+        assert profiles.cut_top_y(p, heel - 1.0) == pytest.approx(profiles.table_y(p))
 
 
 def test_ligature_seat_matches_reed_heel():
@@ -581,13 +692,23 @@ def test_tip_opening_dimension(alto, alto_part):
     assert bb.max.Z - bb.min.Z == pytest.approx(p["overall_length"], abs=0.5)
 
 
-def test_all_templates_build():
+def test_all_templates_build(tmp_path):
+    """3サイズとも水密なソリッドになること。
+
+    空洞が外殻を突き抜けていれば非水密になるので、`test_cavity_inside_shell` の
+    解析的な判定に対する独立した裏取りになる。
+    """
+    from saxsketch.export.models import check_mesh, export_model
     reg = get_registry()
     for tmpl in ["soprano", "alto", "tenor"]:
         comp = reg.get("saxophone").make_component("mouthpiece", tmpl)
         p = {s.key: s.default for s in comp.param_specs()}
         part = comp.build(p)
         assert part.is_valid and part.volume > 5000
+        f = tmp_path / f"{tmpl}.stl"
+        export_model(part, f, "stl")
+        q = check_mesh(f)
+        assert q["watertight"] and q["winding_consistent"], (tmpl, q)
 
 
 # ------------------------------------------------------------------ 音響
@@ -655,7 +776,11 @@ def test_impedance_param_sensitivity(alto):
     # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
     base = ob.impedance(p, si)["peaks"]
     narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
-    assert abs(narrow[5]["freq"] - base[5]["freq"]) > 5.0     # 上位共鳴が動く
+    # 単一ピークで見ない: 周波数グリッドが約2.4Hz刻みなので、実際の移動量が
+    # グリッド境界のどちら側に落ちるかで 2.5Hz と 4.9Hz を行き来する。
+    # 上位共鳴の総移動量で見れば量子化に左右されない。
+    shift = sum(abs(narrow[i]["freq"] - base[i]["freq"]) for i in range(3, 8))
+    assert shift > 12.0, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
     assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 

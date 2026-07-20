@@ -18,12 +18,12 @@
     "cork_depth": 23.0,
     "window_length": 33.0,
     "reed_width": 12.9,
-    "beak_height": 19.0,
+    "beak_height": 12.9,
     "body_dia": 23.5,
     "overall_length": 72.2,
     "min_wall": 1.8,
     "material": "resin",
-    "chamber_ratio": 1.1
+    "chamber_ratio": 1.0
   },
   "reed": {
     "reed_length": 63.5,
