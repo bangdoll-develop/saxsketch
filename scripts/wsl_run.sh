@@ -23,5 +23,5 @@ if [ ! -f "frontend/dist/index.html" ]; then
   echo "⚠ frontend/dist 未ビルド。UI が出ない場合は: bash scripts/wsl_sync.sh" >&2
 fi
 
-echo "▶ SaxSketch 起動 → http://localhost:8712 （停止: Ctrl+C）"
+echo "▶ SaxSketch 起動中…（URL は下に表示、停止: Ctrl+C）"
 exec python -m saxsketch.server.app
