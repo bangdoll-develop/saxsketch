@@ -1,6 +1,7 @@
 """SaxSketch FastAPI サーバ。
 
 起動:  python -m saxsketch.server.app  →  http://127.0.0.1:8712
+       （8712 占有時は WF_PORT で上書き、または空きポートへ自動退避）
 """
 from __future__ import annotations
 
@@ -550,9 +551,60 @@ if FRONTEND_DIST.exists():
         return FileResponse(FRONTEND_DIST / "index.html")
 
 
+def _in_use(host: str, port: int) -> bool:
+    """port で誰かが listen していれば True。bind 可否ではなく接続可否で見る。
+
+    bind の成否は Windows と Linux で SO_REUSEADDR/SO_EXCLUSIVEADDRUSE の意味が
+    違って当てにならない。connect_ex==0 で「誰かが listen 中」はどちらでも確実。
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex((host, port)) == 0
+
+
+def _is_saxsketch(host: str, port: int) -> bool:
+    """占有主が SaxSketch 自身か。/api/instruments が 200 を返すかで判定。"""
+    from urllib.error import URLError
+    from urllib.request import urlopen
+    try:
+        with urlopen(f"http://{host}:{port}/api/instruments", timeout=0.7) as r:
+            return r.status == 200
+    except (URLError, OSError):
+        return False
+
+
+def _free_port(host: str, start: int, tries: int = 20) -> int | None:
+    """start から連番で最初の空きを返す。無ければ None。"""
+    for p in range(start, start + tries):
+        if not _in_use(host, p):
+            return p
+    return None
+
+
 def main():
+    import sys
+
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8712)
+
+    host = os.environ.get("WF_HOST", "127.0.0.1")
+    want = int(os.environ.get("WF_PORT", "8712"))
+
+    if _in_use(host, want):
+        if _is_saxsketch(host, want):
+            print(f"✔ SaxSketch は既に起動中 → http://{host}:{want} を開いてください")
+            return
+        port = _free_port(host, want + 1)
+        if port is None:
+            print(f"✗ {want} が使用中で、近傍にも空きポートがありません。"
+                  f"占有元を止めるか WF_PORT で別ポートを指定してください。", file=sys.stderr)
+            sys.exit(1)
+        print(f"⚠ ポート {want} は使用中。空いている {port} で起動します。")
+    else:
+        port = want
+
+    print(f"▶ SaxSketch → http://{host}:{port} （停止: Ctrl+C）")
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

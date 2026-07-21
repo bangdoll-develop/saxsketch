@@ -1204,3 +1204,28 @@ def test_api_flow(tmp_path):
 
     r = c.get("/api/model.stl?quality=preview")
     assert r.status_code == 200 and len(r.content) > 10000
+
+
+# ------------------------------------------------------------------ ポート競合
+
+def test_port_fallback():
+    """占有ポートを検出し、空きへ退避するヘルパーの挙動。main() は起動しない。"""
+    import socket
+
+    from saxsketch.server import app as srv
+
+    host = "127.0.0.1"
+    lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    lsock.bind((host, 0))
+    lsock.listen(1)
+    busy = lsock.getsockname()[1]
+    try:
+        assert srv._in_use(host, busy) is True
+        # listen 中ポートは避けて別番号を返す
+        chosen = srv._free_port(host, busy)
+        assert chosen is not None and chosen != busy
+        assert srv._in_use(host, chosen) is False
+        # 素のソケット相手は SaxSketch ではない（HTTP を話さない）
+        assert srv._is_saxsketch(host, busy) is False
+    finally:
+        lsock.close()
