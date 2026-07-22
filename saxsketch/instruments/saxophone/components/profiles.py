@@ -213,8 +213,17 @@ def shell_limit(p: dict, z: float) -> dict:
     }
 
 
+#: ステップ バッフルの段差位置（窓区間内の t）。`_window_ts` が段差の直前・直後に
+#: 近接ステーションを入れて、ロフトに準垂直の壁（実段差）を張らせる。
+_STEP_T = 0.40
+
+
 def _baffle_progress(p: dict, t: float) -> float:
-    """窓区間内 t∈[0,1] に対する天井上昇率 u∈[0,1]。バッフル種別で形が変わる。"""
+    """窓区間内 t∈[0,1] に対する天井上昇率 u∈[0,1]。バッフル種別で形が変わる。
+
+    straight=線形スロープ、rollover=凸の肩（放物）、step=実段差、
+    curve=凹（早く立ち上がり高天井で張り出す＝メタリック/アグレッシブ）。
+    """
     kind = p.get("baffle_type", "rollover")
     if kind == "straight":
         return t
@@ -222,10 +231,26 @@ def _baffle_progress(p: dict, t: float) -> float:
         expo = 1.6 + p.get("rollover_radius", 8.0) / 10.0
         return t ** expo
     if kind == "step":
-        return 0.06 + 0.94 * _smoothstep((t - 0.40) / 0.15)
-    if kind == "high":
-        return 0.04 + 0.96 * _smoothstep((t - 0.75) / 0.22)
+        # 幅 0.05 の急峻な遷移。`_window_ts` が t=_STEP_T±0.02 に点を足すため、
+        # 数mm の z 幅で天井が跳ね上がり、ほぼ垂直の段差面になる。
+        return 0.06 + 0.94 * _smoothstep((t - (_STEP_T - 0.02)) / 0.05)
+    if kind == "curve":
+        expo = 1.6 + p.get("rollover_radius", 8.0) / 10.0
+        return 1.0 - (1.0 - t) ** expo
     return t
+
+
+#: 窓断面をサンプルする既定の t 列（ティップ→窓終端）。
+_WINDOW_TS = [0.0, 0.12, 0.25, 0.40, 0.55, 0.70, 0.82, 0.92, 1.0]
+
+
+def _window_ts(p: dict) -> list[float]:
+    """窓ステーションの t サンプル列。ステップ時は段差位置に近接点を挿入する。"""
+    ts = list(_WINDOW_TS)
+    if p.get("baffle_type") == "step":
+        ts += [_STEP_T - 0.02, _STEP_T + 0.02]
+        ts = sorted(set(ts))
+    return ts
 
 
 #: チェンバー断面の基準形（スロート等価半径に対する 幅・高さ の倍率）。
@@ -254,8 +279,12 @@ def chamber_size(p: dict) -> tuple[float, float]:
     n_ch = _chamber_n(p)
     a_throat = superellipse_area(2.0 * r_t, 2.0 * r_t, _throat_n(p))
     w0, h0 = _CHAMBER_W * r_t, _CHAMBER_H * r_t
-    scale = math.sqrt(p.get("chamber_ratio", 1.15) * a_throat
-                      / superellipse_area(w0, h0, n_ch))
+    # 基準断面積を「その形状」で評価する。断面積は (w,h) について2次同次なので、
+    # w0,h0 を一律 scale 倍すれば形状によらず断面積が chamber_ratio×a_throat になる。
+    # round/square は section_area == superellipse_area(w0,h0,n_ch) で従来式と厳密一致。
+    base = {"yc": 0.0, "h": h0, "w": w0, "n": n_ch,
+            "shape": p.get("chamber_shape", "round")}
+    scale = math.sqrt(p.get("chamber_ratio", 1.15) * a_throat / section_area(base))
     return w0 * scale, h0 * scale
 
 
@@ -276,7 +305,7 @@ def chamber_saturated(p: dict) -> bool:
 
 
 def _chamber_areas(p: dict) -> list[float]:
-    return [superellipse_area(s["w"], s["h"], s["n"])
+    return [section_area(s)
             for s in stations_by_role(cavity_stations(p), "chamber")]
 
 
@@ -287,13 +316,20 @@ def chamber_ratio_from_width(p: dict, w_meas: float, r_t_meas: float) -> float:
     ここに置く。高さは幅と固定比なので幅だけから断面積が決まる。
     """
     h_meas = w_meas * _CHAMBER_H / _CHAMBER_W
-    a_ch = superellipse_area(w_meas, h_meas, _chamber_n(p))
+    a_ch = section_area({"yc": 0.0, "h": h_meas, "w": w_meas, "n": _chamber_n(p),
+                         "shape": p.get("chamber_shape", "round")})
     a_th = superellipse_area(2.0 * r_t_meas, 2.0 * r_t_meas, _throat_n(p))
     return a_ch / a_th if a_th > 0 else 1.0
 
 
+#: チェンバー断面のスーパー楕円指数。round/square は断面そのものを決め、
+#: 馬蹄/フラットサイドウォールでは（断面積はシューレースで別途求めるため）
+#: スロート平滑化と逆算 prior の基準としてのみ使う。
+_CHAMBER_N = {"round": 2.2, "square": 3.8, "horseshoe": 2.6, "flat_sidewall": 3.0}
+
+
 def _chamber_n(p: dict) -> float:
-    return 2.2 if p.get("chamber_shape", "round") == "round" else 3.8
+    return _CHAMBER_N.get(p.get("chamber_shape", "round"), 3.8)
 
 
 def _throat_n(p: dict) -> float:
@@ -335,9 +371,10 @@ def cavity_stations(p: dict) -> list[dict]:
     n_window = 3.5
     n_chamber = _chamber_n(p)
 
+    ch_shape = p.get("chamber_shape", "round")
+
     stations: list[dict] = []
-    window_ts = [0.0, 0.12, 0.25, 0.40, 0.55, 0.70, 0.82, 0.92, 1.0]
-    for t in window_ts:
+    for t in _window_ts(p):
         z = z_start + t * (z_we - z_start)
         if t <= 0.90:
             floor = ty + facing_rise(p, z) - 0.8   # カット面より下 → 窓が開く
@@ -348,24 +385,35 @@ def cavity_stations(p: dict) -> list[dict]:
         ceil_ -= h_b * 0.55 * (1.0 - t)             # 高バッフル = 天井をリードに近づける
         w = w_win * (0.82 + 0.18 * t)
         stations.append({"z": z, "yc": (floor + ceil_) / 2, "h": ceil_ - floor,
-                         "w": w, "n": n_window, "role": "window"})
+                         "w": w, "n": n_window, "role": "window", "shape": "round"})
 
     # 窓終端 → チェンバー（定断面区間）→ スロート最狭部 → ボア開始。
     # 実物は「一定断面のチェンバー → 短い狭窄 → ボア」で、狭窄を長く取ると
     # 内容積を無駄に失う。スロートはボア直前に置く。
+    # chamber ステーションだけ chamber_shape（round/square/馬蹄/フラットサイドウォール）を
+    # 帯び、スロート・ボアは丸（round）に戻す。
     z_c2 = zb - _CHAMBER_RUN
     z_th = zb - _THROAT_RUN
     chamber = [
-        (z_c1, c1_bot, c1_top, w_ch, n_chamber, "chamber"),
-        (z_c2, c1_bot, c1_top, w_ch, n_chamber, "chamber"),
-        (z_th, -r_t, r_t, 2.0 * r_t, _throat_n(p), "throat"),
-        (zb, b_bot, b_top, 2.0 * rb_bore, 2.0, "bore"),
+        (z_c1, c1_bot, c1_top, w_ch, n_chamber, "chamber", ch_shape),
+        (z_c2, c1_bot, c1_top, w_ch, n_chamber, "chamber", ch_shape),
+        (z_th, -r_t, r_t, 2.0 * r_t, _throat_n(p), "throat", "round"),
+        (zb, b_bot, b_top, 2.0 * rb_bore, 2.0, "bore", "round"),
     ]
-    for z, bot, top, w, n, role in chamber:
+    for z, bot, top, w, n, role, shape in chamber:
         stations.append({"z": z, "yc": (bot + top) / 2, "h": top - bot,
-                         "w": w, "n": n, "role": role})
+                         "w": w, "n": n, "role": role, "shape": shape})
 
     return [_contain(p, s) for s in stations]
+
+
+def cavity_sections(p: dict) -> list[dict]:
+    """内部空洞ロフト用の断面列 [{z, pts}]（ティップ→ボアの z 昇順）。
+
+    `cavity_stations()` を `section_pts()` でポリゴン化したもの。全断面が点数一定・
+    同順のため、`builders.loft_sections` で水密ソリッドになる。
+    """
+    return [{"z": s["z"], "pts": section_pts(s)} for s in cavity_stations(p)]
 
 
 def _contain(p: dict, s: dict) -> dict:
@@ -395,7 +443,7 @@ def chamber_max_station(stations: list[dict]) -> dict:
     断面積で選ぶ。逆算（measure）と検証がこの一箇所を共用する。
     """
     ch = stations_by_role(stations, "chamber")
-    return max(ch, key=lambda s: superellipse_area(s["w"], s["h"], s["n"]))
+    return max(ch, key=section_area)
 
 
 def stations_by_role(stations: list[dict], role: str) -> list[dict]:
@@ -408,6 +456,103 @@ def superellipse_area(w: float, h: float, n: float) -> float:
     return w * h * _superellipse_shape_factor(n)
 
 
+# ---------------------------------------------------------------- 断面ポリゴン（4形状）
+
+#: 全断面で固定する頂点数。円形の窓/スロート/ボアと非対称チェンバーを同数・同順
+#: （+X 始点・反時計回り）で並べ、ルールドロフトがねじれないようにする
+#: （`builders.flat_bottom_rect_pts` と同じ堅牢性方針）。
+_SECTION_SAMPLES = 96
+
+
+def _super_pts(yc: float, h: float, w: float, nx: float, ny: float,
+               samples: int = _SECTION_SAMPLES) -> list[tuple[float, float]]:
+    """異方スーパー楕円 |2x/w|^nx + |2(y-yc)/h|^ny = 1 の点列（+X 始点・反時計回り）。
+
+    nx=ny で従来の等方スーパー楕円（`builders.superellipse_wire` の2D版）。
+    nx を大きくすると左右が立ち上がる（フラットサイドウォール）。
+    """
+    pts = []
+    for i in range(samples):
+        th = 2.0 * math.pi * i / samples
+        c, s = math.cos(th), math.sin(th)
+        x = (w / 2.0) * math.copysign(abs(c) ** (2.0 / nx), c)
+        y = yc + (h / 2.0) * math.copysign(abs(s) ** (2.0 / ny), s)
+        pts.append((x, y))
+    return pts
+
+
+def _superellipse_pts(yc: float, h: float, w: float, n: float,
+                      samples: int = _SECTION_SAMPLES) -> list[tuple[float, float]]:
+    return _super_pts(yc, h, w, n, n, samples)
+
+
+def _flat_sidewall_pts(yc: float, h: float, w: float,
+                       samples: int = _SECTION_SAMPLES) -> list[tuple[float, float]]:
+    """フラットサイドウォール：左右が垂直な平面、上下が丸い断面。
+
+    異方スーパー楕円で幅方向の指数を大きく（=側壁を立てる）、高さ方向は丸く保つ。
+    """
+    return _super_pts(yc, h, w, 7.0, 2.4, samples)
+
+
+def _horseshoe_pts(yc: float, h: float, w: float,
+                   samples: int = _SECTION_SAMPLES) -> list[tuple[float, float]]:
+    """馬蹄：丸い天井・側壁を持ち、底の中央が上へ凹む（U字開口）断面。
+
+    等方に近いスーパー楕円をベースに、下半分の中央（θ≈3π/2）だけ内側へ持ち上げて
+    凹みを作る。凹みは中心より浅く保つので星状（中心から見て単調）で自己交差しない。
+    """
+    hh = h / 2.0
+    notch = 0.5 * hh          # 凹みの深さ（中心には届かない）
+    width = 0.55              # 凹みの角度幅 [rad]
+    pts = []
+    for i in range(samples):
+        th = 2.0 * math.pi * i / samples
+        c, s = math.cos(th), math.sin(th)
+        n = 2.6
+        x = (w / 2.0) * math.copysign(abs(c) ** (2.0 / n), c)
+        y = yc + hh * math.copysign(abs(s) ** (2.0 / n), s)
+        if s < 0.0:  # 下半分の中央付近を上へ（凹ませる）
+            d = th - 1.5 * math.pi
+            y += notch * math.exp(-(d * d) / (2.0 * width * width))
+        pts.append((x, y))
+    return pts
+
+
+def _polygon_area(pts: list[tuple[float, float]]) -> float:
+    """多角形の符号なし面積（シューレース）。"""
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % n]
+        a += x0 * y1 - x1 * y0
+    return abs(a) / 2.0
+
+
+def section_pts(s: dict) -> list[tuple[float, float]]:
+    """ステーション {yc,h,w,n,shape?} → 断面ポリゴンの点列。
+
+    shape 未指定（窓/スロート/ボア）と round/square は等方スーパー楕円、
+    horseshoe/flat_sidewall は専用ジェネレータ。全形状とも点数一定・同順。
+    """
+    shape = s.get("shape", "round")
+    yc, h, w = s["yc"], s["h"], s["w"]
+    if shape == "horseshoe":
+        return _horseshoe_pts(yc, h, w)
+    if shape == "flat_sidewall":
+        return _flat_sidewall_pts(yc, h, w)
+    return _superellipse_pts(yc, h, w, s.get("n", 2.0))
+
+
+def section_area(s: dict) -> float:
+    """ステーションの断面積。round/square は解析式（従来値と厳密一致＝校正保全）、
+    非対称形は `section_pts` のシューレース面積。"""
+    if s.get("shape") in ("horseshoe", "flat_sidewall"):
+        return _polygon_area(section_pts(s))
+    return superellipse_area(s["w"], s["h"], s.get("n", 2.0))
+
+
 def cavity_volume_cc(p: dict) -> dict:
     """内部空洞体積の解析近似（断面積の台形積分 + ボア円筒）。
 
@@ -416,8 +561,8 @@ def cavity_volume_cc(p: dict) -> dict:
     st = cavity_stations(p)
     vol = 0.0
     for a, b in zip(st, st[1:]):
-        area_a = superellipse_area(a["w"], a["h"], a["n"])
-        area_b = superellipse_area(b["w"], b["h"], b["n"])
+        area_a = section_area(a)
+        area_b = section_area(b)
         vol += (area_a + area_b) / 2.0 * (b["z"] - a["z"])
     r = bore_radius(p)
     vol += math.pi * r * r * p["bore_length"]
@@ -477,6 +622,48 @@ def param_regions(p: dict) -> dict:
         "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
         # material は形状に影響しない → 領域なし
     }
+
+
+# ---------------------------------------------------------------- 各部名称（参照サイト準拠）
+
+def anatomy_regions(p: dict) -> list[dict]:
+    """マウスピース各部の名称と占有 z 範囲（パラメータ非依存の純名称マップ）。
+
+    参照サイト（satoshiozawa / nonaka 等）の呼称に統一し、仕様書の「各部名称」表と
+    3Dの部位説明に使う。`param_regions` がパラメータ→領域なのに対し、こちらは
+    部位そのものの一覧。ランプ・バレル・ウォールなど従来ラベルに無かった部位も含む。
+
+    side: "top"=ビーク側 / "bottom"=テーブル側 / "all"=全周。
+    """
+    length = p["overall_length"]
+    fl = p["facing_length"]
+    z_start = p["tip_rail_width"] + 0.2
+    zb = bore_start_z(p)
+    z_we = min(z_start + p["window_length"], zb - _CHAMBER_RUN - 5.0)
+    z_baffle_end = z_start + 0.60 * (z_we - z_start)
+    z_th = zb - _THROAT_RUN
+    seat1 = ligature_seat_range(p)[1]
+
+    def r(part, z0, z1, side):
+        return {"part": part, "z0": round(max(z0, 0.0), 2),
+                "z1": round(min(z1, length), 2), "side": side}
+
+    return [
+        r("ビーク", 0.0, 0.30 * length, "top"),
+        r("ティップレール", 0.0, z_start, "bottom"),
+        r("フェイシング", 0.0, fl, "bottom"),
+        r("テーブル", 0.0, table_cut_end_z(p), "bottom"),
+        r("ウィンドウ", z_start, z_we, "bottom"),
+        r("サイドレール", z_start, z_we, "bottom"),
+        r("バッフル", z_start, z_baffle_end, "top"),
+        r("ランプ", z_baffle_end, z_we, "all"),
+        r("チェンバー", z_we, z_th, "all"),
+        r("ウォール", z_we, z_th, "all"),
+        r("スロート", z_th, zb, "all"),
+        r("ボア", zb, length, "all"),
+        r("バレル", zb, seat1, "all"),
+        r("シャンク", seat1, length, "all"),
+    ]
 
 
 # ---------------------------------------------------------------- 断面SVG用

@@ -16,7 +16,9 @@ def _norm(x: float, lo: float, hi: float) -> float:
     return min(max((x - lo) / (hi - lo), 0.0), 1.0)
 
 
-_BAFFLE_BONUS = {"straight": 0.0, "rollover": 0.06, "step": 0.14, "high": 0.24}
+_BAFFLE_BONUS = {"straight": 0.0, "rollover": 0.06, "step": 0.14, "curve": 0.24}
+#: チェンバー断面形状のエッジ寄与。角断面ほど倍音が複雑でエッジが出る。
+_CHAMBER_EDGE = {"round": 0.0, "square": 0.06, "horseshoe": 0.0, "flat_sidewall": 0.03}
 
 
 def tone_metrics(p: dict) -> dict:
@@ -26,7 +28,7 @@ def tone_metrics(p: dict) -> dict:
     n_baffle = min(_norm(p["baffle_height"], 0.0, 5.0)
                    + _BAFFLE_BONUS.get(p.get("baffle_type", "rollover"), 0.0), 1.0)
     n_throat_small = 1.0 - _norm(p["throat_ratio"], 0.60, 1.35)
-    square_bonus = 0.06 if p.get("chamber_shape") == "square" else 0.0
+    square_bonus = _CHAMBER_EDGE.get(p.get("chamber_shape", "round"), 0.0)
 
     brightness = 10.0 * (0.34 * n_baffle + 0.28 * n_facing
                          + 0.24 * n_throat_small + 0.14 * n_tip)
