@@ -13,7 +13,7 @@ import math
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import (
-    loft_stations,
+    loft_sections,
     revolve_profile,
     yz_profile_cut_solid,
 )
@@ -51,8 +51,9 @@ def _specs(t: dict) -> list[ParamSpec]:
                   choices=[Choice("straight", "ストレート"),
                            Choice("rollover", "ロールオーバー"),
                            Choice("step", "ステップ"),
-                           Choice("high", "ハイバッフル")],
-                  effect="音色の性格を決める最重要要素。ハイ=ブライト/パワー、ストレート=ダーク"),
+                           Choice("curve", "カーブ")],
+                  effect="音色の性格を決める最重要要素。ストレート=ダーク／ロールオーバー=バランス"
+                         "／ステップ=くっきり／カーブ=メタリックでアグレッシブ"),
         f("baffle_height", "バッフル高さ", "バッフル", "mm", 0.0, 5.0, 0.1,
           "高いほど明るくエッジの効いた音。0でクラシカルなダークトーン"),
         f("rollover_radius", "ロールオーバー半径", "バッフル", "mm", 3.0, 20.0, 0.5,
@@ -64,8 +65,11 @@ def _specs(t: dict) -> list[ParamSpec]:
           "スロート最狭部に対するチェンバー最大部の断面積比。大=内容積が増えダークで太い"),
         ParamSpec(key="chamber_shape", label="チェンバー形状", category="チェンバー",
                   type="choice", default=t["chamber_shape"],
-                  choices=[Choice("round", "ラウンド"), Choice("square", "スクエア")],
-                  effect="ラウンド=滑らかな倍音、スクエア=ヴィンテージ系の複雑な倍音"),
+                  choices=[Choice("round", "ラウンド"), Choice("square", "スクエア"),
+                           Choice("horseshoe", "馬蹄"),
+                           Choice("flat_sidewall", "フラットサイドウォール")],
+                  effect="ラウンド=滑らかな倍音／スクエア=ヴィンテージ系の複雑な倍音／"
+                         "馬蹄=太くまとまる／フラットサイドウォール=芯のある明るさ"),
         # --- ボア ---
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
           "ネックコルクとの適合寸法。音程の基準に直結", advanced=True),
@@ -144,8 +148,9 @@ class MouthpieceComponent(Component):
         face_pts += [(z_end, -80.0), (-3.0, -80.0)]
         facing_cut = yz_profile_cut_solid(face_pts, half_width=p["body_dia"])
 
-        # 4) 内部空洞（ロフト + ボア円筒）
-        cavity = loft_stations(profiles.cavity_stations(p))
+        # 4) 内部空洞（任意断面ロフト + ボア円筒）。窓/スロート/ボアの円形断面と
+        #    チェンバーの非対称断面（馬蹄/フラットサイドウォール）を点数一定で通す。
+        cavity = loft_sections(profiles.cavity_sections(p))
         zb = profiles.bore_start_z(p)
         r = profiles.bore_radius(p)
         bore = Pos(0, 0, zb) * Solid.make_cylinder(r, length - zb + 1.5)
@@ -365,5 +370,10 @@ class MouthpieceComponent(Component):
              f"{p['window_length']:.1f} × {profiles.window_width(p):.1f} mm"),
             ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
         ]
+        # 各部名称（参照サイト準拠）を寸法表に畳み込む。コア（spec.py）は dimensions と
+        # sections しか知らないので、部品側で行として組み立てる（「コアは楽器を知らない」）。
+        dims.append(("― 各部名称（z範囲）―", ""))
+        dims += [(a["part"], f"z {a['z0']:.1f}–{a['z1']:.1f} mm")
+                 for a in profiles.anatomy_regions(p)]
         return {"dimensions": dims,
                 "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}

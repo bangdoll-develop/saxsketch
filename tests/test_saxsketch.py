@@ -762,6 +762,110 @@ def test_all_templates_build(tmp_path):
         assert q["watertight"] and q["winding_consistent"], (tmpl, q)
 
 
+# ------------------------------------------------------------------ 仕様変更: 実物解剖
+
+def test_mp_chamber_shapes_build_watertight(tmp_path):
+    """4チェンバー形状 × 3サイズが水密ソリッドになる。"""
+    from saxsketch.export.models import check_mesh, export_model
+    reg = get_registry()
+    for tmpl in ["soprano", "alto", "tenor"]:
+        comp = reg.get("saxophone").make_component("mouthpiece", tmpl)
+        base = {s.key: s.default for s in comp.param_specs()}
+        for shape in ["round", "square", "horseshoe", "flat_sidewall"]:
+            p = dict(base, chamber_shape=shape)
+            part = comp.build(p)
+            assert part.is_valid and part.volume > 5000, (tmpl, shape)
+            f = tmp_path / f"{tmpl}_{shape}.stl"
+            export_model(part, f, "stl")
+            q = check_mesh(f)
+            assert q["watertight"] and q["winding_consistent"], (tmpl, shape, q)
+
+
+def test_mp_baffle_types_build_watertight(tmp_path):
+    """4バッフル型が水密。step は実段差（近接zで天井が大きく変わる）。"""
+    from saxsketch.export.models import check_mesh, export_model
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    reg = get_registry()
+    comp = reg.get("saxophone").make_component("mouthpiece", "tenor")
+    base = {s.key: s.default for s in comp.param_specs()}
+    for bt in ["straight", "rollover", "step", "curve"]:
+        p = dict(base, baffle_type=bt)
+        part = comp.build(p)
+        assert part.is_valid and part.volume > 5000, bt
+        f = tmp_path / f"baffle_{bt}.stl"
+        export_model(part, f, "stl")
+        q = check_mesh(f)
+        assert q["watertight"] and q["winding_consistent"], (bt, q)
+    # step は近接する2ステーションで天井高が急変（準垂直の段差面）
+    win = [s for s in pf.cavity_stations(dict(base, baffle_type="step"))
+           if s["role"] == "window"]
+    ceils = [(s["z"], s["yc"] + s["h"] / 2.0) for s in win]
+    jumps = [abs(b[1] - a[1]) for a, b in zip(ceils, ceils[1:]) if b[0] - a[0] < 1.5]
+    assert jumps and max(jumps) > 3.0, ceils
+
+
+def test_mp_chamber_area_ratio_holds():
+    """chamber_ratio（面積比）がクランプ前で全形状 成立する。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p0 = _template_params("mouthpiece", "tenor")
+    for shape in ["round", "square", "horseshoe", "flat_sidewall"]:
+        p = dict(p0, chamber_shape=shape)
+        w_ch, h_ch = pf.chamber_size(p)
+        a_ch = pf.section_area({"yc": 0.0, "h": h_ch, "w": w_ch,
+                                "n": pf._chamber_n(p), "shape": shape})
+        r_t = pf.throat_radius(p)
+        a_th = pf.superellipse_area(2 * r_t, 2 * r_t, pf._throat_n(p))
+        assert a_ch / a_th == pytest.approx(p["chamber_ratio"], rel=1e-3), shape
+
+
+def test_mp_section_area_matches_shoelace():
+    """section_area は非対称形でシューレース一致、round/square は解析式と一致。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    for shape in ["horseshoe", "flat_sidewall"]:
+        s = {"yc": 1.0, "h": 8.0, "w": 12.0, "n": 2.6, "shape": shape}
+        assert pf.section_area(s) == pytest.approx(pf._polygon_area(pf.section_pts(s)))
+    for shape, n in [("round", 2.2), ("square", 3.8)]:
+        s = {"yc": 0.0, "h": 8.0, "w": 12.0, "n": n, "shape": shape}
+        assert pf.section_area(s) == pytest.approx(pf.superellipse_area(12.0, 8.0, n))
+    # 断面点数は全形状で一定（ルールドロフトがねじれない前提）
+    counts = {len(pf.section_pts({"yc": 0.0, "h": 8.0, "w": 12.0, "n": 2.6,
+                                  "shape": sh}))
+              for sh in ["round", "square", "horseshoe", "flat_sidewall"]}
+    assert counts == {pf._SECTION_SAMPLES}
+
+
+def test_mp_tier1_round_baseline():
+    """round/rollover テナーの内容積が改修前基準と一致（校正保全）。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    v = pf.cavity_volume_cc(p)
+    assert v["total_cc"] == pytest.approx(19.636747, abs=1e-4)
+    assert v["effective_cc"] == pytest.approx(13.133713, abs=1e-4)
+
+
+def test_mp_shape_enums():
+    """バッフルは curve を含み high を含まない。チェンバーは4形状。"""
+    reg = get_registry()
+    specs = {s.key: s for s in
+             reg.get("saxophone").make_component("mouthpiece", "tenor").param_specs()}
+    bvals = [c.value for c in specs["baffle_type"].choices]
+    assert "curve" in bvals and "high" not in bvals
+    cvals = {c.value for c in specs["chamber_shape"].choices}
+    assert cvals == {"round", "square", "horseshoe", "flat_sidewall"}
+
+
+def test_mp_anatomy_regions():
+    """各部名称マップにランプ/バレル/ウォールが含まれ z∈[0,L]。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    regs = pf.anatomy_regions(p)
+    parts = {r["part"] for r in regs}
+    assert {"ランプ", "バレル", "ウォール"} <= parts
+    L = p["overall_length"]
+    for r in regs:
+        assert 0.0 <= r["z0"] <= r["z1"] <= L + 1e-6, r
+
+
 # ------------------------------------------------------------------ 音響
 
 def test_tier2_directions(alto):
