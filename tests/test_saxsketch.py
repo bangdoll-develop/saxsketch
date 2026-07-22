@@ -1199,8 +1199,8 @@ def test_api_flow(tmp_path):
 
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
-        "component_id": "neck"})
-    assert r.status_code == 400  # 未実装コンポーネント（Phase 4）
+        "component_id": "body"})
+    assert r.status_code == 400  # 未実装コンポーネント（Phase 4-B.2）
 
     r = c.get("/api/model.stl?quality=preview")
     assert r.status_code == 200 and len(r.content) > 10000
@@ -1457,3 +1457,142 @@ def test_survey_persist(tmp_path):
     g = tmp_path / "old.wproj"
     p.save(g)
     assert Project.load(g).survey is None
+
+
+# ============================================================ ネック（Phase 4-B.1）
+
+def _neck_params(tid, **override):
+    from saxsketch.core.schema import ParamSet
+    comp = get_registry().get("saxophone").make_component("neck", tid)
+    vals = dict(ParamSet(comp.param_specs(), comp.template["neck"]).values)
+    vals.update(override)
+    return comp, dict(ParamSet(comp.param_specs(), vals).values)
+
+
+def test_neck_param_roundtrip_and_wall():
+    """全 ParamSpec.key がテンプレートに存在し、中央の肉厚が指定値に一致すること。"""
+    from saxsketch.instruments.saxophone.components import neck_profiles as npf
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("neck", tid)
+        keys = {s.key for s in comp.param_specs()}
+        missing = keys - set(comp.template["neck"].keys())
+        assert not missing, f"{tid} テンプレート欠落キー: {missing}"
+        _, p = _neck_params(tid)
+        s = 0.5 * p["neck_length"]
+        wall = npf.outer_radius_at(s, p, comp.size_info) - npf.bore_radius_at(s, p, comp.size_info)
+        assert wall == pytest.approx(p["wall_thickness"], abs=1e-6)
+
+
+def test_neck_available_not_planned():
+    from saxsketch.instruments.saxophone.components import NeckComponent
+    assert NeckComponent.available() is True
+
+
+def test_neck_builds_valid_all_sizes():
+    for tid in ("soprano", "alto", "tenor"):
+        comp, p = _neck_params(tid)
+        part = comp.build(p)
+        assert part.is_valid
+        assert part.volume > 0
+        sim = comp.simulate(p)
+        assert sim["kind"] == "neck" and sim["cards"]
+
+
+def test_neck_watertight_configs(tmp_path):
+    """ストレート / ベンド / ベント有無 のいずれも水密ソリッドになること。"""
+    from saxsketch.export.models import check_mesh, export_model
+    comp, base = _neck_params("tenor")
+    configs = {
+        "straight": dict(base, bend_angle=0.0),
+        "bent_vent": dict(base),
+        "vent_off": dict(base, octave_vent="off"),
+    }
+    for label, p in configs.items():
+        part = comp.build(p)
+        f = tmp_path / f"neck_{label}.stl"
+        export_model(part, f, "stl", tolerance=0.05)
+        q = check_mesh(f)
+        assert q["watertight"] and q["winding_consistent"], (label, q)
+    # ストレートは主軸 bbox 長 ≈ 全長（弧長）
+    part = comp.build(configs["straight"])
+    bb = part.bounding_box()
+    assert bb.max.Z - bb.min.Z == pytest.approx(base["neck_length"], abs=0.5)
+
+
+def test_neck_octave_vent_bores_hole():
+    """ベント有効（チムニー0）はベント無効より材料体積が小さい＝孔が空いている。"""
+    comp, base = _neck_params("tenor")
+    on = comp.build(dict(base, octave_vent="on", chimney_height=0.0))
+    off = comp.build(dict(base, octave_vent="off"))
+    assert on.volume < off.volume - 20.0   # 貫通孔ぶん減る
+    # ベント注意カードが出る／出ない
+    titles_on = [c["title"] for c in comp.simulate(dict(base, octave_vent="on"))["cards"]]
+    titles_off = [c["title"] for c in comp.simulate(dict(base, octave_vent="off"))["cards"]]
+    assert any("オクターブベント" in t for t in titles_on)
+    assert not any("オクターブベント" in t for t in titles_off)
+
+
+def test_neck_fit_card_asymmetry():
+    """テノン外径が規格に一致で ok、規格から外すと warn。"""
+    comp, base = _neck_params("tenor")
+    std = comp.size_info["neck_tenon_od_mm"]
+    ok = next(c for c in comp.simulate(dict(base, tenon_od=std))["cards"]
+              if c["title"] == "マウスピース適合")
+    assert ok["status"] == "ok", ok["advice"]
+    warn = next(c for c in comp.simulate(dict(base, tenon_od=std + 1.5))["cards"]
+                if c["title"] == "マウスピース適合")
+    assert warn["status"] == "warn"
+
+
+def test_neck_survey_measure(tmp_path):
+    """外部ネック メッシュから全長・ボアを実測し、採寸ターゲット外キーを含めないこと。"""
+    from saxsketch.analysis import meshdiff
+    from saxsketch.export.models import export_model
+    comp, p = _neck_params("tenor", bend_angle=0.0)   # 直管＝主軸長が全長に一致
+    part = comp.build(p)
+    f = tmp_path / "neck.stl"
+    export_model(part, f, "stl", tolerance=0.05)
+    mesh = meshdiff.load_mesh(f)
+    out = comp.survey_measure_mesh(mesh)
+    targets = {t["key"] for t in comp.survey_targets()["params"]}
+    assert set(out["measured"]).issubset(targets)
+    assert out["measured"]["neck_length"] == pytest.approx(p["neck_length"], abs=15.0)
+
+
+def test_neck_acoustic_sanity():
+    """ボアテーパから TMM で共鳴を算出し、物理的に妥当な帯域に第1共鳴が乗ること。
+
+    調律保証ではなく、寸法（mm/m 取り違え等）が破綻していないことのサニティ。
+    """
+    import numpy as np
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.instruments.saxophone.components import neck_profiles as npf
+    comp, p = _neck_params("tenor", bend_angle=0.0)
+    geo = [[z / 1000.0, max(r, 1e-4) / 1000.0]
+           for (z, r) in npf.bore_stations(p, comp.size_info)]
+    freqs = np.linspace(50.0, 2000.0, 600)
+    z = np.abs(ob._tmm_impedance(geo, freqs))
+    from scipy.signal import find_peaks
+    idx, _ = find_peaks(z, prominence=np.max(z) * 0.05)
+    fpk = [float(freqs[i]) for i in idx]
+    assert any(120.0 <= f <= 1600.0 for f in fpk), fpk
+
+
+def test_neck_export_endpoint(tmp_path):
+    """/api/project/new component=neck → STL/STEP/3MF 出力・仕様書・BOM が通る。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    r = c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "tenor", "component_id": "neck"})
+    assert r.status_code == 200, r.text
+    assert r.json()["reference"] is None
+    assert r.json()["simulation"]["kind"] == "neck"
+    e = c.post("/api/export", json={
+        "formats": ["stl", "step", "3mf"], "out_dir": str(tmp_path / "neck"),
+        "make_package": False})
+    assert e.status_code == 200, e.text
+    assert e.json()["mesh_quality"]["watertight"]
+    assert Path(e.json()["files"]["bom.csv"]).exists()
+    html = Path(e.json()["files"]["spec.html"]).read_text(encoding="utf-8")
+    assert html.count("<svg") == 1

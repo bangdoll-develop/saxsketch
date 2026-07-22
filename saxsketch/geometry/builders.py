@@ -102,3 +102,18 @@ def revolve_profile(radii: list[tuple[float, float]]) -> Solid:
     face = Face(wire)
     from build123d import Axis, revolve
     return revolve(face, axis=Axis.Z, revolution_arc=360.0)
+
+
+def loft_3d_rings(rings: list[list[tuple[float, float, float]]]) -> Solid:
+    """任意の3D位置・向きに置かれたリング列をロフトした水密ソリッド。
+
+    各リングは同数の3D点からなる多角形。`revolve_profile` では作れない
+    「曲がった管（グースネック等）」用。点数を全リングで一定に保ち、多角形ワイヤ＋
+    ルールドロフトで面を張る（`loft_sections`/`superellipse_wire` と同じ堅牢性方針）。
+    """
+    wires = [Wire.make_polygon([Vector(x, y, z) for (x, y, z) in ring], close=True)
+             for ring in rings]
+    solid = Solid.make_loft(wires, ruled=True)
+    if solid.volume < 0:  # ThruSections が裏返しシェルを返すことがある
+        solid = Solid(solid.wrapped.Reversed())
+    return solid

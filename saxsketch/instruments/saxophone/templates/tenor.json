@@ -53,5 +53,26 @@
     "plate_type": "rail",
     "material": "petg",
     "min_wall": 1.6
+  },
+  "neck": {
+    "neck_length": 250.0,
+    "bore_small_id": 15.4,
+    "wall_thickness": 2.0,
+    "tenon_od": 17.8,
+    "tenon_length": 32.0,
+    "cork_thickness": 0.8,
+    "body_tenon_length": 25.0,
+    "taper_from_cone": "on",
+    "bore_large_id": 28.7,
+    "bend_angle": 22.0,
+    "bend_start": 60.0,
+    "octave_vent": "on",
+    "vent_position": 0.35,
+    "vent_dia": 4.0,
+    "chimney_height": 1.5,
+    "seat_flat": "on",
+    "key_mount_bosses": "off",
+    "min_wall": 1.6,
+    "material": "resin"
   }
 }

@@ -3,6 +3,7 @@ from saxsketch.core.registry import Component
 
 from .ligature import LigatureComponent
 from .mouthpiece import MouthpieceComponent
+from .neck import NeckComponent
 from .reed import ReedComponent
 
 
@@ -23,14 +24,9 @@ class _Planned(Component):
         raise NotImplementedError
 
 
-class NeckComponent(_Planned):
-    id = "neck"
-    label = "ネック（Phase 4）"
-
-
 class BodyComponent(_Planned):
     id = "body"
-    label = "本体・管体（Phase 4）"
+    label = "本体・管体（Phase 4-B.2）"
 
 
 COMPONENTS = {
