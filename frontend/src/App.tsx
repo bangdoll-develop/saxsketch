@@ -201,7 +201,10 @@ export default function App() {
           )}
           <div className="badge">
             {project
-              ? (viewDerived ? "外部編集済みモデル（凍結時の形状ベース）"
+              ? (viewDerived
+                  ? (manualEdit?.derived?.kind === "external"
+                      ? "外部取込モデル（整列後の形状）"
+                      : "外部編集済みモデル（凍結時の形状ベース）")
                   : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
                 (modelBusy ? "　⏳ 形状を再生成中…" : "")
               : "プロジェクトを作成してください"}
@@ -212,7 +215,8 @@ export default function App() {
                       onClick={() => setViewDerived(false)}>設計形状</button>
               <button className={viewDerived ? "active" : ""}
                       onClick={() => setViewDerived(true)}>
-                編集済み{manualEdit.stale ? " ⚠旧" : ""}
+                {manualEdit.derived.kind === "external" ? "取込モデル" : "編集済み"}
+                {manualEdit.derived.kind !== "external" && manualEdit.stale ? " ⚠旧" : ""}
               </button>
             </div>
           )}
