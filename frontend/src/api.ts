@@ -35,7 +35,7 @@ export interface MouthpieceSimulation {
   cards?: SimCard[];
 }
 export interface CardSimulation {
-  kind: "reed" | "ligature";
+  kind: "reed" | "ligature" | "neck";
   cards: SimCard[];
   /** リードのみ。音プレビュー（印象合成）用 */
   harmonics?: Harmonics;
