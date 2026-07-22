@@ -193,6 +193,63 @@ class MouthpieceComponent(Component):
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
 
+    # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
+
+    #: 採寸可能な設計パラ。比率系(throat/chamber_ratio)と choice/bool は実測できないため除く。
+    _SURVEY_PARAM_KEYS = [
+        "tip_opening", "facing_length", "tip_rail_width", "side_rail_width",
+        "window_length", "reed_width", "beak_height", "body_dia",
+        "overall_length", "bore_dia", "cork_depth", "baffle_height",
+    ]
+    #: 採寸可能な音響基準定数（size_info。descriptor 由来で params の外）。
+    _SURVEY_SIZE_FIELDS = [
+        {"key": "neck_bore_id_mm", "label": "ネック小端内径", "unit": "mm"},
+        {"key": "neck_tenon_od_mm", "label": "ネックテノン外径", "unit": "mm"},
+        {"key": "missing_cone_length_mm", "label": "欠損円錐長（頂点まで）", "unit": "mm"},
+    ]
+
+    def survey_targets(self) -> dict:
+        specs = {s.key: s for s in self.param_specs()}
+        params = [
+            {"key": k, "label": specs[k].label, "unit": specs[k].unit,
+             "min": specs[k].min, "max": specs[k].max, "step": specs[k].step}
+            for k in self._SURVEY_PARAM_KEYS if k in specs
+        ]
+        size = [dict(f) for f in self._SURVEY_SIZE_FIELDS]
+        return {"params": params, "size": size}
+
+    def survey_card(self, before_params: dict, before_size: dict,
+                    measured_params: dict, measured_size: dict) -> dict | None:
+        """採寸値 vs 採寸前の設計/基準値。reference_check の判定基盤を再利用。"""
+        specs = {s.key: s for s in self.param_specs()}
+        size_meta = {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS}
+        rows, verdicts = [], []
+        for k, mv in measured_params.items():
+            s = specs.get(k)
+            if s is None or k not in before_params:
+                continue
+            step = s.step or 0.1
+            r, v = reference_check._row(
+                f"{s.label} 実測/設計", float(mv), float(before_params[k]),
+                s.unit, max(0.6 * step, 0.05), max(2.5 * step, 0.2))
+            rows.append(r)
+            verdicts.append(v)
+        for k, mv in measured_size.items():
+            label, unit = size_meta.get(k, (k, "mm"))
+            base = before_size.get(k)
+            if base is None:
+                continue
+            r, v = reference_check._row(
+                f"{label} 実測/従前", float(mv), float(base), unit, 0.2, 0.6)
+            rows.append(r)
+            verdicts.append(v)
+        if not rows:
+            return None
+        return reference_check._finish(
+            "採寸 vs 設計", rows, verdicts,
+            "実測をプロジェクトへ反映しました。設計をいじって破綻したら"
+            "「採寸時点へ戻す」で復元できます。")
+
     def analyze_import(self, frozen_params: dict, ref_mesh, edited_mesh) -> dict:
         """領域別偏差 + 断面実測によるパラメータ逆算。"""
         from saxsketch.analysis import meshdiff

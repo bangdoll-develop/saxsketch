@@ -123,6 +123,7 @@ def project_get():
         "simulation": STATE.simulate(),
         "manual_edit": STATE.manual_edit_summary(),
         "reference": STATE.reference_summary(),
+        "survey": STATE.survey_state(),
     }
 
 
@@ -335,6 +336,50 @@ def manual_model():
     if stl is None:
         raise HTTPException(status_code=404, detail="編集済みモデルは未登録です")
     return Response(content=stl, media_type="application/octet-stream")
+
+
+# ------------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
+
+@app.get("/api/survey")
+def survey_get():
+    _require_project()
+    return STATE.survey_state()
+
+
+class SurveyCommitReq(BaseModel):
+    measured: dict = {}       # 設計パラの実測 {key: value}
+    measured_size: dict = {}  # 音響基準定数の実測 {key: value}
+    note: str = ""
+
+
+@app.post("/api/survey/commit")
+def survey_commit(req: SurveyCommitReq):
+    """採寸値を反映し、復元点を記録する。反映後のプロジェクト全体を返す。"""
+    _require_project()
+    try:
+        STATE.survey_commit(req.measured, req.measured_size, req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return project_get()
+
+
+@app.post("/api/survey/revert")
+def survey_revert():
+    """採寸チェックポイントへ復元する。"""
+    _require_project()
+    try:
+        STATE.survey_revert()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return project_get()
+
+
+@app.post("/api/survey/clear")
+def survey_clear():
+    """採寸ブロックと音響基準の上書きを破棄する。"""
+    _require_project()
+    STATE.survey_clear()
+    return project_get()
 
 
 # ------------------------------------------------------------------ エクスポート

@@ -49,6 +49,22 @@ export interface ProjectData {
   manual_edit: ManualEdit;
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
+  survey: SurveyState;
+}
+/** 採寸ワークフロー（Phase 4-A） */
+export interface SurveyField {
+  key: string; label: string; unit: string;
+  min?: number | null; max?: number | null; step?: number | null;
+  current: number | null;
+}
+export interface SurveyState {
+  targets: { params: SurveyField[]; size: SurveyField[] };
+  measured: Record<string, number>;
+  measured_size: Record<string, number>;
+  has_checkpoint: boolean;
+  card: SimCard | null;
+  surveyed_at: string | null;
+  note: string;
 }
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
@@ -136,6 +152,12 @@ export const api = {
   recent: () => req<string[]>("/api/recent"),
   setReference: (component: string, path: string | null) =>
     req<ProjectData>("/api/project/reference", json({ component, path })),
+  survey: () => req<SurveyState>("/api/survey"),
+  surveyCommit: (b: { measured: Record<string, number>;
+                      measured_size: Record<string, number>; note: string }) =>
+    req<ProjectData>("/api/survey/commit", json(b)),
+  surveyRevert: () => req<ProjectData>("/api/survey/revert", json({})),
+  surveyClear: () => req<ProjectData>("/api/survey/clear", json({})),
   dialog: (mode: string, suggested = "") =>
     req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),

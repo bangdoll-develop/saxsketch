@@ -35,6 +35,12 @@ class Project:
     frozen: dict | None = None        # {frozen_at, params, solid_volume_cc, export_dir}
     derived: dict | None = None       # {imported_at, source_file, quality, analysis}
     derived_stl: bytes | None = None  # 編集済みモデル本体（ZIP内 derived/model.stl）
+    # 採寸ワークフロー（Phase 4-A。実物をノギスで測った値をプロジェクト局所で反映）
+    #   {surveyed_at, note, measured, measured_size, checkpoint, card}
+    #   measured=設計パラの実測 / measured_size=音響基準定数(size_info)の実測 /
+    #   checkpoint=適用直後の復元点 {params, refs, size_overrides} / card=照合結果
+    # frozen と同じく後方互換の任意フィールド。旧 .wproj は None で読める。
+    survey: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +56,7 @@ class Project:
             "notes": self.notes,
             "frozen": self.frozen,
             "derived": self.derived,
+            "survey": self.survey,
         }
 
     def save(self, path: str | Path) -> None:
@@ -82,6 +89,7 @@ class Project:
             frozen=data.get("frozen"),
             derived=data.get("derived"),
             derived_stl=derived_stl,
+            survey=data.get("survey"),  # survey 欠落の旧 .wproj は None
         )
         p.path = str(path)
         return p

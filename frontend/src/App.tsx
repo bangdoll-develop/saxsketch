@@ -9,8 +9,9 @@ import {
   ExportDialog, GoalSeekDialog, NewProjectDialog, SettingsDialog,
 } from "./components/Dialogs";
 import { ManualEditDialog } from "./components/ManualEdit";
+import { SurveyDialog } from "./components/SurveyPanel";
 
-type DialogKind = null | "new" | "goalseek" | "export" | "settings" | "manual";
+type DialogKind = null | "new" | "goalseek" | "export" | "settings" | "manual" | "survey";
 
 export default function App() {
   const [project, setProject] = useState<ProjectData | null>(null);
@@ -69,6 +70,14 @@ export default function App() {
     setViewDerived(false);
     setModelVersion((v) => v + 1);
     setDialog(null);
+  }, []);
+
+  // 採寸ダイアログの操作後: パラメータ・シミュ・形状まで更新（ダイアログは開いたまま）
+  const onSurveyApplied = useCallback((p: ProjectData) => {
+    setProject(p); setParams(p.params); setSim(p.simulation);
+    setManualEdit(p.manual_edit);
+    setViewDerived(false);
+    setModelVersion((v) => v + 1);
   }, []);
 
   // 外部編集ダイアログの操作後: パラメータは変えず manual_edit 状態のみ更新
@@ -151,6 +160,10 @@ export default function App() {
         <button onClick={() => setDialog("new")}>新規 / 開く</button>
         <button onClick={() => saveProject(false)} disabled={!project}>保存</button>
         <button onClick={() => saveProject(true)} disabled={!project}>名前を付けて保存</button>
+        <button onClick={() => setDialog("survey")} disabled={!project}>
+          📐 採寸
+          {project?.survey?.has_checkpoint && " ✓"}
+        </button>
         <button onClick={() => setDialog("manual")} disabled={!project}>
           🛠 外部編集
           {manualEdit?.frozen && (manualEdit.stale ? " ⚠" : " 🔒")}
@@ -232,6 +245,11 @@ export default function App() {
         <ManualEditDialog manualEdit={manualEdit}
                           onChanged={refreshManualEdit}
                           onClose={() => setDialog(null)} />
+      )}
+      {dialog === "survey" && project && (
+        <SurveyDialog survey={project.survey}
+                      onApplied={onSurveyApplied}
+                      onClose={() => setDialog(null)} />
       )}
       {error && <div className="err-toast">{error}</div>}
       {staleWarn && (
