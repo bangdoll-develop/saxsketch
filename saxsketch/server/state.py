@@ -291,7 +291,13 @@ class AppState:
         同じでも参照を差し替えれば凍結時とは別の形状になる。参照を見ないと、
         古い外部編集モデルがそのまま入稿パッケージに入ってしまう。
         """
-        if self.project is None or self.project.frozen is None:
+        if self.project is None:
+            return False
+        # 外部取込モデルは凍結パラメータから派生していないので陳腐化しない
+        # （自分の設計を後からいじっても、取込んだ市販モデルは無関係のまま）。
+        if (self.project.derived or {}).get("kind") == "external":
+            return False
+        if self.project.frozen is None:
             return False
         frozen_params = self.project.frozen["params"]
         cur = self.paramset.values
@@ -329,7 +335,8 @@ class AppState:
         if p.derived is not None:
             derived = {"imported_at": p.derived["imported_at"],
                        "source_file": p.derived["source_file"],
-                       "quality": p.derived["quality"]}
+                       "quality": p.derived["quality"],
+                       "kind": p.derived.get("kind", "edited")}
         return {"frozen": frozen, "derived": derived, "stale": self.is_stale()}
 
     def freeze(self, export_dir: str, solid_volume_cc: float | None) -> dict:
@@ -420,8 +427,52 @@ class AppState:
         }
         return {"quality": quality, "volume": vol_row, **analysis}
 
+    def load_external(self, path: str) -> dict:
+        """外部（本アプリ非由来）の完成モデルを読み込み、整列・採寸して
+        表示・入稿用の派生モデル候補にする。
+
+        差分や逆算はしない——市販完成品は座標系も内部形状も本アプリの設計と別物で、
+        領域別偏差もパラメータ逆算も意味を持たない（かつ非重なりメッシュ同士の差分は
+        極端に重い）。ここでは座標非依存の整列で表示・エクスポートできる姿勢に載せ、
+        確実に測れる外形寸法だけを採寸する。凍結は不要。
+        """
+        from saxsketch.analysis import align, meshdiff
+        assert self.project is not None and self.component is not None
+
+        mesh = meshdiff.load_mesh(path)
+        quality = meshdiff.mesh_quality(mesh)
+        measured = self.component.survey_measure_mesh(mesh)
+        # 表示・外部編集用に正準姿勢（主軸=+Z, シャンク=+Z側）へ整列した STL を保持
+        aligned, _, info = align.axis_align(mesh)
+        stl_bytes = aligned.export(file_type="stl")
+        if isinstance(stl_bytes, str):
+            stl_bytes = stl_bytes.encode()
+
+        self._pending_derived = {
+            "stl_bytes": stl_bytes,
+            "source_file": path,
+            "quality": quality,
+            "kind": "external",
+            "measured": measured.get("measured", {}),
+            "analysis": {
+                "regions": [], "params": [],
+                "warnings": measured.get("notes", []),
+                "volume": None,
+                "align": info,
+            },
+        }
+        return {
+            "kind": "external",
+            "quality": quality,
+            "measured": measured.get("measured", {}),
+            "measured_size": measured.get("measured_size", {}),
+            "confidence": measured.get("confidence", {}),
+            "notes": measured.get("notes", []),
+            "align": info,
+        }
+
     def commit_derived(self) -> dict:
-        """解析済みモデルをプロジェクトに登録。"""
+        """解析済み／取込済みモデルをプロジェクトに登録。"""
         from datetime import datetime, timezone
         assert self.project is not None
         pd = self._pending_derived
@@ -432,6 +483,8 @@ class AppState:
             "source_file": pd["source_file"],
             "quality": pd["quality"],
             "analysis": pd["analysis"],
+            "kind": pd.get("kind", "edited"),
+            "measured": pd.get("measured", {}),
         }
         self.project.derived_stl = pd["stl_bytes"]
         self._pending_derived = None

@@ -1,8 +1,10 @@
 import { useState } from "react";
 import {
-  api, type ImportAnalysis, type ManualEdit, type ParamEstimate,
+  api, type ExternalLoad, type ImportAnalysis, type ManualEdit, type ParamEstimate,
 } from "../api";
 import { Backdrop } from "./Dialogs";
+
+const CONF_LABEL: Record<string, string> = { high: "高", med: "中", low: "低" };
 
 const VERDICT_COLOR: Record<string, string> = {
   "一致": "var(--accent2)",
@@ -116,6 +118,8 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
   const [note, setNote] = useState("");
   const [report, setReport] = useState<ImportAnalysis | null>(null);
   const [freezeDir, setFreezeDir] = useState<string | null>(null);
+  const [ext, setExt] = useState<ExternalLoad | null>(null);
+  const [extPath, setExtPath] = useState<string | null>(null);
 
   const me = manualEdit;
   // 出力先が POSIX（WSL: /home/...）か Windows（C:\...）かで区切りを選ぶ。
@@ -165,6 +169,26 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
   const commit = async () => {
     try { await api.manualCommit(); setReport(null); onChanged(); }
     catch (e) { setErr(String((e as Error).message)); }
+  };
+
+  // 外部（市販完成品など）モデルの読み込み。凍結不要・差分/逆算なし。
+  const loadExternal = async () => {
+    setErr(""); setExt(null); setExtPath(null);
+    const { path } = await api.dialog("open_model", "");
+    if (!path) return;
+    setBusy("外部モデルを読み込み中…（整列と外形採寸。十数秒かかります）");
+    try {
+      const r = await api.externalLoad(path);
+      setExt(r); setExtPath(path);
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setBusy(""); }
+  };
+
+  const registerExternal = async () => {
+    setBusy("取込モデルを登録中…"); setErr("");
+    try { await api.manualCommit(); setExt(null); onChanged(); }
+    catch (e) { setErr(String((e as Error).message)); }
+    finally { setBusy(""); }
   };
 
   const discard = async () => {
@@ -250,6 +274,52 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
           </button>
         </div>
         {!me.frozen && <div className="note">先に ① の凍結が必要です。</div>}
+      </div>
+
+      {/* 外部モデル取込（市販完成品など。凍結・差分・逆算なし） */}
+      <div className="simcard" style={{ margin: "8px 0" }}>
+        <h3>外部モデルを読み込む（表示・採寸・FreeCAD編集）</h3>
+        <div className="note" style={{ lineHeight: 1.6 }}>
+          市販の完成品など<b>本アプリ以外で作られた 3mf / STL / STEP</b> を読み込みます
+          （凍結不要）。正準姿勢へ整列して3D表示し、確実に測れる外形寸法だけ採寸します。
+          差分照合とパラメータ逆算は行いません（座標系・内部形状が別物のため）。
+          継続編集は FreeCAD で元ファイルを開いて行い、編集後に再度ここで読み込んでください。
+        </div>
+        <div className="actions" style={{ marginTop: 8 }}>
+          <button className="primary" onClick={loadExternal} disabled={!!busy}>
+            📂 外部モデルを読み込む…
+          </button>
+          {extPath && (
+            <button onClick={() => openInFreecad(extPath)} disabled={!!busy}>
+              🚀 FreeCADで開く
+            </button>
+          )}
+        </div>
+        {ext && (
+          <div className="note" style={{ marginTop: 8, lineHeight: 1.6 }}>
+            水密: {ext.quality.watertight ? "OK" : "NG"}
+            {ext.quality.volume_cc != null && ` / 体積 ${ext.quality.volume_cc.toFixed(1)} cc`}
+            {" / "}面数 {ext.quality.faces.toLocaleString()}
+            <br />
+            外形寸法（信頼度）:{" "}
+            {Object.keys(ext.measured).length === 0
+              ? "なし"
+              : Object.entries(ext.measured)
+                  .map(([k, v]) => `${k} ${v}（${CONF_LABEL[ext.confidence[k]] ?? "?"}）`)
+                  .join(" / ")}
+            {ext.align.warnings.map((w, i) => (
+              <div key={i} style={{ color: "var(--warn)" }}>⚠ {w}</div>
+            ))}
+            {ext.notes.map((n, i) => (
+              <div key={i} style={{ color: "var(--muted)" }}>・{n}</div>
+            ))}
+            <div className="actions" style={{ marginTop: 6 }}>
+              <button className="primary" onClick={registerExternal} disabled={!!busy}>
+                この取込モデルを登録（表示・入稿に使用）
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {busy && <div className="busy" style={{ margin: "8px 0" }}>⏳ {busy}</div>}

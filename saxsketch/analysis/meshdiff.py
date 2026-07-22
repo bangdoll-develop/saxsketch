@@ -60,15 +60,27 @@ def part_to_mesh(part, tolerance: float = 0.03) -> trimesh.Trimesh:
         return trimesh.load(str(f), force="mesh")
 
 
+# 厳密な点対面計算は 1 点あたり重い。本アプリ由来の編集モデルなら疑い点はごく
+# 少数で済むが、別座標系の無関係なメッシュ（例: 市販完成品の 3mf を誤って取込）
+# だと全サンプル点が疑い化して数十万点に膨れ、on_surface が事実上ハングする。
+# 上限を設けて安全に頭打ちさせる（超過分は KDTree の近似距離のまま＝過大評価側
+# なので「変化なし」を誤検出することはない）。本アプリ由来の編集は疑い点が数百で
+# 収まり上限に当たらないため、正規経路の精度は保たれる（on_surface は約2.4ms/点）。
+_MAX_EXACT = 1500
+
+
 def _surface_dist(pts: np.ndarray, other_pts: np.ndarray,
                   other: trimesh.Trimesh) -> np.ndarray:
-    """pts から other 表面への距離。KDTree 粗選別 → 疑い点のみ厳密計算。"""
+    """pts から other 表面への距離。KDTree 粗選別 → 疑い点のみ厳密計算（上限あり）。"""
     d = cKDTree(other_pts).query(pts, workers=-1)[0]
-    suspect = d > 0.12
-    if suspect.any():
+    suspect = np.flatnonzero(d > 0.12)
+    if suspect.size:
+        sel = suspect
+        if suspect.size > _MAX_EXACT:
+            sel = np.random.default_rng(0).choice(suspect, _MAX_EXACT, replace=False)
         from trimesh.proximity import ProximityQuery
-        _, d_exact, _ = ProximityQuery(other).on_surface(pts[suspect])
-        d[suspect] = d_exact
+        _, d_exact, _ = ProximityQuery(other).on_surface(pts[sel])
+        d[sel] = d_exact
     return d
 
 

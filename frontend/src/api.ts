@@ -74,6 +74,20 @@ export interface SurveyMeasure {
   notes: string[];
   quality: { watertight: boolean; faces: number; volume_cc: number | null };
 }
+/** 外部（本アプリ非由来）モデルの読み込み結果（/api/external/load） */
+export interface AlignInfo {
+  elongation: number; axis_conf: string; shank_conf: string;
+  length_mm: number; outer_radius_mm: number; warnings: string[];
+}
+export interface ExternalLoad {
+  kind: "external";
+  quality: MeshQuality;
+  measured: Record<string, number>;
+  measured_size: Record<string, number>;
+  confidence: Record<string, "high" | "med" | "low">;
+  notes: string[];
+  align: AlignInfo;
+}
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
   dims: [string, string][];
@@ -94,7 +108,7 @@ export interface ManualEdit {
   frozen: { frozen_at: string; export_dir: string | null;
             solid_volume_cc: number | null } | null;
   derived: { imported_at: string; source_file: string;
-             quality: MeshQuality } | null;
+             quality: MeshQuality; kind?: "edited" | "external" } | null;
   stale: boolean;
 }
 export interface MeshQuality {
@@ -174,6 +188,8 @@ export const api = {
   manualUnfreeze: () => req<ManualEdit>("/api/manual/unfreeze", json({})),
   manualImport: (path: string) =>
     req<ImportAnalysis>("/api/manual/import", json({ path })),
+  externalLoad: (path: string) =>
+    req<ExternalLoad>("/api/external/load", json({ path })),
   manualCommit: () => req<ManualEdit>("/api/manual/commit", json({})),
   manualDiscard: () => req<ManualEdit>("/api/manual/discard", json({})),
   goalSeek: (targets: Record<string, unknown>) =>

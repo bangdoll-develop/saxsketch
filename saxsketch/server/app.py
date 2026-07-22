@@ -334,6 +334,24 @@ async def manual_import(req: PathReq):
         raise HTTPException(status_code=500, detail=f"解析に失敗しました: {e}")
 
 
+@app.post("/api/external/load")
+async def external_load(req: PathReq):
+    """外部（市販完成品など本アプリ非由来）の3Dモデルを読み込み、整列・採寸する。
+
+    凍結不要。差分/逆算はしない（座標系が別物で無意味）。表示・入稿用の派生候補として
+    保持し、/api/manual/commit で登録すると「取込モデル」タブで表示・エクスポートできる。
+    """
+    _require_project()
+    if not Path(req.path).exists():
+        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+    try:
+        return await asyncio.to_thread(STATE.load_external, req.path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"読み込みに失敗しました: {e}")
+
+
 @app.post("/api/manual/commit")
 def manual_commit():
     """解析済みモデルをプロジェクトに登録。"""

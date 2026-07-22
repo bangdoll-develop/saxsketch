@@ -1375,6 +1375,64 @@ def test_survey_measure_commit(tmp_path):
     assert r.json()["params"]["overall_length"] == measured["overall_length"]
 
 
+def test_region_deviations_foreign_bounded():
+    """別座標系（ほぼ重ならない）メッシュ同士でも region_deviations が短時間で返ること。
+
+    以前は全サンプル点が疑い化して on_surface が数十万点に膨れ、事実上ハングした。
+    厳密計算に上限を設けたので、取り違えた外部モデルでもフリーズしない。
+    """
+    import time
+
+    from saxsketch.analysis import meshdiff
+
+    comp, params, ref = _tenor_mesh()
+    foreign = ref.copy()
+    foreign.apply_translation([200.0, 200.0, 0.0])  # 全く重ならない位置へ
+    regions = comp.regions(params)
+
+    t = time.time()
+    out = meshdiff.region_deviations(ref, foreign, regions)
+    assert time.time() - t < 30.0        # ハングしない（実測 数秒）
+    assert out                            # ゾーンは返る
+    # 重なっていないので大きな偏差＝「変化あり」判定になる（誤って「変化なし」にしない）
+    assert any(z["verdict"] == "変化あり" for z in out)
+
+
+def test_external_load_view_and_export(tmp_path):
+    """外部モデルを凍結なしで読込→整列STL表示→登録→入稿STL差し替え。差分/逆算はしない。"""
+    from saxsketch.export.models import export_model
+
+    comp, params, mesh = _tenor_mesh()
+    model = tmp_path / "market_product.stl"
+    export_model(comp.build(params), model, "stl", tolerance=0.03)
+
+    c = _new_client("tenor")
+    # 凍結していない状態でも外部読込できる
+    r = c.post("/api/external/load", json={"path": str(model)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "external"
+    assert body["quality"]["watertight"] is True
+    assert "overall_length" in body["measured"]      # 外形採寸は入る
+    assert "align" in body                            # 整列情報
+
+    # 登録すると「取込モデル」として表示・入稿に使える
+    assert c.post("/api/manual/commit").status_code == 200
+    me = c.get("/api/project").json()["manual_edit"]
+    assert me["derived"]["kind"] == "external"
+    assert me["stale"] is False                       # 外部モデルは陳腐化しない
+
+    # 表示用STL（派生スロット）が配信される
+    stl = c.get("/api/manual/model.stl")
+    assert stl.status_code == 200 and len(stl.content) > 0
+
+    # 入稿エクスポートは取込モデルのSTLを使う（use_derived）
+    out = c.post("/api/export", json={
+        "formats": ["stl"], "make_package": False, "out_dir": str(tmp_path / "out")})
+    assert out.status_code == 200
+    assert out.json()["used_derived"] is True
+
+
 def test_survey_persist(tmp_path):
     """採寸状態が save→open で往復し、旧 .wproj(survey 欠落)も読めること。"""
     c = _new_client("tenor")
