@@ -250,6 +250,61 @@ class MouthpieceComponent(Component):
             "実測をプロジェクトへ反映しました。設計をいじって破綻したら"
             "「採寸時点へ戻す」で復元できます。")
 
+    def survey_measure_mesh(self, mesh) -> dict:
+        """外部マウスピース メッシュ（3mf/STL）から外形バルク寸法だけを実測。
+
+        座標非依存に整列（align.axis_align）し、軸対称的に確実に測れる寸法のみ返す:
+        全長 / ボディ最大外径 / シャンク内径(→bore_dia)。ティップ開き・フェイシング・
+        レール幅・窓・バッフル・チェンバー等はリード面の向き特定と設計プロファイル
+        prior が要り、外部モデルからは一意に測れない → 空のまま（ノギス実測へ誘導）。
+        ネック系 size_info はマウスピースではなくネック部品の寸法なので測らない。
+        """
+        import numpy as np
+        from saxsketch.analysis import align
+
+        aligned, _, info = align.axis_align(mesh)
+        av = np.asarray(aligned.vertices)
+        z = av[:, 2]
+        zmin, zmax = float(z.min()), float(z.max())
+        L = zmax - zmin
+
+        measured: dict[str, float] = {}
+        confidence: dict[str, str] = {}
+        notes: list[str] = list(info.get("warnings", []))
+
+        # ---- 全長（軸方向 bbox）: 向き符号に非依存で最も確実
+        if info["axis_conf"] != "low":
+            measured["overall_length"] = round(L, 2)
+            confidence["overall_length"] = info["axis_conf"]
+        else:
+            notes.append("主軸が不確実なため全長も参考値です。")
+            measured["overall_length"] = round(L, 2)
+            confidence["overall_length"] = "low"
+
+        # ---- ボディ最大外径（中央 30–82% 帯の外周 p99。テーブル平面側は小さく出るが
+        #      最大半径は丸い外周（リガチャー座付近が最大）を拾う）
+        mid = (z > zmin + 0.30 * L) & (z < zmin + 0.82 * L)
+        if mid.sum() >= 100:
+            r = np.hypot(av[mid, 0], av[mid, 1])
+            measured["body_dia"] = round(2.0 * float(np.percentile(r, 99.0)), 2)
+            confidence["body_dia"] = "high" if info["axis_conf"] == "high" else "med"
+
+        # ---- シャンク内径（開口ボア。シャンク端 = +Z 側の円筒プラトーを実測）
+        if info["shank_conf"] != "low":
+            res = align.shank_bore_diameter(
+                aligned, av, zmax, L, info["outer_radius_mm"])
+            if res is not None:
+                measured["bore_dia"] = round(res[0], 2)
+                confidence["bore_dia"] = res[1]
+        if "bore_dia" not in measured:
+            notes.append("シャンク内径を確実に測れませんでした（ノギス実測を推奨）。")
+
+        notes.append(
+            "ティップ開き・フェイシング長・レール幅・窓長・バッフル・チェンバーは"
+            "外部モデルから一意に測れません。ノギス実測して手入力してください。")
+        return {"measured": measured, "measured_size": {},
+                "confidence": confidence, "notes": notes}
+
     def analyze_import(self, frozen_params: dict, ref_mesh, edited_mesh) -> dict:
         """領域別偏差 + 断面実測によるパラメータ逆算。"""
         from saxsketch.analysis import meshdiff

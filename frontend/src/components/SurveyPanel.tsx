@@ -1,6 +1,11 @@
 import { useState } from "react";
-import { api, type ProjectData, type SimCard, type SurveyField, type SurveyState } from "../api";
+import {
+  api, type ProjectData, type SimCard, type SurveyField, type SurveyMeasure,
+  type SurveyState,
+} from "../api";
 import { Backdrop } from "./Dialogs";
+
+const CONF_LABEL: Record<string, string> = { high: "高", med: "中", low: "低" };
 
 function fmtDate(iso: string) {
   try { return new Date(iso).toLocaleString("ja-JP"); } catch { return iso; }
@@ -69,6 +74,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
   const [note, setNote] = useState(survey.note);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [measure, setMeasure] = useState<SurveyMeasure | null>(null);
 
   const setInput = (k: string, v: string) =>
     setInputs((p) => ({ ...p, [k]: v }));
@@ -83,6 +89,25 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
       if (Number.isFinite(n)) out[k] = n;
     }
     return out;
+  };
+
+  const measureFromModel = async () => {
+    setErr("");
+    const { path } = await api.dialog("open_model", "");
+    if (!path) return;
+    setBusy("3Dモデルを測定中…（整列とレイキャスト。十数秒かかります）");
+    try {
+      const m = await api.surveyMeasure(path);
+      setMeasure(m);
+      // 実測できた項目だけ入力欄へプレフィル。空欄項目は計算値のまま。
+      const pre: Record<string, string> = {};
+      for (const [k, v] of Object.entries(m.measured)) pre[k] = String(v);
+      setInputs((p) => ({ ...p, ...pre }));
+      const preS: Record<string, string> = {};
+      for (const [k, v] of Object.entries(m.measured_size)) preS[k] = String(v);
+      setSizeInputs((p) => ({ ...p, ...preS }));
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setBusy(""); }
   };
 
   const commit = async () => {
@@ -130,6 +155,31 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
         手元の実物をノギスで測った値を入力すると、その項目だけ設計に反映されます
         （空欄は計算値のまま）。確定すると<b>復元点</b>が記録され、以後に設計を
         いじって破綻しても「採寸時点へ戻す」で戻せます。
+      </div>
+
+      {/* 外部3Dモデルからの採寸プレフィル */}
+      <div className="simcard" style={{ margin: "8px 0" }}>
+        <div className="drow" style={{ alignItems: "center", justifyContent: "space-between" }}>
+          <span>実物の 3mf / STL / STEP から外形寸法を自動測定して埋める</span>
+          <button onClick={measureFromModel} disabled={!!busy}>📥 3mf/STLから測定…</button>
+        </div>
+        {measure && (
+          <div className="note" style={{ marginTop: 6, lineHeight: 1.6 }}>
+            測定できた項目（信頼度）:{" "}
+            {Object.keys(measure.measured).length + Object.keys(measure.measured_size).length === 0
+              ? "なし"
+              : [...Object.entries(measure.measured), ...Object.entries(measure.measured_size)]
+                  .map(([k, v]) => `${k} ${v}（${CONF_LABEL[measure.confidence[k]] ?? "?"}）`)
+                  .join(" / ")}
+            <br />
+            水密: {measure.quality.watertight ? "OK" : "NG"}
+            {measure.quality.volume_cc != null && ` / 体積 ${measure.quality.volume_cc.toFixed(1)} cc`}
+            {measure.notes.map((n, i) => (
+              <div key={i} style={{ color: "var(--warn)" }}>・{n}</div>
+            ))}
+            測定値は下の入力欄に入りました。確認・修正して「採寸を確定」してください。
+          </div>
+        )}
       </div>
 
       {state.surveyed_at && (

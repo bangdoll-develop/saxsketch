@@ -97,6 +97,15 @@ class Component(ABC):
         """採寸 vs 設計 の照合カード（SimCard 形）。対象なしなら None。"""
         return None
 
+    def survey_measure_mesh(self, mesh) -> dict:
+        """外部メッシュ（3mf/STL 等）から採寸ターゲットを実測してプレフィル値を返す。
+
+        Returns {"measured": {param_key: value}, "measured_size": {size_key: value},
+                 "confidence": {key: "high|med|low"}, "notes": [str]}。
+        既定は測定なし（確実に測れる外形寸法だけを対応コンポーネントが実装する）。
+        """
+        return {"measured": {}, "measured_size": {}, "confidence": {}, "notes": []}
+
     def analyze_import(self, frozen_params: dict, ref_mesh, edited_mesh) -> dict:
         """外部編集モデルの解析。領域別偏差＋（可能なら）パラメータ逆算。
 

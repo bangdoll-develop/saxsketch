@@ -66,6 +66,14 @@ export interface SurveyState {
   surveyed_at: string | null;
   note: string;
 }
+/** 外部3Dモデルからの採寸プレフィル（/api/survey/measure） */
+export interface SurveyMeasure {
+  measured: Record<string, number>;
+  measured_size: Record<string, number>;
+  confidence: Record<string, "high" | "med" | "low">;
+  notes: string[];
+  quality: { watertight: boolean; faces: number; volume_cc: number | null };
+}
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
   dims: [string, string][];
@@ -158,6 +166,8 @@ export const api = {
     req<ProjectData>("/api/survey/commit", json(b)),
   surveyRevert: () => req<ProjectData>("/api/survey/revert", json({})),
   surveyClear: () => req<ProjectData>("/api/survey/clear", json({})),
+  surveyMeasure: (path: string) =>
+    req<SurveyMeasure>("/api/survey/measure", json({ path })),
   dialog: (mode: string, suggested = "") =>
     req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),
