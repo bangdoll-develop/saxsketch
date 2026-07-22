@@ -80,6 +80,23 @@ class Component(ABC):
         """各パラメータの影響領域 {key: {z0, z1, side, label}}（3Dハイライト用）。"""
         return {}
 
+    # --- 採寸ワークフロー（Phase 4-A）。対応コンポーネントだけがオーバーライドする ---
+
+    def survey_targets(self) -> dict:
+        """採寸で入力できるフィールド。
+
+        Returns:
+            {"params": [{"key","label","unit","min","max","step"}, …],  # 設計パラ（paramset）
+             "size":   [{"key","label","unit"}, …]}                     # 音響基準定数（size_info）
+        既定は対象なし。
+        """
+        return {"params": [], "size": []}
+
+    def survey_card(self, before_params: dict, before_size: dict,
+                    measured_params: dict, measured_size: dict) -> dict | None:
+        """採寸 vs 設計 の照合カード（SimCard 形）。対象なしなら None。"""
+        return None
+
     def analyze_import(self, frozen_params: dict, ref_mesh, edited_mesh) -> dict:
         """外部編集モデルの解析。領域別偏差＋（可能なら）パラメータ逆算。
 

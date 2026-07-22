@@ -1229,3 +1229,93 @@ def test_port_fallback():
         assert srv._is_saxsketch(host, busy) is False
     finally:
         lsock.close()
+
+
+# ------------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
+
+def _new_client(template_id="alto", component_id="mouthpiece"):
+    from fastapi.testclient import TestClient
+
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    r = c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": template_id,
+        "component_id": component_id})
+    assert r.status_code == 200
+    return c
+
+
+def test_survey_design_param():
+    """設計パラの実測が params に反映され、復元点へ戻せること。"""
+    c = _new_client("alto")
+    proj = c.get("/api/project").json()
+    assert proj["survey"]["has_checkpoint"] is False
+    keys = {f["key"] for f in proj["survey"]["targets"]["params"]}
+    assert {"tip_opening", "body_dia", "overall_length"} <= keys
+
+    cur = proj["params"]["tip_opening"]
+    target = round(cur + 0.5, 2)  # 1.0–3.2 の範囲内・設計値と乖離する量
+    r = c.post("/api/survey/commit", json={
+        "measured": {"tip_opening": target}, "measured_size": {}, "note": "実測テスト"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["params"]["tip_opening"] == target
+    assert body["survey"]["has_checkpoint"] is True
+    assert body["survey"]["measured"]["tip_opening"] == target
+    card = body["survey"]["card"]
+    assert card is not None and card["rows"] and card["status"] == "bad"  # Δ0.5 は乖離
+
+    # 設計を破綻させてから採寸時点へ戻す
+    c.put("/api/project/params", json={"params": {"tip_opening": 3.0}})
+    r = c.post("/api/survey/revert")
+    assert r.json()["params"]["tip_opening"] == target
+
+
+def test_survey_size_override():
+    """音響基準(ネック内径)の実測が Tier1 目標に効き、clear で descriptor 既定へ戻る。"""
+    c = _new_client("tenor")
+    t0 = c.get("/api/project").json()["simulation"]["tier1"]
+    base_bore = _size_info("tenor")["neck_bore_id_mm"]
+
+    # ネック内径を大きく実測 → 欠損円錐(目標容積)は増え、テナーはさらに高め方向へ
+    r = c.post("/api/survey/commit", json={
+        "measured": {}, "measured_size": {"neck_bore_id_mm": base_bore + 2.0},
+        "note": ""})
+    t1 = r.json()["simulation"]["tier1"]
+    assert t1["target_cc"] > t0["target_cc"]
+    assert t1["deviation_cents"] > t0["deviation_cents"]
+
+    # descriptor は不変（別インスタンスは既定値のまま）
+    assert _size_info("tenor")["neck_bore_id_mm"] == base_bore
+
+    # clear で基準・目標が既定へ戻る
+    r = c.post("/api/survey/clear")
+    t2 = r.json()["simulation"]["tier1"]
+    assert t2["target_cc"] == t0["target_cc"]
+    assert r.json()["survey"]["has_checkpoint"] is False
+
+
+def test_survey_persist(tmp_path):
+    """採寸状態が save→open で往復し、旧 .wproj(survey 欠落)も読めること。"""
+    c = _new_client("tenor")
+    base_bore = _size_info("tenor")["neck_bore_id_mm"]
+    r = c.post("/api/survey/commit", json={
+        "measured": {"body_dia": c.get("/api/project").json()["params"]["body_dia"]},
+        "measured_size": {"neck_bore_id_mm": base_bore - 1.0}, "note": "往復"})
+    target_cc = r.json()["simulation"]["tier1"]["target_cc"]
+
+    f = tmp_path / "survey.wproj"
+    assert c.post("/api/project/save", json={"path": str(f)}).status_code == 200
+    body = c.post("/api/project/open", json={"path": str(f)}).json()
+    assert body["survey"]["has_checkpoint"] is True
+    assert body["survey"]["note"] == "往復"
+    # 音響基準の上書きが復元され、目標容積が一致する
+    assert body["simulation"]["tier1"]["target_cc"] == pytest.approx(target_cc, abs=0.01)
+
+    # survey フィールドを持たない旧 .wproj は None で読める（後方互換）
+    p = Project(instrument_id="saxophone", template_id="alto",
+                component_id="mouthpiece", params={})
+    assert p.survey is None
+    g = tmp_path / "old.wproj"
+    p.save(g)
+    assert Project.load(g).survey is None

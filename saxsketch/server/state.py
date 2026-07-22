@@ -38,6 +38,9 @@ class AppState:
         self._stl_cache: dict[str, bytes] = {}
         self._imp_cache: dict[str, dict] = {}
         self._wav_cache: dict[str, tuple] = {}
+        # 採寸ワークフロー（Phase 4-A）。音響基準定数(size_info)へのプロジェクト局所上書き。
+        self.size_overrides: dict = {}
+        self._base_size: dict = {}   # コンポーネント既定の size_info（descriptor 由来のコピー）
         self.settings = self._load_settings()
 
     # ---------------------------------------------------------- 設定
@@ -82,9 +85,9 @@ class AppState:
         self.component = component
         self.paramset = paramset
         self._bind_refs()
-        self._stl_cache.clear()
-        self._imp_cache.clear()
-        self._wav_cache.clear()
+        self.size_overrides = {}
+        self._bind_size()
+        self._clear_caches()
         self._pending_derived = None
 
     def open_project(self, path: str) -> None:
@@ -99,9 +102,11 @@ class AppState:
         self.component = component
         self.paramset = paramset
         self._bind_refs()
-        self._stl_cache.clear()
-        self._imp_cache.clear()
-        self._wav_cache.clear()
+        # 採寸チェックポイントに保存された音響基準の上書きを復元する。
+        self.size_overrides = dict(
+            (proj.survey or {}).get("checkpoint", {}).get("size_overrides", {}))
+        self._bind_size()
+        self._clear_caches()
         self._pending_derived = None
         self.push_recent(path)
 
@@ -204,9 +209,14 @@ class AppState:
         payload = json.dumps(
             {"i": self.project.instrument_id, "t": self.project.template_id,
              "c": self.project.component_id, "p": self.paramset.values,
-             "r": self.project.refs},
+             "r": self.project.refs, "so": self.size_overrides},
             sort_keys=True, default=str)
         return hashlib.md5(payload.encode()).hexdigest()
+
+    def _clear_caches(self) -> None:
+        self._stl_cache.clear()
+        self._imp_cache.clear()
+        self._wav_cache.clear()
 
     def build_part(self):
         with self.build_lock:
@@ -433,6 +443,127 @@ class AppState:
         self.project.derived_stl = None
         self._pending_derived = None
         return self.manual_edit_summary()
+
+    # ---------------------------------------------------------- 採寸ワークフロー（Phase 4-A）
+
+    def _bind_size(self) -> None:
+        """コンポーネント既定の size_info を控え、局所上書きを重ねて再束縛する。
+
+        `component.size_info` は descriptor の dict 参照そのものなので、控えは必ず
+        コピーする。上書きは新しい dict を割り当てて行い、descriptor は汚さない。
+        """
+        base = getattr(self.component, "size_info", None)
+        self._base_size = dict(base) if base else {}
+        self._apply_size_overrides()
+
+    def _apply_size_overrides(self) -> None:
+        if not hasattr(self.component, "size_info"):
+            return
+        self.component.size_info = {**self._base_size, **self.size_overrides}
+
+    def survey_state(self) -> dict:
+        """フロント採寸パネル用の状態。現在の設計値/基準値でフィールドを埋める。"""
+        empty = {"targets": {"params": [], "size": []}, "measured": {},
+                 "measured_size": {}, "has_checkpoint": False, "card": None,
+                 "surveyed_at": None, "note": ""}
+        if self.project is None or self.component is None:
+            return empty
+        targets = self.component.survey_targets()
+        for f in targets["params"]:
+            f["current"] = self.paramset.values.get(f["key"])
+        for f in targets["size"]:
+            f["current"] = self.component.size_info.get(f["key"])
+        s = self.project.survey or {}
+        return {
+            "targets": targets,
+            "measured": s.get("measured", {}),
+            "measured_size": s.get("measured_size", {}),
+            "has_checkpoint": bool(s.get("checkpoint")),
+            "card": s.get("card"),
+            "surveyed_at": s.get("surveyed_at"),
+            "note": s.get("note", ""),
+        }
+
+    @staticmethod
+    def _clean_measures(raw: dict | None, allowed: set) -> dict:
+        """許可キーのみ・数値化できる値だけを拾う（空欄/未知キーは捨てる）。"""
+        out: dict = {}
+        for k, v in (raw or {}).items():
+            if k not in allowed or v is None or v == "":
+                continue
+            try:
+                out[k] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def survey_commit(self, measured: dict | None, measured_size: dict | None,
+                      note: str = "") -> dict:
+        """採寸値を反映し、復元点（チェックポイント）を記録する。"""
+        from datetime import datetime, timezone
+        assert self.project is not None and self.component is not None
+        targets = self.component.survey_targets()
+        param_keys = {f["key"] for f in targets["params"]}
+        size_keys = {f["key"] for f in targets["size"]}
+
+        # 採寸前の値（照合カードの比較基準）
+        before_params = dict(self.paramset.values)
+        before_size = dict(self.component.size_info)
+
+        # 系統A: 設計パラ（ParamSet でクランプ・型変換される）
+        m_params = self._clean_measures(measured, param_keys)
+        if m_params:
+            self.apply_params(m_params)
+        applied_params = {k: self.paramset.values[k] for k in m_params}
+
+        # 系統B: 音響基準定数（size_info への局所上書き）
+        m_size = self._clean_measures(measured_size, size_keys)
+        self.size_overrides = {**self.size_overrides, **m_size}
+        self._apply_size_overrides()
+
+        card = self.component.survey_card(
+            before_params, before_size, applied_params, m_size)
+
+        prev = self.project.survey or {}
+        self.project.survey = {
+            "surveyed_at": datetime.now(timezone.utc).isoformat(),
+            "note": note or "",
+            "measured": {**prev.get("measured", {}), **applied_params},
+            "measured_size": {**prev.get("measured_size", {}), **m_size},
+            "checkpoint": {
+                "params": dict(self.paramset.values),
+                "refs": copy.deepcopy(self.project.refs),
+                "size_overrides": dict(self.size_overrides),
+            },
+            "card": card,
+        }
+        self.project.params = dict(self.paramset.values)
+        self._clear_caches()
+        return self.survey_state()
+
+    def survey_revert(self) -> dict:
+        """採寸チェックポイントへ復元する（設計をいじって破綻した時の回復）。"""
+        assert self.project is not None
+        cp = (self.project.survey or {}).get("checkpoint")
+        if not cp:
+            raise ValueError("復元点がありません。先に採寸を確定してください。")
+        self.apply_params(dict(cp["params"]))
+        if cp.get("refs") is not None:
+            self.project.refs = copy.deepcopy(cp["refs"])
+            self.component.set_refs(self.project.refs)
+        self.size_overrides = dict(cp.get("size_overrides", {}))
+        self._apply_size_overrides()
+        self._clear_caches()
+        return self.survey_state()
+
+    def survey_clear(self) -> dict:
+        """採寸ブロックと音響基準の上書きを破棄する（params は現状維持）。"""
+        assert self.project is not None
+        self.project.survey = None
+        self.size_overrides = {}
+        self._apply_size_overrides()
+        self._clear_caches()
+        return self.survey_state()
 
 
 STATE = AppState()
