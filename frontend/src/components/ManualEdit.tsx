@@ -118,8 +118,12 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
   const [freezeDir, setFreezeDir] = useState<string | null>(null);
 
   const me = manualEdit;
-  const stepPath = freezeDir ? `${freezeDir}\\model.step`
-    : me.frozen?.export_dir ? `${me.frozen.export_dir}\\model.step` : null;
+  // 出力先が POSIX（WSL: /home/...）か Windows（C:\...）かで区切りを選ぶ。
+  // バックスラッシュ固定だと WSL の POSIX パスに \model.step が付いてファイル解決に失敗する。
+  const joinStep = (dir: string) =>
+    `${dir}${dir.startsWith("/") ? "/" : "\\"}model.step`;
+  const stepDir = freezeDir ?? me.frozen?.export_dir ?? null;
+  const stepPath = stepDir ? joinStep(stepDir) : null;
 
   const openInFreecad = async (path: string) => {
     try { await api.toolOpen("freecad", path); return true; }

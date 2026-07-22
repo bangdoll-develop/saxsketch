@@ -1295,6 +1295,86 @@ def test_survey_size_override():
     assert r.json()["survey"]["has_checkpoint"] is False
 
 
+def _tenor_mesh():
+    """整列・採寸テスト用のテナー マウスピース メッシュ。"""
+    from saxsketch.analysis import meshdiff
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "tenor")
+    params = {s.key: s.default for s in comp.param_specs()}
+    return comp, params, meshdiff.part_to_mesh(comp.build(params), tolerance=0.03)
+
+
+def test_align_canonical():
+    """乱雑に回転・平行移動した外部メッシュでも主軸を +Z に整列し、全長が復元されること。"""
+    import numpy as np
+    import trimesh
+    from saxsketch.analysis import align
+
+    _, _, mesh = _tenor_mesh()
+    true_len = float(mesh.extents.max())  # 最長軸（＝マウスピース長）
+
+    T = trimesh.transformations.random_rotation_matrix()
+    T[:3, 3] = [41.0, -18.0, 63.0]
+    moved = mesh.copy()
+    moved.apply_transform(T)
+
+    aligned, _, info = align.axis_align(moved)
+    z = np.asarray(aligned.vertices)[:, 2]
+    aligned_len = float(z.max() - z.min())
+    assert aligned_len == pytest.approx(true_len, rel=0.02)
+    assert info["axis_conf"] in ("high", "med")
+
+
+def test_survey_measure_prefill():
+    """外部メッシュ測定は確実に測れる外形寸法だけを返し、測れない項目は含めないこと。"""
+    comp, params, mesh = _tenor_mesh()
+    res = comp.survey_measure_mesh(mesh)
+
+    measured = res["measured"]
+    # 全長・ボディ外径は実測できる
+    assert measured["overall_length"] == pytest.approx(
+        float(mesh.extents.max()), rel=0.03)
+    assert measured["body_dia"] == pytest.approx(params["body_dia"], abs=3.0)
+
+    # 採寸ターゲット以外のキーは混ざらない
+    target_keys = {f["key"] for f in comp.survey_targets()["params"]}
+    assert set(measured) <= target_keys
+    # リード面・空洞系は外部モデルからは測れない → 含めない
+    assert "tip_opening" not in measured
+    assert "facing_length" not in measured
+    # マウスピース メッシュからネック系 size は測らない
+    assert res["measured_size"] == {}
+    # 各実測値に信頼度が付く
+    assert set(measured) <= set(res["confidence"])
+    assert res["notes"]  # 測れない項目の案内が入る
+
+
+def test_survey_measure_commit(tmp_path):
+    """/api/survey/measure→commit で外形寸法が設計へ反映され、revert で戻ること。"""
+    from saxsketch.export.models import export_model
+
+    comp, params, mesh = _tenor_mesh()
+    model = tmp_path / "external.stl"
+    export_model(comp.build(params), model, "stl", tolerance=0.03)
+
+    c = _new_client("tenor")
+    r = c.post("/api/survey/measure", json={"path": str(model)})
+    assert r.status_code == 200
+    measured = r.json()["measured"]
+    assert "overall_length" in measured
+
+    before = c.get("/api/project").json()["params"]["overall_length"]
+    r = c.post("/api/survey/commit", json={
+        "measured": {"overall_length": measured["overall_length"]},
+        "measured_size": {}, "note": "3mf採寸"})
+    assert r.status_code == 200
+    assert r.json()["params"]["overall_length"] == measured["overall_length"]
+
+    # 破綻させてから採寸時点へ戻す
+    c.put("/api/project/params", json={"params": {"overall_length": before + 5.0}})
+    r = c.post("/api/survey/revert")
+    assert r.json()["params"]["overall_length"] == measured["overall_length"]
+
+
 def test_survey_persist(tmp_path):
     """採寸状態が save→open で往復し、旧 .wproj(survey 欠落)も読めること。"""
     c = _new_client("tenor")

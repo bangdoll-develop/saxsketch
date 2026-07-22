@@ -10,6 +10,8 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.13",
     "trimesh>=4.4",
+    "networkx>=3.0",   # trimesh の 3MF ローダ（外部モデル採寸）に必須
+    "lxml>=5.0",       # 同上（3MF は XML コンテナ）
     "rtree>=1.2",
     "python-multipart>=0.0.9",
 ]

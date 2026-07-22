@@ -66,6 +66,27 @@ def _open_default_app(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+# 外部ツールの既定インストール先（設定未登録時の自動検出用）。glob で版・大小文字を吸収。
+_TOOL_DEFAULTS = {
+    "freecad": [
+        "/mnt/c/Program Files/FreeCAD*/bin/[Ff]reeCAD.exe",
+        "/mnt/c/Program Files/FreeCAD*/bin/freecad.exe",
+    ] if IS_WSL else [
+        "C:/Program Files/FreeCAD*/bin/FreeCAD.exe",
+    ],
+}
+
+
+def _detect_tool_path(tool: str) -> str:
+    """設定にパス未登録のとき既定インストール先を走査。見つからなければ空。"""
+    from glob import glob
+    for pattern in _TOOL_DEFAULTS.get(tool, []):
+        hits = sorted(glob(pattern))
+        if hits:
+            return hits[-1]  # 版が複数なら新しい方（辞書順末尾）
+    return ""
+
+
 def _reveal_in_explorer(path: Path) -> None:
     """ファイルマネージャでファイルを選択表示。"""
     if IS_WSL:
@@ -346,6 +367,29 @@ def survey_get():
     return STATE.survey_state()
 
 
+@app.post("/api/survey/measure")
+async def survey_measure(req: PathReq):
+    """外部3Dモデル（3mf/STL/STEP）から採寸ターゲットを実測しプレフィル値を返す。
+
+    commit はしない（ユーザーが確認・修正のうえ /api/survey/commit で反映）。
+    """
+    _require_project()
+    f = Path(req.path)
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="ファイルが存在しません")
+
+    def _run():
+        from saxsketch.analysis import meshdiff
+        mesh = meshdiff.load_mesh(str(f))
+        result = STATE.component.survey_measure_mesh(mesh)
+        result["quality"] = meshdiff.mesh_quality(mesh)
+        return result
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"測定に失敗: {e}")
+
+
 class SurveyCommitReq(BaseModel):
     measured: dict = {}       # 設計パラの実測 {key: value}
     measured_size: dict = {}  # 音響基準定数の実測 {key: value}
@@ -555,9 +599,11 @@ def tools_open(req: ToolReq):
         return {"ok": True}
     tool_path = STATE.settings.get("external_tools", {}).get(req.tool, "")
     if not tool_path:
+        tool_path = _detect_tool_path(req.tool)  # 既定インストール先を自動検出
+    if not tool_path:
         raise HTTPException(
             status_code=400,
-            detail=f"{req.tool} の実行パスが未設定です。設定画面で登録してください。")
+            detail=f"{req.tool} が見つかりません。設定画面で実行パスを登録してください。")
     # WSL: 設定値が Windows パス(C:\..\FreeCAD.exe)でも WSL パスへ変換して exec。
     # 渡すファイル引数は Windows 側ツールが読めるよう Windows パスへ変換。
     exe = _to_wsl_path(tool_path) if IS_WSL else tool_path
