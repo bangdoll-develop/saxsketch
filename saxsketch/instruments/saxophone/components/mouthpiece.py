@@ -1,10 +1,10 @@
 """サクソフォン マウスピース コンポーネント。
 
-ジオメトリ構成:
-  1. 外形回転体（Z軸回り、アウターR プロファイル）
-  2. ビークカット（上面の斜めカット）
-  3. テーブル/フェイシングカット（下面。フェイシングカーブ含む）
-  4. 内部空洞（窓〜バッフル〜チェンバーのスーパー楕円ロフト + ボア円筒）を減算
+ジオメトリ構成（実在マウスピースの実測に基づく構造。詳細は profiles.py）:
+  1. 外形回転体（ボア軸回りの真円。ノーズ→最大径→シャンク肩→シャンク平行部）
+  2. ビークカット（18°の直線ランプ＋円筒面。x 方向に曲率を持つので断面ロフトで切る）
+  3. テーブル/フェイシングカット（ボア軸に対し傾いた平面＋フェイシングカーブ）
+  4. 内部空洞（窓〜バッフル〜チェンバーのロフト + ボア円筒）を減算
 """
 from __future__ import annotations
 
@@ -43,8 +43,13 @@ def _specs(t: dict) -> list[ParamSpec]:
                   effect="吹奏感の性格。楕円=現代的で反応が速い、円弧=クラシカル"),
         f("tip_rail_width", "ティップレール幅", "フェイシング", "mm", 0.5, 2.0, 0.1,
           "狭いほどレスポンスが速いが雑音が出やすい"),
+        f("tip_rail_thickness", "ティップレール厚", "フェイシング", "mm", 0.8, 2.5, 0.05,
+          "先端に残る肉厚。薄いほど鳴りは軽いが欠けやすい。ビークの傾きもここから決まる"),
         f("side_rail_width", "サイドレール幅", "フェイシング", "mm", 0.6, 2.0, 0.1,
           "狭いほど効率よく鳴るがリードミスに敏感になる"),
+        f("table_angle", "テーブル傾斜", "フェイシング", "度", 2.0, 7.0, 0.1,
+          "テーブル平面のボア軸に対する傾き。実物は約4.2°で、これが胴の中でリードを"
+          "どこまで深く座らせるかを決める", advanced=True),
         # --- バッフル ---
         ParamSpec(key="baffle_type", label="バッフル種別", category="バッフル",
                   type="choice", default=t["baffle_type"],
@@ -55,7 +60,8 @@ def _specs(t: dict) -> list[ParamSpec]:
                   effect="音色の性格を決める最重要要素。ストレート=ダーク／ロールオーバー=バランス"
                          "／ステップ=くっきり／カーブ=メタリックでアグレッシブ"),
         f("baffle_height", "バッフル高さ", "バッフル", "mm", 0.0, 5.0, 0.1,
-          "高いほど明るくエッジの効いた音。0でクラシカルなダークトーン"),
+          "リード直上の天井をどれだけ下げるか。高いほど明るくエッジの効いた音、"
+          "0でクラシカルなダークトーン"),
         f("rollover_radius", "ロールオーバー半径", "バッフル", "mm", 3.0, 20.0, 0.5,
           "ロールオーバー時の肩の丸み。小さいほどエッジ感が強い", advanced=True),
         # --- チェンバー ---
@@ -91,7 +97,12 @@ def _specs(t: dict) -> list[ParamSpec]:
           "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
           "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨"),
         f("body_dia", "ボディ径", "外形", "mm", 20.0, 34.0, 0.1,
-          "リガチャー適合寸法", advanced=True),
+          "リガチャー適合寸法（最大径）", advanced=True),
+        f("shank_dia", "シャンク径", "外形", "mm", 16.0, 28.0, 0.1,
+          "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True),
+        f("shank_length", "シャンク長", "外形", "mm", 8.0, 30.0, 0.5,
+          "シャンク平行部の長さ。長いほどロングシャンク仕様。テーブル踵の位置は"
+          "全長からこれを引いて決まるので、リードの座りにも効く"),
         f("overall_length", "全長", "外形", "mm", 70.0, 130.0, 0.5,
           "マウスピース全長", advanced=True),
         # --- 製造 ---
@@ -127,25 +138,26 @@ class MouthpieceComponent(Component):
         p = params
         length = p["overall_length"]
 
-        # 1) 外形回転体
-        n_st = 28
-        radii = [(length * i / (n_st - 1), profiles.outer_radius(p, length * i / (n_st - 1)))
-                 for i in range(n_st)]
-        body = revolve_profile(radii)
+        # 1) 外形回転体。ノーズと肩で曲率が急なので、そこだけステーションを詰める。
+        heel = profiles.heel_z(p)
+        zs = sorted({*(heel * (i / 24.0) ** 1.6 for i in range(25)),
+                     *(heel + (length - heel) * i / 12.0 for i in range(13))})
+        body = revolve_profile([(z, profiles.outer_radius(p, z)) for z in zs])
 
-        # 2) ビークカット（上面）。曲線なので端点2点では平面になってしまう。
-        n_bk = 40
-        beak_pts = [(-3.0 + (length + 6.0) * i / (n_bk - 1), 0.0) for i in range(n_bk)]
-        beak_pts = [(z, profiles.beak_y(p, z)) for z, _ in beak_pts]
-        beak_pts += [(length + 3.0, 80.0), (-3.0, 80.0)]
-        beak_cut = yz_profile_cut_solid(beak_pts, half_width=p["body_dia"])
+        # 2) ビークカット（上面）。稜線は直線でも横断面が円弧なので、YZ プリズムでは
+        #    表現できない。各 z の「ビーク面より上」の断面をロフトして切除ソリッドにする。
+        n_bk = 44
+        z_bk = [-2.0 + (profiles.heel_z(p) + 4.0) * i / (n_bk - 1) for i in range(n_bk)]
+        beak_cut = loft_sections([
+            {"z": z, "pts": profiles.beak_cut_section(p, z, half_width=p["body_dia"])}
+            for z in z_bk])
 
-        # 3) テーブル/フェイシングカット（下面）
-        z_end = profiles.table_cut_end_z(p)
-        n_f = 48
-        face_pts = [(-3.0 + (z_end + 3.0) * i / (n_f - 1), 0.0) for i in range(n_f)]
-        face_pts = [(z, profiles.cut_top_y(p, z)) for z, _ in face_pts]
-        face_pts += [(z_end, -80.0), (-3.0, -80.0)]
+        # 3) テーブル/フェイシングカット（下面）。傾斜平面は踵より後ろで自然に胴の
+        #    外へ出るため、全長ぶん伸ばしても余計な切除は起きない。
+        n_f = 56
+        face_pts = [(-3.0 + (length + 6.0) * i / (n_f - 1)) for i in range(n_f)]
+        face_pts = [(z, profiles.cut_top_y(p, z)) for z in face_pts]
+        face_pts += [(length + 3.0, -80.0), (-3.0, -80.0)]
         facing_cut = yz_profile_cut_solid(face_pts, half_width=p["body_dia"])
 
         # 4) 内部空洞（任意断面ロフト + ボア円筒）。窓/スロート/ボアの円形断面と

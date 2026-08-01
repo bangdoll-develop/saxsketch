@@ -18,6 +18,10 @@ exports/
 *.3mf
 *.wav
 
+# FreeCAD の生成物（cad/ のスクリプトから再生成できる。バイナリで差分も取れない）
+*.FCStd
+*.FCBak
+
 # 端末固有（絶対パスの許可リスト。共有すると他環境で無意味）
 .claude/settings.local.json
 
