@@ -13,9 +13,14 @@ import math
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import (
+    extrude_arc_prism,
+    loft_arc_sections,
     loft_sections,
+    loft_spline_sections,
     revolve_profile,
+    revolve_spline_profile,
     yz_profile_cut_solid,
+    yz_profile_cut_solid_curved,
 )
 from . import profiles
 from . import reference_check
@@ -136,10 +141,7 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ 形状生成
 
     def build(self, params: dict):
-        from build123d import Pos, Solid
-
         p = params
-        length = p["overall_length"]
 
         # 1) 外形回転体。刻みの根拠は `profiles.body_stations`（FreeCAD 側の
         #    `cad/windycity/build_base.py` と同じ列を使う）。
@@ -155,21 +157,88 @@ class MouthpieceComponent(Component):
 
         # 3) テーブル/フェイシングカット（下面）。傾斜平面は踵より後ろで自然に胴の
         #    外へ出るため、全長ぶん伸ばしても余計な切除は起きない。
-        n_f = 56
-        face_pts = [(-3.0 + (length + 6.0) * i / (n_f - 1)) for i in range(n_f)]
-        face_pts = [(z, profiles.cut_top_y(p, z)) for z in face_pts]
-        face_pts += [(length + 3.0, -80.0), (-3.0, -80.0)]
-        facing_cut = yz_profile_cut_solid(face_pts, half_width=p["body_dia"])
+        facing_cut = yz_profile_cut_solid(profiles.facing_cut_points(p),
+                                          half_width=p["body_dia"])
 
         # 4) 内部空洞（任意断面ロフト + ボア円筒）。窓/スロート/ボアの円形断面と
         #    チェンバーの非対称断面（馬蹄/フラットサイドウォール）を点数一定で通す。
         cavity = loft_sections(profiles.cavity_sections(p))
-        zb = profiles.bore_start_z(p)
-        r = profiles.bore_radius(p)
-        bore = Pos(0, 0, zb) * Solid.make_cylinder(r, length - zb + 1.5)
+        bore = self._bore_solid(p)
 
         part = body - beak_cut - facing_cut - cavity - bore
         return part
+
+    def _bore_solid(self, p: dict):
+        from build123d import Pos, Solid
+        zb = profiles.bore_start_z(p)
+        r = profiles.bore_radius(p)
+        return Pos(0, 0, zb) * Solid.make_cylinder(r, p["overall_length"] - zb + 1.5)
+
+    def build_cad(self, params: dict):
+        """STEP 出力用。`build()` と**同じ形**を、1面ずつのプリミティブで張り直す。
+
+        `build()` の結果はテナーで 2547 面・微小エッジ 5000本超あり、FreeCAD で
+        外周面を1クリックで選ぶことも外周エッジへフィレットを掛けることもできない
+        （`docs/manual-edit-workflow.md` の L1 が事実上使えない）。ここでは同じ
+        `profiles.py` の値から、面の張り方だけを替えて 100 面未満に畳む。
+
+        法則は一切変えない。断面 z も多角形版と同じ列を使うので、体積・寸法とも
+        多角形版と一致する（`test_mp_cad_matches_build` が担保）。残る差は多角形版
+        自身の近似（母線の弦誤差・ルールドの断面間補間）で、向きは常に
+        「こちらの方が法則に近い」。実測でテナーの材料体積が +0.1%。
+
+        ブーリアンが 4 倍以上遅い（4.6s → 20s）ので、対話中に走る `build()` とは
+        別経路にしてある。落ちたときは黙って `build()` へ落とす —— STEP が重くなる
+        だけで、出力自体は失われない。
+        """
+        try:
+            return self._build_cad(params)
+        except Exception:                      # noqa: BLE001 - 形状生成の失敗全般
+            import logging
+            logging.getLogger(__name__).warning(
+                "build_cad が失敗したため build() の表現で STEP を出力します",
+                exc_info=True)
+            return self.build(params)
+
+    def _build_cad(self, params: dict):
+        p = params
+        hw = p["body_dia"]
+
+        # 1) 外形回転体。母線は C1 の折れ目で区切る（区切らないと面取りの端で
+        #    スプラインがうねる。根拠は `profiles.body_segments`）。
+        part = revolve_spline_profile(profiles.body_segments(p))
+
+        # 2) ビークカット。直線ランプの区間は「一定半径の円弧を直線に沿って
+        #    平行移動した面」そのものなので、斜めプリズムで厳密に作れる。
+        #    胴へ溶けるブレンド区間だけは断面の曲率半径が z で変わるのでロフト。
+        cap = profiles.beak_cut_cap_y(p)
+        breaks = profiles.beak_prism_breaks(p)
+        for za, zb in zip(breaks, breaks[1:]):
+            slope = (profiles.beak_apex_y(p, zb) - profiles.beak_apex_y(p, za)) / (zb - za)
+            part = part - extrude_arc_prism(
+                profiles.beak_cut_arc(p, za, half_width=hw), cap,
+                direction=(0.0, slope, 1.0),
+                length=(zb - za) * math.hypot(1.0, slope))
+        part = part - loft_arc_sections(
+            [profiles.beak_cut_arc(p, z, half_width=hw)
+             for z in profiles.beak_blend_stations(p)], cap)
+
+        # 3) テーブル/フェイシングカット。テーブル＝平面1面、フェイシング＝曲面1面。
+        part = part - yz_profile_cut_solid_curved(profiles.facing_cut_segments(p),
+                                                  half_width=hw)
+
+        # 4) 内部空洞。断面は多角形版と同じで、ワイヤだけ周期スプラインにする
+        #    （`ruled=True` のままなので断面間の補間＝形は変わらない）。
+        #
+        #    ボアはここでは別の円筒にせず、**ロフトをそのまま延長して**作る。
+        #    空洞の最終断面はちょうどボア円なので、別ソリッドにすると円筒と
+        #    円周まるごとで接して交わる＝OCCT が最も苦手な条件になり、実測で
+        #    0.5mm² 未満のスリバー面が 35 枚出た（多角形版は 72角形が円に内接して
+        #    いるので横断して交わり、この問題が起きない）。同じ断面をもう一枚
+        #    後ろに置けば区間は厳密な円筒のままで、ブーリアンが1回減る。
+        secs = profiles.cavity_sections(p)
+        secs.append({"z": p["overall_length"] + 1.5, "pts": secs[-1]["pts"]})
+        return part - loft_spline_sections(secs)
 
     # ------------------------------------------------------------ シミュレーション
 

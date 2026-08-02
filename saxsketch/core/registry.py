@@ -56,6 +56,17 @@ class Component(ABC):
     def build(self, params: dict) -> Any:
         """build123d の Part（水密ソリッド）を返す。"""
 
+    def build_cad(self, params: dict) -> Any:
+        """STEP 出力用のソリッド。既定は `build()` と同じもの。
+
+        `build()` は面が微小パッチの集まりで、FreeCAD で面を選択したり外周エッジへ
+        フィレットを掛けたりできない。それが要るコンポーネントだけ、**同じ形を
+        1面ずつのプリミティブで張り直した版**をここで返す（形は変えない）。
+        プリミティブ表現はブーリアンが数倍遅いので、対話中に走る `build()` とは
+        分けてある。
+        """
+        return self.build(params)
+
     @abstractmethod
     def simulate(self, params: dict) -> dict:
         """設計時シミュレーション結果（Tier1/2、感度、倍音列）を返す。"""

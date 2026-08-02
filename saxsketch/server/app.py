@@ -485,6 +485,7 @@ async def export(req: ExportReq):
         used_derived = True
 
     files: dict[str, Path] = {}
+    part_cad = None
     for fmt in req.formats:
         f = out_dir / f"model.{fmt}"
         if fmt == "stl" and used_derived:
@@ -492,7 +493,14 @@ async def export(req: ExportReq):
             f.write_bytes(derived_stl)
             files["model_edited.stl"] = f
             continue
-        await asyncio.to_thread(export_model, part, f, fmt)
+        # STEP だけは面を1枚ずつに畳んだ表現で出す（FreeCAD での面選択・フィレット用）。
+        # 生成に十数秒かかるので、STEP を要求されたときだけ組む。
+        if fmt == "step":
+            if part_cad is None:
+                part_cad = await asyncio.to_thread(STATE.build_part_cad)
+            await asyncio.to_thread(export_model, part_cad, f, fmt)
+        else:
+            await asyncio.to_thread(export_model, part, f, fmt)
         files[f"model.{fmt}"] = f
 
     quality = None

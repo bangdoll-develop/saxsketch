@@ -1,4 +1,5 @@
 """SaxSketch 結合テスト: ジオメトリ・音響・プロジェクトI/O・API。"""
+import collections
 import math
 from pathlib import Path
 
@@ -774,6 +775,117 @@ def test_all_templates_build(tmp_path):
         export_model(part, f, "stl")
         q = check_mesh(f)
         assert q["watertight"] and q["winding_consistent"], (tmpl, q)
+
+
+# ------------------------------------------------------------------ STEP 用プリミティブ表現
+
+
+@pytest.fixture(scope="module")
+def alto_part_cad(alto):
+    comp, params = alto
+    return comp.build_cad(params)
+
+
+def test_body_segments_cover_and_join(alto):
+    """胴の母線区間が端点を共有して全長を覆い、C1 の折れ目で切れていること。
+
+    区間の切れ目がずれるとスプライン母線が折れ目をまたいでうねる（実測で
+    0.58mm のオーバーシュート）。ここは OCCT を呼ばずに列だけで確かめる。
+    """
+    _, p = alto
+    segs = profiles.body_segments(p)
+    assert segs[0][0][0] == pytest.approx(0.0)
+    assert segs[-1][-1][0] == pytest.approx(p["overall_length"])
+    for a, b in zip(segs, segs[1:]):
+        assert a[-1] == pytest.approx(b[0])              # 端点を共有
+    breaks = {round(s[0][0], 6) for s in segs[1:]}
+    wanted = [profiles.heel_z(p), profiles.shank_start_z(p)]
+    if profiles.tip_chamfer_len(p) > 0.0:      # 面取り 0 なら折れ目も無い
+        wanted.append(profiles.tip_chamfer_len(p))
+    for z in wanted:
+        assert round(z, 6) in breaks, z
+    # 各区間の半径は法則そのもの（サンプルし直しても一致する）
+    for seg in segs:
+        for z, r in seg:
+            assert r == pytest.approx(profiles.outer_radius(p, z), abs=1e-9)
+
+
+def test_body_spline_stays_on_the_law(alto):
+    """区間ごとのスプライン母線が、サンプル点の**間**でも法則から外れないこと。
+
+    全区間を1本のスプラインで内挿していた試作では、ティップ面取りの折れ目で
+    0.58mm オーバーシュートして胴の体積が 1.3% 痩せた。刻みを 0.05mm まで詰めても
+    直らない（標本化ではなく折れ目の問題）ので、区切りが正しいかはここで見る。
+    ソリッドを作らないので速い。
+    """
+    from build123d import Edge, Vector
+
+    _, p = alto
+    for seg in profiles.body_segments(p):
+        if len(seg) < 3:
+            continue                       # 直線区間は法則そのもの
+        edge = Edge.make_spline([Vector(r, 0.0, z) for (z, r) in seg])
+        for i in range(201):
+            v = edge.position_at(i / 200.0)
+            assert v.X == pytest.approx(profiles.outer_radius(p, v.Z), abs=0.01), (
+                seg[0][0], seg[-1][0], v.Z, v.X)
+
+
+def test_mp_cad_face_count(alto_part_cad):
+    """STEP 用表現が「面を選べる」粒度に畳まれていること。
+
+    多角形版は 2547 面・微小エッジ 5000本超で、FreeCAD では外周面を1クリックで
+    選ぶこともフィレットを掛けることもできない。畳んだ後の実測は 60 面。
+    """
+    faces = alto_part_cad.faces()
+    assert len(faces) < 100, len(faces)
+    slivers = [f for f in faces if f.area < 0.5]
+    assert len(slivers) < 5, [(f.area, str(f.geom_type)) for f in slivers]
+    kinds = collections.Counter(str(f.geom_type) for f in faces)
+    # 胴＝回転体、ビークの直線ランプ＝押出、テーブル＝平面が1枚ずつ残っていること
+    assert kinds["GeomType.REVOLUTION"] >= 1, kinds
+    assert kinds["GeomType.EXTRUSION"] >= 1, kinds
+    assert kinds["GeomType.PLANE"] >= 1, kinds
+
+
+def test_mp_cad_matches_build(alto, alto_part, alto_part_cad, tmp_path):
+    """プリミティブ表現が `build()` と**同じ形**であること。
+
+    面の張り方だけを替えるのが Stage C-2 の趣旨なので、ここがこのステージの
+    防波堤になる。残る差はすべて `build()` 側の近似（多角形母線の弦誤差・
+    ルールドロフトの断面間補間）で、向きは常に「プリミティブ版の方が法則に近い」。
+    実測（alto/tenor）: 体積差 +0.11%、表面距離 p95 0.045 / 最大 0.18mm。
+    最大が出るのはビークが胴へ溶けるブレンド区間（多角形版が 1.9mm 刻みの
+    ルールドで内側を通る所）と肩のテーパ。
+    """
+    import numpy as np
+    import trimesh
+    from saxsketch.analysis import meshdiff
+    from saxsketch.export.models import check_mesh, export_model
+
+    _, p = alto
+    assert alto_part_cad.is_valid
+    assert len(alto_part_cad.solids()) == 1
+    f = tmp_path / "cad.stl"
+    export_model(alto_part_cad, f, "stl")
+    q = check_mesh(f)
+    assert q["watertight"] and q["winding_consistent"], q
+
+    dv = (alto_part_cad.volume - alto_part.volume) / alto_part.volume
+    assert abs(dv) < 0.0025, dv
+
+    ma = meshdiff.part_to_mesh(alto_part, tolerance=0.02)
+    mb = meshdiff.part_to_mesh(alto_part_cad, tolerance=0.02)
+    # bbox は `Shape.bounding_box()` ではなくテッセレーション後の頂点で測る。
+    # 曲面の外接箱は制御点から取る緩いもので、回転体では実形状より大きく出る。
+    assert np.abs(np.asarray(mb.bounds) - np.asarray(ma.bounds)).max() < 0.05
+
+    d = trimesh.proximity.closest_point(ma, mb.vertices)[1]
+    assert np.percentile(d, 95) < 0.08, np.percentile(d, 95)
+    assert d.max() < 0.25, d.max()
+
+    # 材料は増える側にしかずれない（多角形母線の弦が内側を通るぶん、多角形版が痩せている）
+    assert dv > 0, dv
 
 
 # ------------------------------------------------------------------ 仕様変更: 実物解剖

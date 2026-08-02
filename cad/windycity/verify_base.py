@@ -10,9 +10,11 @@
 """
 from __future__ import annotations
 
+import collections
 import json
 import math
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +26,7 @@ _REPO = _HERE.parent.parent
 sys.path.insert(0, str(_REPO))
 
 from saxsketch.analysis import meshdiff  # noqa: E402
+from saxsketch.export.models import export_model  # noqa: E402
 from saxsketch.instruments.saxophone.components import profiles as P  # noqa: E402
 from saxsketch.instruments.saxophone.components.mouthpiece import (  # noqa: E402
     MouthpieceComponent)
@@ -32,6 +35,7 @@ from cad.windycity.align_reference import (  # noqa: E402
 
 REF_STL = _HERE / "reference_aligned.stl"
 OUT_STL = _HERE / "base_tenor.stl"
+OUT_STEP = _HERE / "base_tenor_cad.step"
 REPORT = _HERE / "verify_report.md"
 
 #: 合格ライン（plan の完了条件）
@@ -57,6 +61,48 @@ def _surface_dev(a: trimesh.Trimesh, b: trimesh.Trimesh, n=120_000):
     pb, _ = trimesh.sample.sample_surface(b, n)
     d = cKDTree(np.asarray(pb)).query(np.asarray(pa), workers=-1)[0]
     return np.asarray(pa), d
+
+
+def _generatrix_err(p: dict) -> dict[str, tuple[float, float]]:
+    """胴の母線が法則 `outer_radius` からどれだけ外れるか (rms, 符号つき最大ずれ)。
+
+    ソリッドもメッシュも経由せず母線そのもので測る。2つの表現の本質的な差はここで、
+    多角形（`body_stations` の折れ線）は弦が内側を通るので**常に痩せる側**、
+    スプライン（`body_segments`）は内挿誤差なので両側に出る。
+
+    メッシュ越しに測ろうとすると分解能に負ける: STL 化の許容 0.02mm が誤差と同程度で、
+    しかもプリミティブ版は 1 面が広いぶん頂点が疎になる（帯に数点しか入らず nan になった）。
+    """
+    from build123d import Edge, Vector
+
+    zq = np.linspace(0.0, p["overall_length"], 4000)
+    rq = np.array([P.outer_radius(p, z) for z in zq])
+    zs = P.body_stations(p)
+    e_poly = np.interp(zq, zs, [P.outer_radius(p, z) for z in zs]) - rq
+
+    e_spl: list[float] = []
+    for seg in P.body_segments(p):
+        if len(seg) < 3:
+            continue                       # 直線区間は法則そのもの
+        edge = Edge.make_spline([Vector(r, 0.0, z) for (z, r) in seg])
+        for i in range(401):
+            v = edge.position_at(i / 400.0)
+            e_spl.append(v.X - P.outer_radius(p, v.Z))
+
+    def stat(e):
+        e = np.asarray(e)
+        return float(np.sqrt((e ** 2).mean())), float(e[np.argmax(np.abs(e))])
+
+    return {"poly": stat(e_poly), "spline": stat(e_spl)}
+
+
+def _pair_dev(a: trimesh.Trimesh, b: trimesh.Trimesh) -> np.ndarray:
+    """a の頂点から b 表面への厳密距離。同じ設計の2表現を突き合わせる用。
+
+    `_surface_dev` の KDTree 近似はサンプル間隔（≈0.15mm）が分解能なので、
+    0.05mm 台の差を見るここでは使えない。
+    """
+    return trimesh.proximity.closest_point(b, a.vertices)[1]
 
 
 def _continuity(p: dict) -> list[tuple]:
@@ -194,7 +240,9 @@ def _tip_arc_stats(mesh, p):
 def main():
     ref = meshdiff.load_mesh(str(REF_STL))
     comp, p = _load("tenor")
+    t_poly = time.time()
     part = comp.build(p)
+    t_poly = time.time() - t_poly
     model = meshdiff.part_to_mesh(part, tolerance=0.02)
     model.export(str(OUT_STL))
 
@@ -287,6 +335,41 @@ def main():
     #      現れなので、形を見る前にここで数値として出しておく。
     cont = _continuity(p)
 
+    # ---- STEP 用プリミティブ表現（Stage C-2）
+    #      面の張り方だけ替えた版。同じ合格ラインを通ること＋面が畳めていることを見る。
+    #      ここで書き出す STEP を `check_step_cad.py` が FreeCAD で読んでフィレットを試す。
+    t_cad = time.time()
+    part_cad = comp.build_cad(p)
+    t_cad = time.time() - t_cad
+    model_cad = meshdiff.part_to_mesh(part_cad, tolerance=0.02)
+    export_model(part_cad, OUT_STEP, "step")
+    faces_cad = part_cad.faces()
+    kinds_cad = collections.Counter(
+        str(f.geom_type).split(".")[-1] for f in faces_cad)
+    slivers_cad = sum(1 for f in faces_cad if f.area < 0.5)
+
+    a_c, b_c, _ = table_plane(model_cad)
+    rail_c = _tip_arc_stats(model_cad, p)
+    ok &= chk("[CAD] ティップレール幅 平均", rail_c[0], rail_r[0], 0.15)
+    ok &= chk("[CAD] ティップレール幅 ばらつき", rail_c[1], rail_r[1], 0.20)
+    ok &= chk("[CAD] 先端前面の高さ", _tip_face_height(model_cad), face_r, 0.15)
+    zwc, wwc, _, _ = window_outline(model_cad, a_c, b_c, dx=0.05)
+    sc = window_span(zwc, wwc)
+    ok &= chk("[CAD] 窓 開始 z", sc[0], sr[0], TOL["window_z"])
+    ok &= chk("[CAD] 窓 終端 z", sc[1], sr[1], TOL["window_z"])
+    ok &= chk("[CAD] 材料体積", float(model_cad.volume) / 1000.0, v_ref,
+              0.05 * v_ref, "cc")
+    # 多角形版との差。残るのは多角形版の近似（母線の弦誤差・ルールドの断面間補間）で、
+    # 向きは常に「プリミティブ版の方が法則に近い」。
+    d_cad = _pair_dev(model_cad, model)
+    ok &= chk("[CAD] 多角形版との表面差 p95", float(np.percentile(d_cad, 95)), 0.0, 0.08)
+    ok &= chk("[CAD] 面数", float(len(faces_cad)), 0.0, 100.0, "面")
+    ok &= chk("[CAD] 微小面(<0.5mm²)", float(slivers_cad), 0.0, 5.0, "枚")
+    gen = _generatrix_err(p)
+    rad_poly, rad_cad = gen["poly"], gen["spline"]
+    ok &= chk("[CAD] 胴母線の法則からの誤差 rms", rad_cad[0], 0.0, 0.002)
+    ok &= chk("[CAD] 胴母線の法則からの最大ずれ", abs(rad_cad[1]), 0.0, 0.01)
+
     # ---- 他サイズがビルド＆シミュレートできること
     sizes = []
     for size in ("tenor", "alto", "soprano"):
@@ -311,7 +394,28 @@ def main():
     lines += ["", "### z 帯別", "", "| z 範囲 | 平均 | p95 |", "|---|---|---|"]
     for z0, z1, mu, p95 in bands:
         lines.append("| %.0f–%.0f | %.3f mm | %.3f mm |" % (z0, z1, mu, p95))
-    lines += ["", "## 3サイズのビルド", "",
+    lines += ["", "## STEP 用プリミティブ表現（Stage C-2）", "",
+              "`build_cad()` は同じ `profiles.py` から、面の張り方だけを替えて組む。",
+              "FreeCAD で外周面を選んでフィレットを掛けられるようにするための表現で、",
+              "STEP 出力のときだけ使う（`build()` は対話用に多角形のまま）。", "",
+              "| | 多角形版 `build()` | プリミティブ版 `build_cad()` |",
+              "|---|---|---|",
+              "| 面数 | %d | **%d** |" % (len(part.faces()), len(faces_cad)),
+              "| 微小面 (<0.5mm²) | – | %d |" % slivers_cad,
+              "| 生成＋ブーリアン | %.1f s | %.1f s |" % (t_poly, t_cad),
+              "| ソリッド体積 | %.1f mm³ | %.1f mm³ (%+.3f%%) |" % (
+                  part.volume, part_cad.volume,
+                  100.0 * (part_cad.volume - part.volume) / part.volume), "",
+              "面の内訳: " + " / ".join("%s %d" % kv for kv in sorted(kinds_cad.items())),
+              "", "多角形版との表面距離: 平均 %.3f / p95 %.3f / 最大 %.3f mm。"
+              % (float(d_cad.mean()), float(np.percentile(d_cad, 95)),
+                 float(d_cad.max())),
+              "残差はすべて**多角形版の近似**（母線の弦誤差・ルールドロフトの断面間補間）で、",
+              "向きは常に「プリミティブ版の方が法則に近い」。胴の母線を法則と直接比べると、",
+              "多角形は rms %.4f mm・最大 %+.3f mm（弦が内側を通るので常に痩せる側）、"
+              % rad_poly,
+              "スプラインは rms %.4f mm・最大 %+.3f mm。" % rad_cad, "",
+              "## 3サイズのビルド", "",
               "| サイズ | ソリッド体積 mm³ | ソリッド数 | simulate | is_valid |",
               "|---|---|---|---|---|"]
     for size, vol, ns, sim, valid in sizes:

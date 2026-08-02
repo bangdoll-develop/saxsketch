@@ -123,6 +123,11 @@ def shoulder_length(p: dict) -> float:
     return _SHOULDER_RATIO * heel_z(p)
 
 
+def shank_start_z(p: dict) -> float:
+    """シャンク平行部（外径一定）が始まる z。肩テーパの終わり。"""
+    return min(heel_z(p) + shoulder_length(p), p["overall_length"])
+
+
 def bore_radius(p: dict) -> float:
     return p["bore_dia"] / 2.0
 
@@ -265,6 +270,43 @@ def body_stations(p: dict) -> list[float]:
     return sorted(zs)
 
 
+def body_segments(p: dict, n_chamfer: int = 5, n_nose: int = 30,
+                  n_shoulder: int = 44) -> list[list[tuple[float, float]]]:
+    """胴の母線を **C1 の折れ目で区切った** (z, r) の区間列（STEP 出力用）。
+
+    `revolve_spline_profile` へ渡す。区切るのは、全体を1本のスプラインで内挿すると
+    折れ目でうねるため（実測でティップ面取りの端に 0.58mm のオーバーシュートが出て
+    胴の体積が 1.3% 痩せた。刻みを 0.05mm まで詰めても減らない）。折れ目は3箇所:
+
+      - `tip_chamfer_len`: 面取りの勾配 −4.1 から本来の立ち上がりへ折れる
+      - `heel_z`: 胴プロファイルから肩プロファイルへ切り替わる
+      - `shank_start_z`: 肩からシャンク平行部（外径一定）へ
+
+    刻みは `body_stations` を使い回すが、面取り区間・ノーズ・肩は元の列だと粗いので
+    区間内で取り直す。折れ目さえ外せばスプラインの内挿誤差は多角形の弦誤差より
+    ずっと小さいが、ノーズは曲率が極端（半径が 5mm で 2 倍以上になる）なので
+    0.25mm 刻みのままだと 0.024mm 残る。0.08mm まで詰めると 0.005mm に落ちる。
+    """
+    length = p["overall_length"]
+    heel = heel_z(p)
+    z_sh = shank_start_z(p)
+    ch = tip_chamfer_len(p)
+    segs: list[list[float]] = []
+    if ch > 0.0:
+        segs.append([ch * i / n_chamfer for i in range(n_chamfer + 1)])
+    z_start = ch if ch > 0.0 else 0.0
+    z_nose = min(0.03 * heel, 0.5 * (heel - z_start))       # テナーで z≈2.4
+    mid = {z_start + (z_nose - z_start) * i / n_nose for i in range(n_nose + 1)}
+    mid |= {z for z in body_stations(p) if z_nose < z < heel}
+    segs.append(sorted(mid) + [heel])
+    if z_sh > heel + 1e-9:
+        segs.append([heel + (z_sh - heel) * i / n_shoulder
+                     for i in range(n_shoulder + 1)])
+    if length > z_sh + 1e-9:
+        segs.append([z_sh, length])          # 2点＝直線母線＝CYLINDER 1面
+    return [[(z, outer_radius(p, z)) for z in seg] for seg in segs]
+
+
 # ---------------------------------------------------------------- テーブル平面（傾斜）
 
 def table_angle(p: dict) -> float:
@@ -331,6 +373,59 @@ def facing_rise(p: dict, z: float) -> float:
 def cut_top_y(p: dict, z: float) -> float:
     """テーブル/フェイシングカット面の上端 Y（この下側を切除）。"""
     return table_plane_y(p, z) + facing_rise(p, z)
+
+
+#: テーブルカット断面をティップより手前 / シャンクより奥へ出す量 [mm]。
+_FACING_CUT_LEAD = 3.0
+#: テーブルカット断面の深さ [mm]。胴を確実に下から抜く。
+_FACING_CUT_DEPTH = 80.0
+
+
+def facing_cut_z_range(p: dict) -> tuple[float, float]:
+    return -_FACING_CUT_LEAD, p["overall_length"] + _FACING_CUT_LEAD
+
+
+def facing_cut_points(p: dict, n: int = 56) -> list[tuple[float, float]]:
+    """テーブル/フェイシングカット断面（YZ）の閉ポリゴン (z, y)。多角形版。"""
+    z_lo, z_hi = facing_cut_z_range(p)
+    zs = [z_lo + (z_hi - z_lo) * i / (n - 1) for i in range(n)]
+    return ([(z, cut_top_y(p, z)) for z in zs]
+            + [(z_hi, -_FACING_CUT_DEPTH), (z_lo, -_FACING_CUT_DEPTH)])
+
+
+def facing_cut_segments(p: dict,
+                        samples: int = 200) -> list[list[tuple[float, float]]]:
+    """テーブル/フェイシングカット断面（YZ）の閉ループを**区間ごと**に返す。
+
+    `yz_profile_cut_solid_curved` へ渡すと、テーブルが PLANE 1面・フェイシングが
+    BSPLINE 1面になる（多角形版は 56 本の折れ線＝56 面）。
+
+    フェイシングを円筒面にしないのは、テーブルが軸に対して傾いているぶん
+    `cut_top_y` が Y 方向にせん断されていて厳密には楕円弧だから（円弧で
+    最小二乗フィットすると 0.0024mm 残る。リード密着面なので近似しない）。
+
+    楕円カーブ（`facing_curve == "elliptic"`）だけは z=0 で接線が垂直になるので、
+    そこで区間を切り、標本を楕円のパラメータで等間隔に取る（z 等間隔だと
+    ティップ側が粗くなってスプラインが暴れる）。z<0 側は持ち上がりが
+    `tip_opening` で頭打ちなので直線。
+    """
+    length = p["overall_length"]
+    fl = p["facing_length"]
+    z_lo, z_hi = facing_cut_z_range(p)
+    segs: list[list[tuple[float, float]]] = []
+    if p.get("facing_curve", "radial") == "elliptic":
+        zs = sorted(fl * (1.0 - math.sin(0.5 * math.pi * i / (samples - 1)))
+                    for i in range(samples))
+        segs.append([(z_lo, cut_top_y(p, z_lo)), (0.0, cut_top_y(p, 0.0))])
+        segs.append([(z, cut_top_y(p, z)) for z in zs])
+    else:
+        zs = [z_lo + (fl - z_lo) * i / (samples - 1) for i in range(samples)]
+        segs.append([(z, cut_top_y(p, z)) for z in zs])
+    segs.append([(fl, cut_top_y(p, fl)), (z_hi, cut_top_y(p, z_hi))])  # テーブル平面
+    segs.append([(z_hi, cut_top_y(p, z_hi)), (z_hi, -_FACING_CUT_DEPTH)])
+    segs.append([(z_hi, -_FACING_CUT_DEPTH), (z_lo, -_FACING_CUT_DEPTH)])
+    segs.append([(z_lo, -_FACING_CUT_DEPTH), (z_lo, cut_top_y(p, z_lo))])
+    return segs
 
 
 # ---------------------------------------------------------------- ビーク
@@ -402,24 +497,46 @@ def beak_apex_y(p: dict, z: float) -> float:
     return top if u >= 1.0 else line + (top - line) * u
 
 
-def beak_top_y(p: dict, z: float, x: float = 0.0) -> float:
-    """ビーク面の Y（この上側を切除）。稜線から横断面円弧で降りる。
+def beak_section_radius(p: dict, z: float) -> float:
+    """ビーク横断面の曲率半径。
 
-    ブレンド区間では横断面半径も胴の半径へ寄せる（実測で z=40 の横断曲率半径が
+    ブレンド区間では胴の半径へ寄せる（実測で z=40 の横断曲率半径が
     14.1mm ≈ 胴半径 13.6mm まで小さくなっていた）。
     """
-    apex = beak_apex_y(p, z)
-    r_ridge = beak_ridge_radius(p)
+    r = beak_ridge_radius(p)
     u = _beak_blend(p, z)
-    if u > 0.0:
-        r_ridge = r_ridge + (outer_radius(p, z) - r_ridge) * u
+    return r + (outer_radius(p, z) - r) * u if u > 0.0 else r
+
+
+def beak_top_y(p: dict, z: float, x: float = 0.0) -> float:
+    """ビーク面の Y（この上側を切除）。稜線から横断面円弧で降りる。"""
+    r_ridge = beak_section_radius(p, z)
     ax = min(abs(x), 0.999 * r_ridge)
-    return apex - (r_ridge - math.sqrt(max(r_ridge * r_ridge - ax * ax, 0.0)))
+    return beak_apex_y(p, z) - (r_ridge - math.sqrt(max(r_ridge * r_ridge - ax * ax, 0.0)))
 
 
 def beak_y(p: dict, z: float) -> float:
     """[互換] ビーク稜線の Y。`beak_top_y(p, z, 0.0)` と同じ。"""
     return beak_apex_y(p, z)
+
+
+#: 切除ソリッドをティップより手前へ出す量 [mm]。
+_BEAK_CUT_LEAD = 2.0
+
+
+def beak_cut_range(p: dict) -> tuple[float, float]:
+    """ビーク切除ソリッドが覆う z の範囲。"""
+    return -_BEAK_CUT_LEAD, heel_z(p) + 2.0
+
+
+def beak_ramp_end_z(p: dict) -> float:
+    """ビークの直線ランプが終わり、胴へのブレンドが始まる z。"""
+    return _BEAK_BLEND0 * heel_z(p)
+
+
+def beak_blend_end_z(p: dict) -> float:
+    """ビークが完全に胴へ溶けきる z。"""
+    return _BEAK_BLEND1 * heel_z(p)
 
 
 def beak_cut_stations(p: dict, n: int = 44) -> list[float]:
@@ -432,11 +549,66 @@ def beak_cut_stations(p: dict, n: int = 44) -> list[float]:
     稜線も横断面半径も z の一次式なので、この2点だけでルールドロフトが厳密に一致する
     （区間を等分しても得られるものは無く、ロフトとブーリアンが遅くなるだけ）。
     """
-    zs = {-2.0 + (heel_z(p) + 4.0) * i / (n - 1) for i in range(n)}
+    z0, z1 = beak_cut_range(p)
+    zs = {z0 + (z1 - z0) * i / (n - 1) for i in range(n)}
     ch = tip_chamfer_len(p)
     if ch > 0.0:
         zs |= {0.0, ch}
     return sorted(zs)
+
+
+def beak_cut_cap_y(p: dict) -> float:
+    """ビーク切除断面を閉じる天井の Y。胴の上を確実に覆う高さ。"""
+    return 4.0 * p["body_dia"]
+
+
+def beak_cut_arc(p: dict, z: float,
+                 half_width: float) -> list[tuple[float, float, float]]:
+    """ビーク切除断面の下辺（円弧）の3点 (x, y, z)。`beak_cut_section` の曲線版。
+
+    横断面はどの z でも真円の弧なので、3点で厳密に決まる（多角形の 33 点は
+    その弧の近似でしかなかった）。
+
+    端の x は**その z での曲率半径**（＝ブレンド後）で決めること。多角形版と同じ
+    ブレンド前の半径 25mm で取ると、ブレンド区間では端点が円の外に出て
+    `beak_top_y` のクランプ値になり、その3点を通る円が半径 26mm の別物になる
+    （実測でモデルが z=39 付近で 0.59mm ずれた）。半径を細らせたぶん切除ソリッドの
+    幅も縮むが、u が 1 に近づく所は `_beak_cut_lift` で胴の外へ逃げているので
+    削り残しにはならない。
+    """
+    xa = min(half_width, 0.95 * beak_section_radius(p, z))
+    lift = _beak_cut_lift(p, z)
+    y_edge = beak_top_y(p, z, xa) + lift
+    return [(-xa, y_edge, z), (0.0, beak_apex_y(p, z) + lift, z), (xa, y_edge, z)]
+
+
+def beak_prism_breaks(p: dict) -> list[float]:
+    """ビークの直線ランプを斜めプリズムで作るときの区切り z（STEP 出力用）。
+
+    この区間では `_beak_blend` が 0 なので、ビーク面は「一定半径の円弧を直線に
+    沿って平行移動した面」そのもの。稜線の勾配が変わる所だけで切れば、プリズムの
+    押出が**厳密に**一致する（ロフトの近似が要らない）。
+
+    勾配が折れるのはティップ面取りの両端だけ。z<0 では面取りのランプが 1.0 で
+    クランプされるので勾配は本来のビーク角に戻る（＝z<0 と z>面取り長 は勾配が
+    同じでも切片が違う別の面なので、区間は分けたままにする）。
+    """
+    z0, _ = beak_cut_range(p)
+    ch = tip_chamfer_len(p)
+    if ch <= 0.0:
+        return [z0, beak_ramp_end_z(p)]
+    return [z0, 0.0, ch, beak_ramp_end_z(p)]
+
+
+def beak_blend_stations(p: dict) -> list[float]:
+    """ビークが胴へ溶けるブレンド区間の断面 z（STEP 出力用）。
+
+    ここだけは稜線も横断面半径も z の一次式ではないので、プリズムでは作れない。
+    刻みは `beak_cut_stations` をそのまま切り出す —— 多角形版とルールドで
+    **同じ面**を張るためで、こうしておけばプリミティブ化で形が 1mm も動かない。
+    """
+    z0 = beak_ramp_end_z(p)
+    return [z0] + [z for z in beak_cut_stations(p) if z > z0]
 
 
 #: ブレンド終端付近で切除ソリッドを胴から逃がす量 [mm]。

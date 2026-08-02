@@ -222,6 +222,16 @@ class AppState:
         with self.build_lock:
             return self.component.build(dict(self.paramset.values))
 
+    def build_part_cad(self):
+        """STEP 出力用のソリッド。面を1枚ずつに畳んだ版（`Component.build_cad`）。
+
+        プレビュー・STL・シミュレーションは `build_part()` のまま。STEP だけ
+        分けるのは、プリミティブ表現はブーリアンが数倍遅い代わりに FreeCAD で
+        面選択とフィレットができるという、出力先でしか意味の無い差だから。
+        """
+        with self.build_lock:
+            return self.component.build_cad(dict(self.paramset.values))
+
     def get_stl_bytes(self, tolerance: float = 0.03) -> bytes:
         key = self._params_key() + f":{tolerance}"
         cached = self._stl_cache.get(key)
