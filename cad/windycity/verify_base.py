@@ -59,6 +59,138 @@ def _surface_dev(a: trimesh.Trimesh, b: trimesh.Trimesh, n=120_000):
     return np.asarray(pa), d
 
 
+def _continuity(p: dict) -> list[tuple]:
+    """空洞3法則の傾きと、隣接区間での傾きジャンプ。
+
+    内部に見える棚・縦壁・段差は例外なく「区間ごとに別の式を継いだ所で傾きが飛ぶ」
+    ことの現れなので、形状を目視する前にここで数値化しておく。合否は課さない
+    （実物との一致が合格ラインで、こちらはその内訳を説明するための指標）。
+    """
+    st = P.cavity_stations(p)
+    rows = []
+    slopes = []
+    for a, b in zip(st, st[1:]):
+        dz = b["z"] - a["z"]
+        slopes.append((
+            0.5 * (a["z"] + b["z"]),
+            (b["w"] - a["w"]) / 2.0 / dz,
+            ((b["yc"] - b["h"] / 2) - (a["yc"] - a["h"] / 2)) / dz,
+            ((b["yc"] + b["h"] / 2) - (a["yc"] + a["h"] / 2)) / dz,
+        ))
+    for (z0, w0, f0, c0), (z1, w1, f1, c1) in zip(slopes, slopes[1:]):
+        rows.append((0.5 * (z0 + z1), abs(w1 - w0), abs(f1 - f0), abs(c1 - c0)))
+    return rows
+
+
+def _rail_curves(mesh, z_lo=0.10, z_hi=6.0, dz=0.05, dx=0.02, flat=0.06):
+    """リード面を真下から見た2本の輪郭を測る → (zs, 窓の縁 x, 先端輪郭 x)。
+
+    各 z で下から +Y レイを打ち、最初に当たる面の高さ y(x) を見る。リード面は
+    x 方向に真っ平ら（母線が X に平行な円筒）なので、y(x) は
+
+        窓（天井＝高い） → **レール（リード面＝最低の平坦部）** → 弦の外（胴の丸み＝上がる）
+
+    という形になる。**最小値の平坦部がレールそのもの**なので、その内端が窓の縁、
+    外端が先端輪郭（リード面が胴を切る弦）。しきい値としてリード面の高さを
+    別途フィットする必要が無く、実物とモデルで同じ判定になる（`facing_fit` は
+    裾だけの2母数フィットが条件不良で、ティップへ外挿すると 0.15mm ずれる）。
+    """
+    xs = np.arange(0.03, 10.0, dx)
+    zs, we, ce = [], [], []
+    for z in np.arange(z_lo, z_hi, dz):
+        o = np.stack([xs, np.full(len(xs), -40.0), np.full(len(xs), z)], 1)
+        d = np.tile([0.0, 1.0, 0.0], (len(xs), 1))
+        locs, idx, _ = mesh.ray.intersects_location(o, d)
+        first: dict[int, float] = {}
+        for loc, i in zip(locs, idx):
+            if i not in first or loc[1] < first[i]:
+                first[i] = float(loc[1])
+        y = np.array([first.get(i, np.nan) for i in range(len(xs))])
+        ok_ = np.isfinite(y)
+        if ok_.sum() < 10:
+            continue
+        i0 = int(np.nanargmin(np.where(ok_, y, np.inf)))
+        lo = hi = i0
+        while lo - 1 >= 0 and ok_[lo - 1] and y[lo - 1] <= y[i0] + flat:
+            lo -= 1
+        while hi + 1 < len(xs) and ok_[hi + 1] and y[hi + 1] <= y[i0] + flat:
+            hi += 1
+        zs.append(float(z))
+        # lo == 0 はまだ窓が開いていない（レールが x=0 まで続く）
+        we.append(float(xs[lo]) if lo > 0 else float("nan"))
+        ce.append(float(xs[hi]))
+    return np.asarray(zs), np.asarray(we), np.asarray(ce)
+
+
+def _rail_widths(zs, we, ce):
+    """窓の縁から先端輪郭への**垂直距離**（z 一定で測ると弧の傾きぶん過大に出る）。
+
+    先端輪郭は窓が開く前の z まで含めて全部使う。ここを切り詰めると、輪郭が
+    急に立ち上がるティップ側で最短点を取り逃して距離が数 mm 過大に出る。
+    """
+    return np.asarray([np.min(np.hypot(ce - x, zs - z)) if np.isfinite(x)
+                       else np.nan for z, x in zip(zs, we)])
+
+
+def _tip_arc_z(p: dict) -> tuple[float, float]:
+    """ティップ弧の z 範囲。弦が最大幅の 94% に達するまでが「先端が回り込む」区間。
+
+    そこから先はサイドレールで、`side_rail_width` が支配する別の量になる。実物と
+    モデルで同じ区間を見るため、範囲はメッシュではなく解析式から決める。
+    """
+    zb = P.bore_start_z(p)
+    zs = np.arange(0.05, min(12.0, zb), 0.01)
+    ch = np.array([P.reed_chord(p, z) / 2.0 for z in zs])
+    lim = 0.94 * float(ch.max())
+    return float(P.window_open_z(p)), float(zs[np.argmax(ch >= lim)])
+
+
+def _tip_face_height(mesh, x_half=1.0, z_hi=0.02) -> float:
+    """先端前面（z≈0 の面）の高さ [mm]。クラウン付近だけを見る。
+
+    実物はリード面側から面取りされていて、ここが 0.25mm しかない。面取りが無いと
+    `tip_rail_thickness` ぶん（テナーで 1.25mm）の角ばった壁が先端に立ち、
+    その両端が 90°近い稜線として見える。
+    """
+    v = mesh.vertices
+    s = (np.abs(v[:, 0]) <= x_half) & (v[:, 2] <= mesh.bounds[0][2] + z_hi)
+    if int(s.sum()) < 3:
+        return float("nan")
+    return float(v[s, 1].max() - v[s, 1].min())
+
+
+def _tip_face_profile(mesh, x=0.0, z_hi=0.5, dz=0.02):
+    """x 一定での先端の縦断面（z, 上面 y, 下面 y）。面取りの形を図に出すため。"""
+    zs = np.arange(mesh.bounds[0][2] + 1e-3, z_hi, dz)
+    o = np.stack([np.full(len(zs), x), np.full(len(zs), -40.0), zs], 1)
+    d = np.tile([0.0, 1.0, 0.0], (len(zs), 1))
+    locs, idx, _ = mesh.ray.intersects_location(o, d)
+    lo: dict[int, float] = {}
+    hi: dict[int, float] = {}
+    for loc, i in zip(locs, idx):
+        y = float(loc[1])
+        if i not in lo or y < lo[i]:
+            lo[i] = y
+        if i not in hi or y > hi[i]:
+            hi[i] = y
+    return (zs,
+            np.array([hi.get(i, np.nan) for i in range(len(zs))]),
+            np.array([lo.get(i, np.nan) for i in range(len(zs))]))
+
+
+def _tip_arc_stats(mesh, p):
+    """ティップ弧に沿ったレール幅の (平均, ばらつき, 本数)。"""
+    z0, z1 = _tip_arc_z(p)
+    zs, we, ce = _rail_curves(mesh)
+    if len(zs) < 6:
+        return float("nan"), float("nan"), 0
+    d = _rail_widths(zs, we, ce)
+    m = np.isfinite(d) & (zs >= z0) & (zs <= z1)
+    if m.sum() < 4:
+        return float("nan"), float("nan"), 0
+    return float(d[m].mean()), float(d[m].max() - d[m].min()), int(m.sum())
+
+
 def main():
     ref = meshdiff.load_mesh(str(REF_STL))
     comp, p = _load("tenor")
@@ -100,9 +232,21 @@ def main():
     fac_r = facing_fit(ref, a_r, b_r)
     fac_m = facing_fit(model, a_m, b_m)
 
+    # ---- ティップレール（先端曲線に沿う一定幅の帯になっているか）
+    #      旧実装はロフト前端が z 一定の平面だったため窓の前縁が直線になり、
+    #      コーナーでレール幅が 0.02mm まで痩せていた。
+    rail_r = _tip_arc_stats(ref, p)
+    rail_m = _tip_arc_stats(model, p)
+    ok &= chk("ティップレール幅 平均", rail_m[0], rail_r[0], 0.15)
+    ok &= chk("ティップレール幅 ばらつき", rail_m[1], rail_r[1], 0.20)
+    face_r, face_m = _tip_face_height(ref), _tip_face_height(model)
+    ok &= chk("先端前面の高さ", face_m, face_r, 0.15)
+
     # ---- ウィンドウ輪郭（FreeCAD で先端が点に潰れていた箇所。形状の主目的なので必ず見る）
-    zwr, wwr, _, _ = window_outline(ref, a_r, b_r)
-    zwm, wwm, _, _ = window_outline(model, a_m, b_m)
+    #      dx は既定の 0.2mm だと縁がグリッドをまたぐたび ±0.2mm 量子化されて
+    #      系統差に見える（実体は 0.06mm）。両者とも 0.05mm で測る。
+    zwr, wwr, _, _ = window_outline(ref, a_r, b_r, dx=0.05)
+    zwm, wwm, _, _ = window_outline(model, a_m, b_m, dx=0.05)
     zw = np.arange(WINDOW_Z[0], WINDOW_Z[1] + 0.01, 1.0)
     d_win = np.abs(np.interp(zw, zwm, wwm) - np.interp(zw, zwr, wwr))
     ok &= chk("窓幅 最大差", float(d_win.max()), 0.0, TOL["window_w_max"])
@@ -138,6 +282,11 @@ def main():
         bands.append((z0, z0 + 10.0, float(dev[m].mean()),
                       float(np.percentile(dev[m], 95))))
 
+    # ---- 断面法則の傾き不連続（診断のみ・合否は課さない）
+    #      内部の棚・縦壁・段差はすべて「隣接ステーション間で傾きが飛ぶ」ことの
+    #      現れなので、形を見る前にここで数値として出しておく。
+    cont = _continuity(p)
+
     # ---- 他サイズがビルド＆シミュレートできること
     sizes = []
     for size in ("tenor", "alto", "soprano"):
@@ -145,8 +294,9 @@ def main():
         s = c.build(pp)
         sim = c.simulate(pp)
         sizes.append((size, float(s.volume), len(s.solids()),
-                      bool(sim.get("tier1"))))
+                      bool(sim.get("tier1")), bool(s.is_valid)))
         ok &= s.volume > 1000.0
+        ok &= bool(s.is_valid)          # OCCT が健全と認めるソリッドであること
 
     lines = ["# 新ベース形状 vs 実物リファレンス 検証レポート", "",
              "生成: `cad/windycity/verify_base.py` / 実物: WindyCity-Tenor-72-100-LS.3mf",
@@ -162,9 +312,21 @@ def main():
     for z0, z1, mu, p95 in bands:
         lines.append("| %.0f–%.0f | %.3f mm | %.3f mm |" % (z0, z1, mu, p95))
     lines += ["", "## 3サイズのビルド", "",
-              "| サイズ | ソリッド体積 mm³ | ソリッド数 | simulate |", "|---|---|---|---|"]
-    for size, vol, ns, sim in sizes:
-        lines.append("| %s | %.0f | %d | %s |" % (size, vol, ns, sim))
+              "| サイズ | ソリッド体積 mm³ | ソリッド数 | simulate | is_valid |",
+              "|---|---|---|---|---|"]
+    for size, vol, ns, sim, valid in sizes:
+        lines.append("| %s | %.0f | %d | %s | %s |" % (size, vol, ns, sim, valid))
+    worst = max(cont, key=lambda r: max(r[1], r[2], r[3])) if cont else None
+    lines += ["", "## 断面法則の連続性（診断・合否なし）", "",
+              "隣接区間での**傾きのジャンプ**。棚・縦壁・段差はこれが飛ぶ所に出る。", "",
+              "| 指標 | 最大ジャンプ | 位置 z |", "|---|---|---|"]
+    for i, name in ((1, "d(半幅)/dz"), (2, "d(床)/dz"), (3, "d(天井)/dz")):
+        top = max(cont, key=lambda r: r[i])
+        lines.append("| %s | %.3f | %.1f |" % (name, top[i], top[0]))
+    if worst:
+        lines.append("")
+        lines.append("最悪地点 z=%.1f（旧実装は d(半幅)/dz が z=41 で 3.03 飛んでいた）"
+                     % worst[0])
     lines += ["", "## ウィンドウ輪郭（リード開口の幅）", "",
               "| z | 実物 | モデル | 差 |", "|---|---|---|---|"]
     for z in zw[::2]:
@@ -173,6 +335,42 @@ def main():
         lines.append("| %.0f | %.2f | %.2f | %+.2f |" % (z, a_, b_, b_ - a_))
     lines += ["", "開口 z 範囲: 実物 %.1f–%.1f / モデル %.1f–%.1f"
               % (sr[0], sr[1], sm[0], sm[1]),
+              "", "## ティップレール（先端曲線に沿う帯の幅）", "",
+              "窓の縁から先端輪郭への**垂直距離**。弧の範囲は z = %.2f–%.2f"
+              % _tip_arc_z(p),
+              "（弦が最大幅の 94%% に達するまで。そこから先はサイドレール）。"
+              "設計値 `tip_rail_width` = %.2f mm。" % p["tip_rail_width"], "",
+              "| | 平均 | ばらつき(最大−最小) | 測定点数 |", "|---|---|---|---|",
+              "| 実物 | %.3f mm | %.3f mm | %d |" % rail_r,
+              "| モデル | %.3f mm | %.3f mm | %d |" % rail_m, ""]
+    zs_m, we_m, ce_m = _rail_curves(model)
+    zs_r, we_r, ce_r = _rail_curves(ref)
+    dm_, dr_ = _rail_widths(zs_m, we_m, ce_m), _rail_widths(zs_r, we_r, ce_r)
+    lines += ["| z | 実物 窓縁 | モデル 窓縁 | 実物 レール | モデル レール |",
+              "|---|---|---|---|---|"]
+    for z in np.arange(1.0, 5.01, 0.25):
+        if len(zs_r) == 0 or len(zs_m) == 0:
+            break
+        lines.append("| %.2f | %.2f | %.2f | %.3f | %.3f |" % (
+            z, float(np.interp(z, zs_r, we_r)), float(np.interp(z, zs_m, we_m)),
+            float(np.interp(z, zs_r, dr_)), float(np.interp(z, zs_m, dm_))))
+    lines += ["", "## 先端前面（ティップ前縁の面取り）", "",
+              "実物はリード面側から面取りされていて、z=0 の前面は %.2f mm しかない。"
+              % face_r,
+              "面取りが無いと `tip_rail_thickness` ぶんの角ばった壁が立ち、その両端が"
+              "90°近い稜線として見える。", "",
+              "| | 前面の高さ (x≈0) |", "|---|---|",
+              "| 実物 | %.3f mm |" % face_r, "| モデル | %.3f mm |" % face_m, "",
+              "x=0 の縦断面（上面 / 下面の y）:", "",
+              "| z | 実物 上 | モデル 上 | 実物 下 | モデル 下 |",
+              "|---|---|---|---|---|"]
+    zt_r, up_r, dn_r = _tip_face_profile(ref)
+    zt_m, up_m, dn_m = _tip_face_profile(model)
+    for z in np.arange(0.02, 0.41, 0.04):
+        lines.append("| %.2f | %.2f | %.2f | %.2f | %.2f |" % (
+            z, float(np.interp(z, zt_r, up_r)), float(np.interp(z, zt_m, up_m)),
+            float(np.interp(z, zt_r, dn_r)), float(np.interp(z, zt_m, dn_m))))
+    lines += [
               "", "## テーブル平面の平面度", "",
               "- 実物 rms %.4f mm / モデル rms %.4f mm" % (rms_r, rms_m),
               "", "## フェイシング面（リード密着面）の持ち上がり", "",

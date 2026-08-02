@@ -39,11 +39,8 @@ V = FreeCAD.Vector
 
 
 def _revolved_body(p):
-    """胴（ボア軸まわりの真円回転体）。ノーズと肩でステーションを詰める。"""
-    length = p["overall_length"]
-    heel = P.heel_z(p)
-    zs = sorted({*(heel * (i / 40.0) ** 1.6 for i in range(41)),
-                 *(heel + (length - heel) * i / 24.0 for i in range(25))})
+    """胴（ボア軸まわりの真円回転体）。刻みは SaxSketch 側と同じ列を使う。"""
+    zs = P.body_stations(p)
     verts = [V(P.outer_radius(p, z), 0.0, z) for z in zs]
     verts += [V(0.0, 0.0, zs[-1]), V(0.0, 0.0, zs[0])]
     verts.append(verts[0])
@@ -53,11 +50,8 @@ def _revolved_body(p):
 
 def _beak_cut(p):
     """ビーク切除。稜線は直線だが横断面が円弧なので断面ロフトで作る。"""
-    heel = P.heel_z(p)
-    n = 44
     wires = []
-    for i in range(n):
-        z = -2.0 + (heel + 4.0) * i / (n - 1)
+    for z in P.beak_cut_stations(p):
         pts = P.beak_cut_section(p, z, half_width=p["body_dia"])
         verts = [V(x, y, z) for (x, y) in pts]
         verts.append(verts[0])

@@ -72,10 +72,14 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
     rs: list[float] = []
 
     # (a) マウスピース空洞（各断面 → 等価半径）。断面積は形状依存（馬蹄/フラット
-    #     サイドウォールも正しく計上）なので section_area を使う。
+    #     サイドウォールも正しく計上）なので断面ポリゴンから求める。
+    #     ここは **リード面で切った実効断面積** を使う: ロフト用ステーションは窓を
+    #     開けるためカット面より下へはみ出しており、そのはみ出しは気柱ではない
+    #     （リードが塞ぐ）。cavity_volume_cc は同じ切り直しをしているので、
+    #     素の section_area を使うと Tier1 と Tier3 の前提が食い違う。
     stations = profiles.cavity_stations(p)
     for s in stations:
-        area_mm2 = profiles.section_area(s)
+        area_mm2 = profiles.effective_section_area(p, s)
         r_eq = math.sqrt(max(area_mm2, 1e-6) / math.pi)  # mm
         xs.append(s["z"] / 1000.0)
         rs.append(r_eq / 1000.0)

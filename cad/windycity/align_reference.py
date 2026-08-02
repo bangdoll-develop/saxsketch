@@ -197,7 +197,11 @@ def window_outline(mesh, a_t: float, b_t: float, z_hi: float = 46.0,
     # テッセレーション由来の縮退面をすり抜ける（測定が跳ねる）。
     xs = np.arange(-17.0 + dx / 2.0, 17.0, dx)
     zs, ws, los, his = [], [], [], []
-    for zc in np.arange(0.5, z_hi, dz):
+    # z も丸い値を避ける。モデルのロフトはステーションの z にちょうど稜線
+    # （2枚の面が共有する辺）を持ち、そこを狙ったレイは辺をすり抜けて奥の面に
+    # 当たる。実際、z=4.5（ステーション）だけ窓幅が 8.1→4.1 に落ちる偽の
+    # 切り欠きが出ていた。0.13mm ずらすだけで消える。
+    for zc in np.arange(0.5, z_hi, dz) + 0.13:
         o = np.stack([xs, np.full(len(xs), ty(zc) - 30.0),
                       np.full(len(xs), zc)], 1)
         d = np.tile([0.0, 1.0, 0.0], (len(xs), 1))
@@ -254,6 +258,56 @@ def window_span(zs, ws, min_w: float = 1.0):
     if best is None:
         return float("nan"), float("nan")
     return float(zs[best[0]]), float(zs[best[1]])
+
+
+def cavity_profile(mesh, a_t: float, b_t: float, z_lo: float = 1.0,
+                   z_hi: float = 58.0, dz: float = 0.5):
+    """内部空洞を **半幅 W(z) / 天井 C(z) / 床 F(z)** の3本として測る。
+
+    空洞は「スロット」ではなく1本の滑らかな管なので、この3本で表せるはず、という
+    仮説を実測で確かめるための測定。Returns (zs, W, C, F)（測れない所は nan）。
+
+    - **天井・床**: x≒0 で下から真上へレイを打ち、ヒット列の並びで読む。
+      窓が開いている z は下から見て最初に当たるのが天井なのでヒット2個
+      （天井・ビーク上面）、窓が閉じた後は4個（胴の底・床・天井・上面）になる。
+      この個数の違いがそのまま「窓が開いているか」の判定になる。
+    - **半幅**: 空洞の内側 (x=0, y) から +X へ打って壁までの距離を測り、
+      高さ y を振ったときの最大値を取る。窓の縁ではなく**壁の最大張り出し**が
+      得られるので、アンダーカット（窓より内部が広い）があれば検出できる。
+    """
+    ty = lambda z: a_t + b_t * z                                   # noqa: E731
+    zs, ws, cs, fs = [], [], [], []
+    for zc in np.arange(z_lo, z_hi, dz):
+        o = np.array([[0.25, ty(zc) - 30.0, float(zc)]])
+        locs, _, _ = mesh.ray.intersects_location(o, np.array([[0.0, 1.0, 0.0]]))
+        ys = np.sort(np.asarray([float(p[1]) for p in locs]))
+        if len(ys) >= 4:
+            floor, ceil_ = float(ys[1]), float(ys[2])
+        elif len(ys) == 2:
+            floor, ceil_ = float("nan"), float(ys[0])
+        else:
+            continue
+        y0 = ty(zc) + 0.25 if math.isnan(floor) else floor + 0.15
+        y1 = ceil_ - 0.15
+        half = float("nan")
+        if y1 > y0:
+            ny = max(int((y1 - y0) / 0.2) + 1, 2)
+            oy = np.linspace(y0, y1, ny)
+            o = np.stack([np.zeros(ny), oy, np.full(ny, float(zc))], 1)
+            d = np.tile([1.0, 0.0, 0.0], (ny, 1))
+            hits, idx, _ = mesh.ray.intersects_location(o, d)
+            best: dict[int, float] = {}
+            for pt, i in zip(hits, idx):
+                x = float(pt[0])
+                if x > 0.0 and (i not in best or x < best[i]):
+                    best[i] = x
+            if best:
+                half = max(best.values())
+        zs.append(float(zc))
+        ws.append(half)
+        cs.append(ceil_)
+        fs.append(floor)
+    return (np.asarray(zs), np.asarray(ws), np.asarray(cs), np.asarray(fs))
 
 
 def facing_rise_profile(mesh, a_t: float, b_t: float,

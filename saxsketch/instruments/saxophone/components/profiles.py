@@ -22,8 +22,10 @@
 立ち上がる（実測とほぼ一致）。リード面から見た天井高さが z とともに増えるのは、
 天井が上がるからではなくテーブルが下がるためである。
 
-断面はスーパー楕円 |2x/w|^n + |2(y-yc)/h|^n = 1 で表現する
+断面はスーパー楕円 |2x/w|^nx + |2(y-yc)/h|^ny = 1 で表現する
 （n=2 かつ w=h で真円、n が大きいほど角形）。ロフトが安定し自己交差しない。
+**上半分だけ別の x 指数**（`nx_top`）を使い、実測どおり天井を横方向にアーチさせる。
+ny>1 なら上下どちらの半分も X=±1 で接線が垂直なので、赤道は G1 のまま繋がる。
 """
 from __future__ import annotations
 
@@ -35,6 +37,22 @@ import math
 def _smoothstep(t: float) -> float:
     t = min(max(t, 0.0), 1.0)
     return t * t * (3 - 2 * t)
+
+
+def _soft_min(a: float, b: float, k: float = 0.35) -> float:
+    """C∞ な最小値（常に `min(a, b)` 以下、最大 k/2 だけ下）。
+
+    形状の頭打ちに素の `min()` を使うと、**発動が切り替わる z で傾きが折れる**。
+    その折れは面の上に稜線として残り、実物には無い棚・段差になる（旧実装の
+    `chord_lim` / `_contain` がこれだった）。`min` 以下を返すので外殻への
+    封じ込めは保証したまま、角だけが取れる。
+    """
+    return 0.5 * (a + b - math.sqrt((a - b) ** 2 + k * k))
+
+
+def _soft_max(a: float, b: float, k: float = 0.35) -> float:
+    """`_soft_min` の対。常に `max(a, b)` 以上を返す。"""
+    return -_soft_min(-a, -b, k)
 
 
 def _pchip(pts: list[tuple[float, float]], x: float) -> float:
@@ -165,8 +183,13 @@ _SHOULDER_PROFILE = [
 ]
 
 
-def outer_radius(p: dict, z: float) -> float:
-    """胴の外半径（切除前）。ボア軸まわりの真円。"""
+def outer_radius_nominal(p: dict, z: float) -> float:
+    """胴の外半径（ティップ面取りを掛ける前）。ボア軸まわりの真円。
+
+    テーブル位置やビーク稜線の**基準**はこちらで取る。面取りは仕上げの削り代で、
+    基準を動かしてはいけない（`outer_radius` を使うと z=0 で 0.7mm ぶん
+    テーブルごと下がってティップ開きが狂う）。
+    """
     r_max = p["body_dia"] / 2.0
     heel = heel_z(p)
     if z <= heel:
@@ -177,6 +200,69 @@ def outer_radius(p: dict, z: float) -> float:
     if s >= 1.0:
         return r_sh
     return r_sh + (r_max - r_sh) * _pchip(_SHOULDER_PROFILE, s)
+
+
+# ティップ前縁の面取り
+#
+# 実物はリード面側から削られていて、z=0 の前面は 0.25mm しかない（面取り無しだと
+# `tip_rail_thickness` ぶん＝テナーで 1.25mm の角ばった壁が立ち、その両端が
+# 90°近い稜線になる）。実測は先端輪郭から勾配 3.4（Δy/Δz）で z 方向 0.13–0.15mm、
+# x=0/1/2/3 のどこでも勾配は 3.1–3.6 でほぼ一定＝**先端の弧に沿った面取り**。
+#
+# 胴は回転体なので、z≈0 で半径を細らせるだけで面取りが弧へ自動で沿う
+# （リード面カットは固定平面なので、(x,z) の最下面は max(cut_top, −√(r²−x²))）。
+# 削り代そのものはサイズで変わるのでテンプレートの `tip_chamfer`、面取り角は
+# 仕上げの定数なのでここに置く。
+
+#: 削り代 ÷ 面取り長。
+_TIP_CHAMFER_SLOPE = 4.1
+#: 削り代に対するビーク稜線の下げ量。前面高さを実測の 0.25mm にする値。
+_TIP_FACE_DROP_RATIO = 0.43
+
+
+def tip_chamfer_depth(p: dict) -> float:
+    """ティップ前縁の面取り代（z=0 での半径の削り量）[mm]。"""
+    return max(p.get("tip_chamfer", 0.0), 0.0)
+
+
+def tip_chamfer_len(p: dict) -> float:
+    """面取りが公称半径へ戻るまでの z [mm]。"""
+    return tip_chamfer_depth(p) / _TIP_CHAMFER_SLOPE
+
+
+def _tip_chamfer_ramp(p: dict, z: float) -> float:
+    """面取りの効き具合 1→0。z ≥ 面取り長 で 0。"""
+    ln = tip_chamfer_len(p)
+    if ln <= 0.0 or z >= ln:
+        return 0.0
+    return 1.0 - max(z, 0.0) / ln
+
+
+def outer_radius(p: dict, z: float) -> float:
+    """胴の外半径（切除前）。ティップ前縁の面取りを含む。"""
+    return (outer_radius_nominal(p, z)
+            - tip_chamfer_depth(p) * _tip_chamfer_ramp(p, z))
+
+
+def body_stations(p: dict) -> list[float]:
+    """胴の回転体プロファイルを取る z の列。
+
+    母線が区分直線なので、曲率の高い所は弦がその内側を通る（誤差 ≈ κ·dz²/8）。
+    ノーズは 1.4mm 刻みだと z=2 で半径が 0.29mm 痩せ、リード面が胴を切る弦＝
+    先端輪郭がそのぶん内側へ寄って**ティップレールが 0.3mm 細く見えていた**。
+    誤差は dz² で効くので 0.25mm 刻みまで詰めると 0.01mm に落ちる。
+    先頭の面取り区間は 0.17mm しかなく、0.25mm 刻みだと丸ごと飛ぶので両端を足す。
+    """
+    length = p["overall_length"]
+    heel = heel_z(p)
+    ch = tip_chamfer_len(p)
+    zs = {0.0, ch,                                             # 面取りの両端
+          *(0.25 * i for i in range(7)),                       # 0.0–1.5 ノーズ
+          *(1.5 + 0.45 * i for i in range(1, 8)),              # 1.95–4.65
+          *(4.65 + 1.0 * i for i in range(1, 5)),              # 5.65–8.65
+          *(z for z in (heel * (i / 24.0) ** 1.6 for i in range(25)) if z > 9.0),
+          *(heel + (length - heel) * i / 12.0 for i in range(13))}
+    return sorted(zs)
 
 
 # ---------------------------------------------------------------- テーブル平面（傾斜）
@@ -194,7 +280,7 @@ def table_plane_y(p: dict, z: float) -> float:
     実測（table(0) = −7.916、r(0) = 5.32、tip_opening 2.6）とこの式は 0.004mm で一致する。
     ティップ開きを広げればテーブルはその分だけ下がり、先端は z=0 に留まる。
     """
-    y0 = -outer_radius(p, 0.0) - p["tip_opening"]
+    y0 = -outer_radius_nominal(p, 0.0) - p["tip_opening"]
     return y0 - math.tan(table_angle(p)) * z
 
 
@@ -256,20 +342,29 @@ _BEAK_BITE = 0.25
 #: ビークが胴へ溶けるブレンド区間（heel_z 比）。実測 34.2→41.5mm / 79mm。
 _BEAK_BLEND0 = 0.433
 _BEAK_BLEND1 = 0.525
-#: ブレンドの進み方。実測は「長く粘ってから一気に胴へ寄る」形で、
-#: smoothstep（対称）では中盤が 1.6mm 浮いた。指数 2.5 で ≤0.1mm に収まる。
-_BEAK_BLEND_EXP = 2.5
+#: ブレンドの偏り。1.0 で対称（smoothstep）、大きいほど「粘ってから寄る」。
+#: 実測の中盤（u(0.5)≒0.18）に合う値。
+_BEAK_BLEND_BIAS = 1.9
 
 
 def _beak_blend(p: dict, z: float) -> float:
-    """ビークが胴へ溶ける進行度 u∈[0,1]。"""
+    """ビークが胴へ溶ける進行度 u∈[0,1]。
+
+    稜線は y(z) = line(z) + (top(z) − line(z))·u(z)。両端で折れないためには
+    **u'(z0) = u'(z1) = 0** が必要十分になる（z0 で線へ、z1 で胴へ接する）。
+
+    旧実装の `u = t**2.5` は u'(0)=0 は満たすが u'(1)=2.5/span ≠ 0 で、
+    ビークが胴へ消える所に折れが残っていた。かといって素の `smoothstep`
+    （両端0）だと中盤が実測より 1.6mm 浮く。t を先に乗すと **両端の傾き0を保ったまま**
+    中盤だけ寝かせられるので、smoothstep(t**bias) で両立させる。
+    """
     heel = heel_z(p)
     z0, z1 = _BEAK_BLEND0 * heel, _BEAK_BLEND1 * heel
     if z <= z0:
         return 0.0
     if z >= z1:
         return 1.0
-    return ((z - z0) / (z1 - z0)) ** _BEAK_BLEND_EXP
+    return _smoothstep(((z - z0) / (z1 - z0)) ** _BEAK_BLEND_BIAS)
 
 
 def beak_ridge_radius(p: dict) -> float:
@@ -291,8 +386,15 @@ def beak_angle(p: dict) -> float:
 
 
 def beak_apex_y(p: dict, z: float) -> float:
-    """ビーク稜線（x=0）の Y。胴へのブレンドを含む。"""
-    line = beak_apex_y0(p) + math.tan(beak_angle(p)) * z
+    """ビーク稜線（x=0）の Y。胴へのブレンドと、ティップ前縁の面取りを含む。
+
+    面取りは半径を細らせるだけでは足りない。z=0 での前面の高さは
+    「ビーク稜線 − 細らせた半径」なので、稜線も同じ区間だけ下げないと
+    前面が 0.69mm 残る（実測 0.25mm）。
+    """
+    line = (beak_apex_y0(p) + math.tan(beak_angle(p)) * z
+            - _TIP_FACE_DROP_RATIO * tip_chamfer_depth(p)
+            * _tip_chamfer_ramp(p, z))
     u = _beak_blend(p, z)
     if u <= 0.0:
         return line
@@ -320,19 +422,64 @@ def beak_y(p: dict, z: float) -> float:
     return beak_apex_y(p, z)
 
 
+def beak_cut_stations(p: dict, n: int = 44) -> list[float]:
+    """ビーク切除ソリッドの断面を取る z の列。
+
+    ロフトはルールド（断面間が直線）なので、刻みより短い特徴は均されて後ろへ
+    伸びる。既定の刻みは 1.9mm あり、長さ 0.17mm のティップ面取りをそのまま
+    掛けると稜線の下げが **z=1.9 まで線形に残り、z=0.6 で 0.2mm** 効いていた。
+    面取りの折れ目 z=0 と z=面取り長 に断面を入れて閉じ込める。ティップ側では
+    稜線も横断面半径も z の一次式なので、この2点だけでルールドロフトが厳密に一致する
+    （区間を等分しても得られるものは無く、ロフトとブーリアンが遅くなるだけ）。
+    """
+    zs = {-2.0 + (heel_z(p) + 4.0) * i / (n - 1) for i in range(n)}
+    ch = tip_chamfer_len(p)
+    if ch > 0.0:
+        zs |= {0.0, ch}
+    return sorted(zs)
+
+
+#: ブレンド終端付近で切除ソリッドを胴から逃がす量 [mm]。
+_BEAK_CUT_CLEAR = 1.2
+#: 逃がしを効かせ始めるブレンド進行度。
+_BEAK_CUT_LIFT_U = 0.88
+
+
+def _beak_cut_lift(p: dict, z: float) -> float:
+    """ビーク切除ソリッドを胴の外へ逃がす量 [mm]。
+
+    ブレンド終端では `beak_apex_y == outer_radius` かつ横断面の曲率半径も胴と一致し、
+    切除ソリッドの下面が **胴の外周面と完全に一致する**。面と面の一致は OCCT の
+    ブーリアンが最も苦手とする条件で、実際にカットが黙って失敗し（胴がそのまま
+    返る）ビークがまったく削れないことがあった。ステーション数を 44→60 に変える
+    だけで成否が入れ替わる程度に不安定で、`is_valid` が False だったのもこれが原因。
+
+    そこで終端付近だけ切除ソリッドを持ち上げ、常に**横断**（transversal）で交わる
+    ようにする。持ち上げによる削り残しは `min(lift, 胴と稜線の差)` で、差の方は
+    終端で 0 に収束するので最大でも 0.45mm・z 幅 1mm 程度にとどまる。
+    """
+    u = _beak_blend(p, z)
+    if u <= _BEAK_CUT_LIFT_U:
+        return 0.0
+    return _BEAK_CUT_CLEAR * _smoothstep(
+        (u - _BEAK_CUT_LIFT_U) / (1.0 - _BEAK_CUT_LIFT_U))
+
+
 def beak_cut_section(p: dict, z: float, half_width: float,
                      samples: int = 33) -> list[tuple[float, float]]:
     """ビーク切除ソリッドの断面（x, y）閉ポリゴン。
 
     稜線の円弧に沿って下辺を作り、上を y=+H で閉じる。円弧は胴より広く取るので、
-    胴の左右も含めて「ビーク面より上」を確実に覆う。
+    胴の左右も含めて「ビーク面より上」を確実に覆う。ブレンド終端付近では
+    `_beak_cut_lift` だけ胴から逃がす（理由はそちらの説明）。
     """
     r_ridge = beak_ridge_radius(p)
     xa = min(half_width, 0.95 * r_ridge)
+    lift = _beak_cut_lift(p, z)
     pts = []
     for i in range(samples):
         x = -xa + 2.0 * xa * i / (samples - 1)
-        pts.append((x, beak_top_y(p, z, x)))
+        pts.append((x, beak_top_y(p, z, x) + lift))
     h = 4.0 * p["body_dia"]
     pts.append((xa, h))
     pts.append((-xa, h))
@@ -340,35 +487,114 @@ def beak_cut_section(p: dict, z: float, half_width: float,
 
 
 # ---------------------------------------------------------------- 内部空洞
+#
+# 空洞は「ウィンドウ（スロット）を彫ったもの」ではなく **1本の滑らかな管** として
+# 定義する。実物もそう作られていて、リード面（テーブル＋フェイシング）がこの管を
+# 切った所がウィンドウになる。
+#
+# 旧実装はスロットを明示的に作っていたため、開口幅・床の立ち上がり・閉口後の
+# 「鍵穴」解消がそれぞれ別の式になり、**継ぎ目で傾きが飛んで**内部に棚と縦壁が
+# 出ていた（実測: d(半幅)/dz が −0.94 → +2.09、d(床)/dz が −0.07 → +0.71）。
+#
+# 管は3本の曲線だけで決まる。すべて PCHIP（構成上 C1）で、min/max による
+# 頭打ちも `_soft_min` に置き換えてあるので、全長にわたって折れが無い:
+#
+#   W(z) = cavity_half_width(p, z)   半幅
+#   C(z) = cavity_roof_y(p, z)       天井（＝バッフル）
+#   F(z) = cavity_floor_y(p, z)      床
+#
+# ウィンドウは **F(z) が cut_top_y(z) を上へ横切る所で自然に閉じる**。開口幅も
+# 「管の断面がリード面で切られた弦」として出るので、専用の式を持たない。
 
 #: バッフルが無いときのティップ天井高さ（リード面から）。bore_dia 比。
-_TIP_GAP_FREE_RATIO = 0.312
-#: バッフル天井が平坦なまま続く区間（ウィンドウ長比）。実測 18mm / 40.5mm。
-_BAFFLE_FLAT = 0.44
-#: 平坦区間の後の直線ランプが終わる位置（平坦端→ボア開始 を 1 とした比）と、
-#: そこまでに稼ぐ立ち上がり量の比。実測（ランプ終端 z=32、天井 −0.71）から。
-_BAFFLE_RAMP_T = 0.419
-_BAFFLE_RAMP_F = 0.335
-#: ランプ後のボア天井への寄り方（1-(1-u)^k）。実測 k=2.1。
-_BAFFLE_BLEND_K = 2.1
+#: 実測のテナー（`tip_rail_width` 0.85 / `baffle_height` 2.6）で
+#: `baffle_plateau_y` と `tip_roof_y` が一致するよう校正した値。
+#: これにより既定値では天井が実測どおり「ボア軸に平行な一枚の平面」になる。
+_TIP_GAP_FREE_RATIO = 0.2956
+#: バッフル天井が平坦なまま続く区間（ボア開始位置 zb 比）。実測 18.0mm / 50.0mm。
+#: 天井の法則はボア（zb で必ずボア円になる）を基準にするのが自然なので、
+#: ウィンドウ長ではなく zb で正規化する。
+_BAFFLE_FLAT = 0.36
 
 
 def window_width(p: dict) -> float:
     return p["reed_width"] - 2.0 * p["side_rail_width"]
 
 
-#: ウィンドウ開口（リード面のスロット）幅の z 方向プロファイル
-#: (t = 窓区間内の進行度, スロット幅 / window_width)。実測: ティップ寄りは
-#: 弦いっぱいまで開き（サイドレールがほぼ無い）、後方へ向かってレールが太るぶん
-#: 細くなり、最後に丸く閉じる。
-_SLOT_WIDTH = [
-    (0.00, 1.32), (0.11, 1.25), (0.25, 1.19), (0.34, 1.16), (0.43, 1.11),
-    (0.52, 1.08), (0.62, 1.05), (0.71, 1.02), (0.80, 0.95), (0.85, 0.89),
-    (0.89, 0.73), (0.93, 0.48), (1.00, 0.25),
+# --- 実測テーブル（WindyCity Tenor .100" LS を σ = z / bore_start_z で正規化）---
+#
+# σ を zb で正規化するのは、3本とも「z=zb でボア円になる」という共通の終端条件を
+# 持つため。終端で必ず一致するので、遷移区間を別式で繋ぐ必要が無い（旧実装の
+# `_TRANSITION_TS` + smoothstep がまさにその継ぎ目だった）。
+
+#: 半幅 W / bore_radius。ティップで一気に開いたあとは、z≈31 で 0.865 まで緩く
+#: 絞られてボアへ開くだけ。旧実装が「窓が後方で細くなる」と見ていたのは開口の話で、
+#: **窓の区間より後ろの管はほぼ一定径**（全変化 1.15mm）だった。
+#:
+#: σ≲0.08（z≲4）の頭は Stage C-1b で実測から起こし直した。旧値（σ=0.024 で 0.980）は
+#: **管ではなく胴の内側を拾っていた**。実物の断面を z 一定で切ると、空洞は z=1.5 で
+#: |x|≲4.3、z=2.0 で ≲5.0、z=2.5 で ≲6.0、z=3.0 で ≲7.0、z=4.0 で ≲8.1 までしか無い。
+#: ティップレールが先端に沿って一周する以上、管もその分だけ内側へ入る。
+#: 旧値だと管がレールの下まで張り出し、**コーナーでレールが 0.02mm まで痩せていた**。
+_CAVITY_W = [
+    (0.019, 0.480), (0.023, 0.535), (0.025, 0.595), (0.030, 0.705),
+    (0.035, 0.770), (0.040, 0.815), (0.045, 0.855), (0.050, 0.890),
+    (0.055, 0.905), (0.060, 0.918), (0.065, 0.935), (0.070, 0.948),
+    (0.080, 0.953), (0.100, 0.954), (0.140, 0.960), (0.200, 0.951),
+    (0.260, 0.935), (0.320, 0.922), (0.380, 0.906), (0.440, 0.895),
+    (0.500, 0.890), (0.560, 0.890), (0.620, 0.889), (0.680, 0.898),
+    (0.740, 0.913), (0.800, 0.928), (0.860, 0.941), (0.920, 0.961),
+    (0.980, 0.985), (1.000, 1.000),
 ]
-#: チェンバー幅 / window_width。実測ではスロットが狭まっても内部の幅は
-#: ほぼ一定（≈14.7mm）。ティップ寄りはスロットの方が広いので下限として使う。
-_CAVITY_WIDTH_RATIO = 1.17
+#: 天井 C の立ち上がり率 v = (C − y_flat)/(bore_radius − y_flat)。実測は
+#: 「平坦 → 傾き一定の直線ランプ → S字でボアへ」。σ=0.36 まで完全に平坦。
+_CAVITY_C = [
+    (0.000, 0.000), (0.360, 0.000), (0.380, 0.013), (0.410, 0.049),
+    (0.440, 0.086), (0.470, 0.123), (0.500, 0.159), (0.530, 0.196),
+    (0.560, 0.233), (0.590, 0.270), (0.620, 0.307), (0.650, 0.344),
+    (0.680, 0.441), (0.710, 0.572), (0.740, 0.667), (0.770, 0.740),
+    (0.800, 0.803), (0.830, 0.853), (0.860, 0.896), (0.890, 0.931),
+    (0.920, 0.960), (0.950, 0.982), (0.980, 0.996), (1.000, 1.000),
+]
+#: 床の「リード面からの落とし込み」 D = (cut_top_y − F)/bore_radius。
+#: 正なら窓が開いている。実測の窓幅から断面式を逆に解いて求めた（開口の
+#: 直接実測に一致する床は一意に決まる）。σ≈0.838 で 0 を横切る＝そこが窓の終端で、
+#: その先はチェンバー床として実測値そのもの。
+_CAVITY_D = [
+    (0.000, 0.100), (0.120, 0.073), (0.180, 0.087), (0.240, 0.093),
+    (0.300, 0.098), (0.360, 0.116), (0.420, 0.138), (0.480, 0.146),
+    (0.540, 0.153), (0.600, 0.138), (0.660, 0.120), (0.720, 0.092),
+    (0.780, 0.048), (0.838, 0.000), (0.850, -0.085), (0.862, -0.160),
+    (0.875, -0.210), (0.900, -0.260), (0.930, -0.288), (0.960, -0.321),
+    (0.990, -0.354), (1.000, -0.367),
+]
+#: `side_rail_width` を基準値から動かしたときに W が効く重み。窓の区間で 1、
+#: ボアでは 0（ボア径はレール幅と無関係）。
+_RAIL_WEIGHT = [(0.000, 1.0), (0.700, 1.0), (0.838, 0.85), (0.940, 0.3),
+                (1.000, 0.0)]
+#: `_CAVITY_W` を起こした実物のサイドレール幅 [mm]。ここからの差分だけが効く。
+_RAIL_REF = 1.1
+
+#: 窓区間の断面指数 (x, y)。x を大きく取ると側壁がほぼ垂直になり、リード面の
+#: 高さで開口幅が痩せない。実測（z=6 と z=16 で、2.5mm の高さにわたり半幅の
+#: 変化が 0.2mm）に合わせた値。旧実装はここを「直立壁＋フレア」の折れ線で
+#: 作っていて、その折れが空洞の全長を走る棚になっていた。
+_SECTION_NX = 6.0
+_SECTION_NY = 2.4
+
+#: 天井の横アーチ（断面の上半分だけに使う x 指数）。小さいほどアーチが深い。
+#: 実測の天井は x=7mm で 0.31mm 下がり、そのサグは z によらずほぼ一定
+#: （0.33/0.32/0.31/0.30 @ z=3/5/8/14）。断面高さ h はティップで 0.7mm・
+#: z=14 で 4.2mm と 6 倍違うので、**一定サグを保つには指数を σ とともに上げる**。
+#: σ≳0.16 では `nx`（=6）へ戻す＝後方の断面は現行のまま（そこはモデルの落差
+#: 0.48mm が実測 0.30mm より既に大きく、触ると検証済みの数値が動く）。
+_TOP_ARCH = [(0.000, 1.80), (0.060, 1.85), (0.090, 2.10), (0.120, 2.80),
+             (0.160, 6.00), (1.000, 6.00)]
+
+
+def _cav_sigma(p: dict, z: float) -> float:
+    zb = bore_start_z(p)
+    return z / zb if zb > 1e-9 else 0.0
 
 
 def reed_chord(p: dict, z: float) -> float:
@@ -389,94 +615,246 @@ def table_chord(p: dict, z: float) -> float:
     return reed_chord(p, z)
 
 
+#: ロフト前端を窓の前縁より手前へ置く量 [mm]。前端の蓋がリード面より下
+#: （フェイシングカットで消える側）に沈むので、窓の前縁は「天井がリード面を
+#: 突き抜ける線」だけで決まり、軸に直角な直線の縁ができない。
+_LOFT_FRONT_LEAD = 0.45
+
+
+def window_front_z(p: dict) -> float:
+    """設計上の窓前縁 z（＝クラウンでのティップレール幅）。
+
+    先端は z=0 に立つので、窓が開き始める z がそのままレール幅になる。
+    天井のティップ高さを `tip_roof_y` でこの点に合わせてあるため、外殻で
+    頭打ちにならない限り実際の前縁もここに一致する（実効値は `window_open_z`）。
+    """
+    return max(p["tip_rail_width"], 0.05)
+
+
 def window_start_z(p: dict) -> float:
-    return p["tip_rail_width"] + 0.2
+    """空洞ロフトの開始平面。**窓の前縁ではない**。
+
+    旧実装はここが `tip_rail_width + 0.2` の平面で、しかもその平面がリード面より
+    上に出ていたため、**窓の前縁が軸に直角な直線**になっていた（x=±5.0 まで
+    z=1.20 で一定）。実物の前縁は先端輪郭の等距離オフセットで、レール幅は
+    クラウンからコーナーまで 0.83mm 一定。前端を前へ出して蓋を沈める。
+    """
+    return max(window_front_z(p) - _LOFT_FRONT_LEAD, 0.25)
 
 
 def window_end_z(p: dict) -> float:
     """ウィンドウ後端。チェンバー→ボアの遷移区間を必ず残す。"""
     zb = bore_start_z(p)
-    return min(window_start_z(p) + p["window_length"], zb - 4.0)
+    return min(window_front_z(p) + p["window_length"], zb - 4.0)
+
+
+def window_open_z(p: dict) -> float:
+    """窓が実際に開き始める z（クラウン x=0）。天井がリード面を横切る点。
+
+    設計値は `window_front_z`（＝`tip_rail_width`）。外殻（ビーク下の肉厚）で
+    天井が頭打ちになるとここが後ろへずれるので、検証と逆算はこの実効値で見る。
+    """
+    lo, hi = 0.0, bore_start_z(p)
+    if cavity_roof_y(p, hi) <= cut_top_y(p, hi):
+        return hi
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if cavity_roof_y(p, mid) > cut_top_y(p, mid):
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def baffle_flat_end_z(p: dict) -> float:
+    """バッフル天井の平坦区間が終わる z（＝ランプの起点）。"""
+    return _BAFFLE_FLAT * bore_start_z(p)
+
+
+#: 天井の頭打ちに使う soft-min の幅。ティップの天井は「窓がどこで開くか」を
+#: 直接決めるので、ここのバイアス（最大 k/2）がそのままレール幅の誤差になる。
+#: 実際 k=0.35 では 0.12mm 下がって、レールが 0.2mm 以上広がっていた。
+_ROOF_SOFT_K = 0.12
+#: 天井がレール基準からバッフル基準へ移る区間（σ）。
+_TIP_ROOF_SPAN = 0.10
+
+
+def tip_roof_y(p: dict) -> float:
+    """ティップ側の平坦な天井の高さ。`tip_rail_width` から一意に決まる。
+
+    天井がリード面を突き抜ける z がそのままレール幅なので（先端は z=0 に立つ）、
+    レール幅を与えれば天井は決まる。`table_plane_y` が「ティップが z=0 に立つ」
+    で決まっているのと同じ立て方で、魔法定数を置かずに実測へ合う。
+    """
+    return cut_top_y(p, window_front_z(p))
+
+
+def baffle_plateau_y(p: dict) -> float:
+    """バッフル区間の平坦な天井の高さ。`baffle_height` から決まる。"""
+    gap = _TIP_GAP_FREE_RATIO * p["bore_dia"] - p["baffle_height"]
+    gap = max(gap, 0.35 * p["min_wall"])
+    return table_plane_y(p, 0.0) + gap
+
+
+def _roof_base_y(p: dict, sigma: float) -> float:
+    """バッフルが立ち上がる前の天井。ティップはレール基準、σ≳0.1 でバッフル基準。
+
+    `_TIP_GAP_FREE_RATIO` は実測のテナーで両者が一致するよう校正してあるので、
+    既定値ではこのランプ量はゼロ＝実測どおり「ボア軸に平行な平面」のまま。
+    `tip_rail_width` と `baffle_height` を別々に動かしたときだけ、C1 のまま繋ぐ。
+    """
+    y_tip, y_bf = tip_roof_y(p), baffle_plateau_y(p)
+    return y_tip + (y_bf - y_tip) * _smoothstep(sigma / _TIP_ROOF_SPAN)
+
+
+def cavity_roof_y(p: dict, z: float) -> float:
+    """内部空洞の天井 C(z)（ボア軸基準の絶対値、x=0 のクラウン）。
+
+    実測ではティップ側の天井は **ボア軸に平行な平面** で σ=0.36 までフラットに続き、
+    そこから傾き一定の直線ランプ、最後に S 字でボア天井へ寄る。リード面から見た
+    天井高さが増えるのは、天井が上がるからではなくテーブルが下がるため。
+
+    旧実装は「直線ランプ→指数ブレンド」を継いでいて、継ぎ目で傾きが 0.80 → 2.40 と
+    3倍に飛んでいた（バッフルを横切る稜線として見えていた）。ここを実測点列の
+    PCHIP にすると、同じ形を C1 のまま通せる。
+
+    横方向のアーチ（サグ）は断面側（`_super_pts` の `nx_top`）が持つ。
+    """
+    sig = _cav_sigma(p, z)
+    y0 = _roof_base_y(p, sig)
+    y = y0 + (bore_radius(p) - y0) * _baffle_progress(p, sig)
+    return _soft_min(y, shell_limit(p, z)["top"], _ROOF_SOFT_K)
 
 
 def baffle_roof_y(p: dict, z: float) -> float:
-    """内部空洞の天井 Y（ボア軸基準の絶対値）。
+    """[互換] `cavity_roof_y` の旧名。"""
+    return cavity_roof_y(p, z)
 
-    実測ではティップ側の天井は **ボア軸に平行な平面** で、ウィンドウ長の 44% まで
-    フラットに続き、そこからボア開始位置に向かって smoothstep でボア天井へ上がる
-    （実測とのずれは最大 0.6mm）。リード面から見た天井高さが増えるのは、天井が
-    上がるからではなくテーブルが下がるため。
+
+def baffle_sensitivity(p: dict, z: float) -> float:
+    """`baffle_height` を 1mm 上げたとき天井が z で下がる量 [mm/mm]。
+
+    天井は `y0(σ) + (bore_r − y0)·v(σ)` で、`baffle_height` は y0 のうち
+    バッフル基準の分だけを 1:1 で下げるので、感度は `w(σ)·(1 − v(σ))`。
+    逆算（`measure.py`）が実測の天井高さから `baffle_height` を戻すのに使う。
+    ティップ側（w→0、レール基準）とボア側（v→1）はどちらも 0 に落ちる＝そこでは測れない。
     """
-    z_start = window_start_z(p)
-    gap = _TIP_GAP_FREE_RATIO * p["bore_dia"] - p["baffle_height"]
-    gap = max(gap, 0.35 * p["min_wall"])
-    y0 = table_plane_y(p, z_start) + gap
-    z_flat = z_start + _BAFFLE_FLAT * p["window_length"]
+    sig = _cav_sigma(p, z)
+    w = _smoothstep(sig / _TIP_ROOF_SPAN)
+    return w * (1.0 - _baffle_progress(p, sig))
+
+
+def cavity_half_width(p: dict, z: float) -> float:
+    """内部空洞の半幅 W(z)。
+
+    実測では管の径はほぼ一定（0.865〜1.00 × ボア半径）。「窓が後方で細くなる」のは
+    開口の話で、管そのものは絞られていない。旧実装はこれを取り違えてスロット幅を
+    直接絞っており、閉口処理と衝突して z=41 付近にくびれと縦壁を作っていた。
+
+    `side_rail_width` は基準値からの差分だけが効く（レールを広げれば管が細り、
+    結果として開口が狭くなる）。ボア端では効かない。
+    """
+    sig = _cav_sigma(p, z)
+    w = bore_radius(p) * _pchip(_CAVITY_W, sig)
+    w -= (p["side_rail_width"] - _RAIL_REF) * _pchip(_RAIL_WEIGHT, sig)
+    return max(_soft_min(w, shell_limit(p, z)["half_width"]), 0.35)
+
+
+def cavity_floor_y(p: dict, z: float) -> float:
+    """内部空洞の床 F(z)。
+
+    リード面からの落とし込み `D = (cut_top_y − F)/bore_radius` として持つ。D>0 の
+    間だけ窓が開き、**D が 0 を横切る z が窓の終端**になる。段差もランプも要らない。
+
+    実測テーブルはアフィン変換（a·D + b）で 2 つの端条件へ合わせる:
+      - `window_end_z` で D=0（＝窓がそこで閉じる。`window_length` が効く）
+      - `bore_start_z` で F = −bore_radius（＝遷移区間を別式で繋がなくてよい）
+    アフィンなので PCHIP の C1 性はそのまま残る。
+    """
+    rb = bore_radius(p)
     zb = bore_start_z(p)
-    y_bore = bore_radius(p)
-    if z <= z_flat:
-        return y0
-    if z >= zb:
-        return y_bore
-    return y0 + (y_bore - y0) * _baffle_progress(p, (z - z_flat) / (zb - z_flat))
+    t0 = _pchip(_CAVITY_D, window_end_z(p) / zb if zb > 1e-9 else 1.0)
+    t1 = _pchip(_CAVITY_D, 1.0)
+    target = (cut_top_y(p, zb) + rb) / rb
+    span = t1 - t0
+    a = target / span if abs(span) > 1e-6 else 1.0
+    d = a * (_pchip(_CAVITY_D, _cav_sigma(p, z)) - t0)
+    return _soft_max(cut_top_y(p, z) - rb * d, _floor_limit(p, z))
 
 
-def _baffle_progress(p: dict, t: float) -> float:
-    """平坦区間の終わり→ボア開始 における天井の立ち上がり率 u∈[0,1]。
+#: 窓の区間で床の下限拘束を外す量 [mm]。
+_FLOOR_RELIEF = 6.0
 
-    rollover=実測どおりの「直線ランプ＋指数ブレンド」（基準。実測とのずれ ≤0.16mm）、
-    straight=線形、step=急峻な段差、curve=早く立ち上がって高天井で張り出す
-    （メタリック/アグレッシブ）。
+
+def _floor_limit(p: dict, z: float) -> float:
+    """床の許容下限。**窓が開いている区間では効かせない**。
+
+    `shell_limit["bot"]`（= −(ro − min_wall)）は「胴の底に肉厚を残す」拘束だが、
+    窓の区間では胴の底はフェイシングカットで既に無い（残っている最下面はリード面で、
+    窓ではそれすら無い）。ティップでは ro が小さいのでこの拘束がリード面より上に来て、
+    床が押し上げられて**窓が閉じる**（z=0.85 で bot が cut_top より 0.05mm 上）。
+    旧実装がロフトを z=1.2 から始めていたのはこれを避けるためだった。
     """
-    t = min(max(t, 0.0), 1.0)
+    zb = bore_start_z(p)
+    s_we = window_end_z(p) / zb if zb > 1e-9 else 1.0
+    w = _pchip([(0.0, 0.0), (s_we, 0.0), (min(s_we + 0.06, 1.0), 1.0), (1.0, 1.0)],
+               _cav_sigma(p, z))
+    return shell_limit(p, z)["bot"] - _FLOOR_RELIEF * (1.0 - w)
+
+
+def _baffle_progress(p: dict, sigma: float) -> float:
+    """天井の立ち上がり率 v∈[0,1]（σ=z/zb、σ=1 でボア天井）。
+
+    rollover=実測どおり（基準）、straight=平坦端から線形、step=急峻な段差、
+    curve=早く立ち上がって高天井で張り出す（メタリック/アグレッシブ）。
+    step だけは**意図的に**段差を残す（そういうバッフルなので）。
+    """
+    sigma = min(max(sigma, 0.0), 1.0)
     kind = p.get("baffle_type", "rollover")
+    if kind == "rollover":
+        return _pchip(_CAVITY_C, sigma)
+    s0 = _BAFFLE_FLAT
+    t = 0.0 if sigma <= s0 else (sigma - s0) / (1.0 - s0)
     if kind == "straight":
         return t
     if kind == "step":
         return 0.06 + 0.94 * _smoothstep((t - 0.18) / 0.10)
-    if kind == "curve":
-        expo = 1.6 + p.get("rollover_radius", 8.0) / 10.0
-        return 1.0 - (1.0 - t) ** expo
-    if t <= _BAFFLE_RAMP_T:
-        return _BAFFLE_RAMP_F * t / _BAFFLE_RAMP_T          # 直線ランプ
-    u = (t - _BAFFLE_RAMP_T) / (1.0 - _BAFFLE_RAMP_T)
-    return _BAFFLE_RAMP_F + (1.0 - _BAFFLE_RAMP_F) * (
-        1.0 - (1.0 - u) ** _BAFFLE_BLEND_K)
+    expo = 1.6 + p.get("rollover_radius", 8.0) / 10.0   # curve
+    return 1.0 - (1.0 - t) ** expo
+
+
+#: 天井側の肉厚が `tip_rail_thickness` から `min_wall` へ戻るまでの区間（σ）。
+_TIP_WALL_SPAN = 0.10
+
+
+def _top_wall(p: dict, z: float) -> float:
+    """天井の上に残す肉厚。ティップでは `tip_rail_thickness` を使う。
+
+    ティップレールは**意図的に min_wall より薄い**（実測 1.25mm vs min_wall 1.8mm）。
+    ここを一律 min_wall で拘束すると、天井が beak−min_wall まで押し下げられて
+    窓の開き始めが 0.3mm ほど後ろへずれ、クラウンのレール幅が広くなる。
+    """
+    tip = min(p.get("tip_rail_thickness", p["min_wall"]), p["min_wall"])
+    return tip + (p["min_wall"] - tip) * _smoothstep(
+        _cav_sigma(p, z) / _TIP_WALL_SPAN)
 
 
 def shell_limit(p: dict, z: float) -> dict:
-    """z における空洞の許容包絡 {top, bot, half_width}（すべて min_wall だけ内側）。
+    """z における空洞の許容包絡 {top, bot, half_width}。
 
-    胴（真円）とビーク面から決まる「残る材料」の内寸。空洞ステーションは必ずここを
-    通す。テーブルカットは含めない — 窓はカット面より下へ抜けて初めて開口になるので、
-    下端まで拘束すると窓が閉じる（`_contain` が role で使い分ける）。
+    胴（真円）とビーク面から決まる「残る材料」の内寸。テーブルカットは含めない —
+    窓はカット面より下へ抜けて初めて開口になるので、下端まで拘束すると窓が閉じる。
+    天井側だけ肉厚が `_top_wall`（ティップではレール厚）、他は min_wall。
     """
     ro = outer_radius(p, z)
     mw = p["min_wall"]
     return {
-        "top": min(ro, beak_apex_y(p, z)) - mw,
+        "top": min(ro, beak_apex_y(p, z)) - _top_wall(p, z),
         "bot": -(ro - mw),
         "half_width": ro - mw,
     }
 
 
-#: 窓断面をサンプルする t 列（ティップ→窓終端）。ティップ側と後端を細かく刻む:
-#: 弦が急に広がる区間（t<0.1）と丸く閉じる区間（t>0.9）はステーションが疎だと
-#: ルールドロフトが直線の楔になり、窓が V 字に尖る。
-_WINDOW_TS = [0.0, 0.03, 0.06, 0.10, 0.16, 0.22, 0.35, 0.48, 0.62, 0.72,
-              0.80, 0.85, 0.89, 0.92, 0.95, 0.97, 1.0]
-#: ここまでは窓が開いている（床がリードカット面より下）。この先はランプで床を
-#: 上げて閉じる。段差で閉じると内部にほぼ垂直な棚ができるので必ずランプにする
-#: （`_window_floor` 参照）。見た目の開口終端は `window_length` の約 97%。
-_WINDOW_OPEN_T = 0.90
-#: 開口が実際に閉じ切る t（床がリード面を越える位置）。ここから先は外から見えない
-#: 内部断面なので、スロットの細りを止めてチェンバー断面へ戻す。戻さないと閉じた後も
-#: 「鍵穴」形の細い首が残り、実物にはない段付きチェンバーになる。
-_WINDOW_CLOSE_T = 0.93
-#: 窓終端→ボア開始の遷移をサンプルする比率。末尾は 1.0 未満にする
-#: （z=ボア開始 のステーションは別に1枚だけ置く。同じ z が2枚あるとロフトが
-#: 「Segments do not have sufficient separation」で落ちる）。
-_TRANSITION_TS = [0.20, 0.45, 0.68, 0.85]
 #: スロート（最狭部）が始まる位置（窓終端→ボア開始 を 1 とした比）。
 _THROAT_T = 0.75
 
@@ -485,8 +863,13 @@ def _throat_n(p: dict) -> float:
     return (_chamber_n(p) + 2.0) / 2.0
 
 
-#: チェンバー断面のスーパー楕円指数。
+#: チェンバー断面のスーパー楕円指数（面積計算・逆算用の等方値）。
 _CHAMBER_N = {"round": 2.2, "square": 3.8, "horseshoe": 2.6, "flat_sidewall": 3.0}
+#: チェンバー断面の (x指数, y指数)。フラットサイドウォールだけ異方
+#: （左右が垂直な平面・上下が丸い）。ロフトは全長で同じ族を通すので、
+#: 形状の作り分けはこの2値の補間だけで行う。
+_CHAMBER_NXY = {"round": (2.2, 2.2), "square": (3.8, 3.8),
+                "horseshoe": (2.6, 2.6), "flat_sidewall": (7.0, 2.4)}
 
 
 def _chamber_n(p: dict) -> float:
@@ -551,82 +934,141 @@ def chamber_ratio_from_width(p: dict, w_meas: float, r_t_meas: float) -> float:
     return a_ch / a_th if a_th > 0 else 1.0
 
 
-def _window_floor(p: dict, t: float, z: float) -> float:
-    """ウィンドウ断面の床 Y。
+#: 断面をサンプルする z の刻み [mm]。ルールドロフトの弦誤差は κ·dz²/8 で、
+#: 天井の曲率が最大の区間（κ≒0.45 /mm）でも 0.09mm に収まる密度。旧実装のように
+#: 区間ごとに別の t 列を持たない（列の切り替わり自体が継ぎ目になる）。
+_STATION_DZ = 1.6
 
-    `_WINDOW_OPEN_T` までは**リードカット面より下**に置く（そうして初めて窓が開く）。
-    その先は窓を閉じるが、段差でいきなり上げるとロフトにほぼ垂直な壁ができて
-    内部に不自然な棚が見える。閉じ区間はランプで持ち上げ、実物の丸い窓後端に寄せる。
+
+def _station_zs(p: dict) -> list[float]:
+    """空洞ステーションの z 列（ティップ→ボア）。
+
+    基本は等間隔だが、**曲率が高い2箇所だけ細かく刻む**:
+      - ノーズ（z 小）: 外形が急に太るので、空洞の半幅も外殻に押されて速く動く
+      - 窓の後端付近: 実物は床がほぼ垂直に立ち上がる（窓のバックウォール）
+    ここが疎だとルールドロフトが直線の楔になり、実物には無い折れ面が出る。
     """
-    open_y = cut_top_y(p, z) - _WINDOW_FLOOR_DROP
-    if t <= _WINDOW_OPEN_T:
-        return open_y
-    closed_y = table_plane_y(p, z) + _WINDOW_CLOSED_LIFT
-    u = (t - _WINDOW_OPEN_T) / max(1.0 - _WINDOW_OPEN_T, 1e-9)
-    return open_y + (closed_y - open_y) * _smoothstep(u)
+    z0 = window_start_z(p)
+    zb = bore_start_z(p)
+    z_we = window_end_z(p)
+    z_th = z_we + _THROAT_T * (zb - z_we)
+    n = max(int(math.ceil((zb - z0) / _STATION_DZ)), 8)
+    zs = {z0 + (zb - z0) * i / n for i in range(n + 1)}
+    zs |= {z_we, z_th, zb}                 # role の境界は必ずステーションを置く
+    # ティップ: 管が z=1→4 で半幅 3.5→8.1mm と一気に開く（レールが先端を一周する
+    # ぶん管が内側へ入るため）。ここが疎だとロフトが直線の楔になり、窓の縁が
+    # 多角形に見える。0.35mm 刻みで z=4.6 まで、その後 0.7mm 刻みで 6.7 まで。
+    zs |= {z0 + 0.35 * i for i in range(1, int((4.6 - z0) / 0.35) + 1)}
+    zs |= {4.6 + 0.7 * i for i in range(1, int(3.0 / 0.7) + 1)}
+    zs |= {z_we - 1.5 + 0.5 * i for i in range(1, int(3.5 / 0.5))}
+    out = sorted(z for z in zs if z0 - 1e-9 <= z <= zb + 1e-9)
+    # 近すぎる z は捨てる。ロフトが "Segments do not have sufficient separation" で
+    # 落ちるだけでなく、生き残っても薄いセグメントが局所的な面の乱れを作る
+    # （窓の輪郭に幅 0.2mm ほどの切り欠きが出ていた）。意図的な最小間隔 0.5mm より
+    # 十分小さい 0.4mm を境にする。境界 z は必ず残し、近すぎる隣を置き換える。
+    keep = [out[0]]
+    for z in out[1:]:
+        if z - keep[-1] > 0.40:
+            keep.append(z)
+        elif z in (z_we, z_th, zb):
+            keep[-1] = z
+    return keep
+
+
+def _station_role(p: dict, z: float) -> str:
+    zb = bore_start_z(p)
+    z_we = window_end_z(p)
+    if z >= zb - 1e-9:
+        return "bore"
+    if z >= z_we + _THROAT_T * (zb - z_we) - 1e-9:
+        return "throat"
+    return "window" if z <= z_we + 1e-9 else "chamber"
+
+
+def _section_exponents(p: dict, z: float) -> tuple[float, float, float]:
+    """断面のスーパー楕円指数 (nx, ny, nx_top)。z に沿って**滑らかに**変える。
+
+    途中で断面の「種類」を切り替えるとロフトが点対応を失ってねじれるので、族は
+    ひとつに保ち指数だけを動かす。窓区間は側壁がほぼ垂直（nx 大）、チェンバーは
+    `chamber_shape`、スロートとボアは真円寄り。
+
+    `nx_top` は天井の横アーチ（`_TOP_ARCH` 参照）。ティップ側だけ小さくして
+    アーチを深くし、σ が進むと `nx` に戻る＝後方は現行どおり。
+    """
+    zb = bore_start_z(p)
+    z_we = window_end_z(p)
+    s_we = z_we / zb if zb > 1e-9 else 1.0
+    s_th = (z_we + _THROAT_T * (zb - z_we)) / zb if zb > 1e-9 else 1.0
+    s_ch = 0.5 * (s_we + s_th)
+    nt = _throat_n(p)
+    nx_ch, ny_ch = _CHAMBER_NXY.get(p.get("chamber_shape", "round"), (2.2, 2.2))
+    sig = _cav_sigma(p, z)
+    nx = _pchip([(0.0, _SECTION_NX), (s_we, _SECTION_NX), (s_ch, nx_ch),
+                 (s_th, nt), (1.0, 2.0)], sig)
+    ny = _pchip([(0.0, _SECTION_NY), (s_we, _SECTION_NY), (s_ch, ny_ch),
+                 (s_th, nt), (1.0, 2.0)], sig)
+    nx_top = min(_pchip(_TOP_ARCH, sig), nx)
+    return nx, ny, nx_top
+
+
+def _chamber_weight(p: dict, z: float) -> float:
+    """チェンバー区間（窓終端→スロート）で 1、その外で 0 になる滑らかな重み。"""
+    zb = bore_start_z(p)
+    if zb <= 1e-9:
+        return 0.0
+    s_we = window_end_z(p) / zb
+    s_th = (window_end_z(p) + _THROAT_T * (zb - window_end_z(p))) / zb
+    return _pchip([(0.0, 0.0), (s_we, 0.0), (0.5 * (s_we + s_th), 1.0),
+                   (s_th, 0.0), (1.0, 0.0)], _cav_sigma(p, z))
+
+
+def _ratio_scale(p: dict, z: float) -> float:
+    """`chamber_ratio` / `throat_ratio` を断面の相似スケールとして滑らかに効かせる。
+
+    比 1.0 では実測どおり「単調にボアへ開く」形（実物にはチェンバーの膨らみも
+    スロートの狭窄も無い）。比を上げるとその区間だけ相似に太る。ボア端では
+    必ず 1.0 に戻る（ボア径はボア径のまま）。
+    """
+    zb = bore_start_z(p)
+    if zb <= 1e-9:
+        return 1.0
+    s_we = window_end_z(p) / zb
+    s_th = (window_end_z(p) + _THROAT_T * (zb - window_end_z(p))) / zb
+    w_th = _pchip([(0.0, 0.0), (0.5 * (s_we + s_th), 0.0), (s_th, 1.0), (1.0, 0.0)],
+                  _cav_sigma(p, z))
+    ch = math.sqrt(max(p.get("chamber_ratio", 1.0), 0.05)) - 1.0
+    th = math.sqrt(max(p.get("throat_ratio", 1.0), 0.05)) - 1.0
+    return 1.0 + ch * _chamber_weight(p, z) + th * w_th
 
 
 def cavity_stations(p: dict) -> list[dict]:
     """内部空洞ロフトの断面ステーション列。
 
-    各要素: {z, yc, h, w, n, role, shape}（スーパー楕円）。ティップ側→ボア側の順。
-    role は "window" / "chamber" / "throat" / "bore"。
-
-    ウィンドウ区間は「床＝リード面より下（＝開口）／天井＝バッフル天井」、
-    そこからボア開始位置に向かって床・天井・幅がボア円へ収束する。
+    各要素: {z, yc, h, w, nx, ny, n, role, shape}。ティップ側→ボア側の順。
+    role は "window" / "chamber" / "throat" / "bore"（z 範囲から決まるラベルで、
+    形状の作り分けではない — 管は最初から最後まで1本の連続体）。
     """
-    z_start = window_start_z(p)
-    z_we = window_end_z(p)
-    zb = bore_start_z(p)
-    rb = bore_radius(p)
-    r_t = throat_radius(p)
-    w_ch, h_ch = chamber_size(p)
-    w_win = window_width(p)
-    n_window = 3.5
-    n_ch = _chamber_n(p)
-    ch_shape = p.get("chamber_shape", "round")
-
+    horseshoe = p.get("chamber_shape", "round") == "horseshoe"
     stations: list[dict] = []
-    w_cav0 = _CAVITY_WIDTH_RATIO * w_win
-    for t in _WINDOW_TS:
-        z = z_start + t * (z_we - z_start)
-        floor = _window_floor(p, t, z)
-        ceil_ = baffle_roof_y(p, z)
-        # スロット幅は**リード面**の弦を超えられない（超えるとサイドレールが消える）
-        chord_lim = reed_chord(p, z) - 0.8 * p["side_rail_width"]
-        w_slot = min(w_win * _pchip(_SLOT_WIDTH, t), chord_lim)
-        # チェンバー幅はスロットより狭くしない（狭いと断面が下広がりの逆テーパになる）
-        w_cav = min(max(w_cav0, w_slot), chord_lim)
-        if t > _WINDOW_CLOSE_T:                # 閉口後は鍵穴を解消してチェンバーへ
-            u = (t - _WINDOW_CLOSE_T) / max(1.0 - _WINDOW_CLOSE_T, 1e-9)
-            w_slot = w_slot + (w_cav - w_slot) * _smoothstep(u)
-        stations.append({"z": z, "yc": (floor + ceil_) / 2.0, "h": ceil_ - floor,
-                         "w": w_cav, "w_slot": w_slot,
-                         "n": n_window, "role": "window", "shape": "window"})
-
-    # 窓終端 → ボア開始: 床・天井・幅がボア円へ収束する遷移。throat/chamber の比が
-    # 1.0 なら実測どおり「単調にボアへ開く」形になり、比を上げるとチェンバーが膨らむ。
-    s_end = stations[-1]
-    f0 = s_end["yc"] - s_end["h"] / 2.0
-    c0 = s_end["yc"] + s_end["h"] / 2.0
-    w0 = s_end["w"]
-    z_th = z_we + _THROAT_T * (zb - z_we)          # スロート（最狭部）はボア直前
-    for t in _TRANSITION_TS:
-        z = z_we + t * (zb - z_we)
-        u = _smoothstep(t)
-        if z >= z_th:
-            role, shape, n = ("throat", "round", _throat_n(p))
-            w_t, h_t = 2.0 * r_t, 2.0 * r_t
-        else:
-            role, shape, n = ("chamber", ch_shape, n_ch)
-            w_t, h_t = w_ch, h_ch
-        floor = f0 + (-h_t / 2.0 - f0) * u
-        ceil_ = c0 + (h_t / 2.0 - c0) * u
-        w = w0 + (w_t - w0) * u
-        stations.append({"z": z, "yc": (floor + ceil_) / 2.0, "h": ceil_ - floor,
-                         "w": w, "n": n, "role": role, "shape": shape})
-    stations.append({"z": zb, "yc": 0.0, "h": 2.0 * rb, "w": 2.0 * rb,
-                     "n": 2.0, "role": "bore", "shape": "round"})
+    for z in _station_zs(p):
+        floor = cavity_floor_y(p, z)
+        ceil_ = cavity_roof_y(p, z)
+        half = cavity_half_width(p, z)
+        k = _ratio_scale(p, z)
+        nx, ny, nx_top = _section_exponents(p, z)
+        yc, h = (floor + ceil_) / 2.0, max(ceil_ - floor, 0.6)
+        stations.append({
+            "z": z, "yc": yc, "h": h * k, "w": 2.0 * half * k,
+            "nx": nx, "ny": ny, "n": ny, "nx_top": nx_top,
+            "notch": _chamber_weight(p, z) if horseshoe else 0.0,
+            "role": _station_role(p, z),
+            "shape": p.get("chamber_shape", "round"),
+        })
+    # ボア端は厳密に真円。ここが一致していないと後段のボア円筒との合わせ目が段になる。
+    rb = bore_radius(p)
+    stations[-1] = {**stations[-1], "yc": 0.0, "h": 2.0 * rb, "w": 2.0 * rb,
+                    "nx": 2.0, "ny": 2.0, "n": 2.0, "nx_top": 2.0,
+                    "shape": "round"}
     return [_contain(p, s) for s in stations]
 
 
@@ -636,7 +1078,11 @@ def cavity_sections(p: dict) -> list[dict]:
 
 
 def _contain(p: dict, s: dict) -> dict:
-    """ステーションを `shell_limit()` の内側へ切り詰める。
+    """[安全網] ステーションを `shell_limit()` の内側へ確実に収める。
+
+    W/C/F は既に `_soft_min` で外殻に収まるよう作ってあるので、通常ここは
+    発動しない。極端なパラメータで破れたときだけ効く最後の砦として残す
+    （`min`/`max` なので発動すれば折れる。発動＝形状破綻の兆候）。
 
     窓（role == "window"）の下端だけは拘束しない。窓はテーブルカット面より下へ
     抜けて初めて開口になるので、下端を clamp すると窓が閉じてしまう。
@@ -646,12 +1092,9 @@ def _contain(p: dict, s: dict) -> dict:
     bot = s["yc"] - s["h"] / 2.0
     if s["role"] != "window":
         bot = max(bot, lim["bot"])
-    bot = min(bot, top - 1.0)
+    bot = min(bot, top - 0.6)
     w = min(s["w"], 2.0 * lim["half_width"])
-    out = {**s, "yc": (top + bot) / 2.0, "h": top - bot, "w": w}
-    if "w_slot" in s:
-        out["w_slot"] = min(s["w_slot"], w)
-    return out
+    return {**s, "yc": (top + bot) / 2.0, "h": top - bot, "w": w}
 
 
 def chamber_max_station(stations: list[dict]) -> dict:
@@ -680,16 +1123,31 @@ def superellipse_area(w: float, h: float, n: float) -> float:
 
 
 #: 全断面で固定する頂点数（+X 始点・反時計回り）。ルールドロフトがねじれない。
-_SECTION_SAMPLES = 96
+#: ボア円での弦誤差は 72 点でも 0.008mm（メッシュ許容 0.02mm より小さい）。
+_SECTION_SAMPLES = 72 
 
 
 def _super_pts(yc: float, h: float, w: float, nx: float, ny: float,
-               samples: int = _SECTION_SAMPLES) -> list[tuple[float, float]]:
+               samples: int = _SECTION_SAMPLES,
+               nx_top: float | None = None) -> list[tuple[float, float]]:
+    """スーパー楕円の閉ポリゴン。上半分だけ別の x 指数を使える。
+
+    実測の天井は**横方向にアーチ**していて、そのサグは z によらずほぼ一定
+    （x=7mm で 0.31mm、z=3〜16 で 0.33/0.32/0.31/0.30）。上下同じ指数だと
+    サグが断面高さ h に比例してしまい、h が 0.7mm しかないティップでは
+    落差 0.07mm しか出ない。天井が平板のままだと窓がリード面を一度に
+    突き抜けるので、**ティップレールがコーナーで消える**（実測 0.02mm）。
+
+    ny>1 なら上下どちらの半分も X=±1 で接線が垂直になるので、指数を変えても
+    赤道で **G1 のまま**繋がる（曲率は不連続。実物も成形の分割線でそうなっている）。
+    """
+    nxt = nx if nx_top is None else nx_top
     pts = []
     for i in range(samples):
         th = 2.0 * math.pi * i / samples
         c, s = math.cos(th), math.sin(th)
-        x = (w / 2.0) * math.copysign(abs(c) ** (2.0 / nx), c)
+        n = nxt if s > 0.0 else nx
+        x = (w / 2.0) * math.copysign(abs(c) ** (2.0 / n), c)
         y = yc + (h / 2.0) * math.copysign(abs(s) ** (2.0 / ny), s)
         pts.append((x, y))
     return pts
@@ -704,57 +1162,14 @@ def _flat_sidewall_pts(yc, h, w, samples=_SECTION_SAMPLES):
     return _super_pts(yc, h, w, 7.0, 2.4, samples)
 
 
-#: ウィンドウ断面のスロット直立区間の高さ [mm]（下限）。空洞の床はリード面より
-#: `_WINDOW_FLOOR_DROP` だけ下にあるので、それより高くないと開口幅が痩せる。
-_SLOT_WALL_H = 0.55
-#: 空洞の床をリード面より下げる量 [mm]。ここが窓を開けるための食い込み代。
-_WINDOW_FLOOR_DROP = 0.4
-#: 窓が閉じた後の床の高さ（テーブル平面から）[mm]。実測のチェンバー床に合わせる。
-_WINDOW_CLOSED_LIFT = 2.0
-#: スロット壁の上でチェンバー幅へ開き切るまでの高さ比。
-_SLOT_FLARE_V = 0.35
+def _horseshoe_pts(yc, h, w, samples=_SECTION_SAMPLES, amount: float = 1.0):
+    """馬蹄：丸い天井・側壁を持ち、底の中央が上へ凹む（U字）断面。
 
-
-def _window_pts(yc, h, w, w_slot, n, samples=_SECTION_SAMPLES):
-    """ウィンドウ断面：リード面のスロットは**直立した側壁**、上はチェンバー幅へ開く。
-
-    スーパー楕円のままだと断面がリード面の高さで細り、開口幅が設計値の 78% ほどに
-    痩せていた（実測より最大 4mm 狭い窓になっていた）。実物のスロットはレール厚を
-    貫く直立の壁なので、下端は幅 `w_slot` の平坦・直壁にし、その上でチェンバー幅へ
-    フレアしてドームで閉じる。
-
-    y の分布はスーパー楕円と同じ角度パラメータのままにしてある。隣接ステーション
-    （チェンバー断面）と点の対応が崩れるとルールドロフトがねじれるため。
+    `amount` はノッチの効き（0 で普通のスーパー楕円）。ロフトの途中で断面の
+    種類を切り替えるとねじれるので、窓→チェンバーではこの量を 0→1 で渡す。
     """
-    if h <= 0.0 or w <= 0.0:
-        return _superellipse_pts(yc, h, max(w, 1e-6), n, samples)
-    lo, hi = yc - h / 2.0, yc + h / 2.0
-    ws2 = min(w_slot, w) / 2.0
-    wc2 = w / 2.0
-    d = max(_SLOT_WALL_H, min(1.2, 0.45 * h))
-    y1 = min(lo + d, hi - 1e-6)
-
-    def hw(y):
-        if y <= y1:
-            return ws2
-        v = (y - y1) / (hi - y1)
-        v = min(max(v, 0.0), 1.0)
-        flare = ws2 + (wc2 - ws2) * min(1.0, v / _SLOT_FLARE_V)
-        return flare * (1.0 - v ** n) ** (1.0 / n)
-
-    pts = []
-    for i in range(samples):
-        th = 2.0 * math.pi * i / samples
-        c, s = math.cos(th), math.sin(th)
-        y = yc + (h / 2.0) * math.copysign(abs(s) ** (2.0 / n), s)
-        pts.append((math.copysign(hw(y), c) if abs(c) > 1e-12 else 0.0, y))
-    return pts
-
-
-def _horseshoe_pts(yc, h, w, samples=_SECTION_SAMPLES):
-    """馬蹄：丸い天井・側壁を持ち、底の中央が上へ凹む（U字）断面。"""
     hh = h / 2.0
-    notch = 0.5 * hh
+    notch = 0.5 * hh * min(max(amount, 0.0), 1.0)
     width = 0.55
     pts = []
     for i in range(samples):
@@ -781,10 +1196,19 @@ def _polygon_area(pts: list[tuple[float, float]]) -> float:
 
 
 def section_pts(s: dict) -> list[tuple[float, float]]:
-    shape = s.get("shape", "round")
+    """断面の閉ポリゴン。
+
+    空洞ステーションは `nx`/`ny`（＋馬蹄の `notch`）を持ち、全 z で同じ族を通す。
+    `nx` を持たない dict（逆算・仕様書・テストが直接組む形）は旧来の `shape`
+    ディスパッチで解釈する。
+    """
     yc, h, w = s["yc"], s["h"], s["w"]
-    if shape == "window":
-        return _window_pts(yc, h, w, s.get("w_slot", w), s.get("n", 3.5))
+    if "nx" in s:
+        notch = s.get("notch", 0.0)
+        if notch > 1e-6:
+            return _horseshoe_pts(yc, h, w, amount=notch)
+        return _super_pts(yc, h, w, s["nx"], s["ny"], nx_top=s.get("nx_top"))
+    shape = s.get("shape", "round")
     if shape == "horseshoe":
         return _horseshoe_pts(yc, h, w)
     if shape == "flat_sidewall":
@@ -793,30 +1217,55 @@ def section_pts(s: dict) -> list[tuple[float, float]]:
 
 
 def section_area(s: dict) -> float:
-    if s.get("shape") in ("window", "horseshoe", "flat_sidewall"):
+    if "nx" in s:
+        iso = (s.get("notch", 0.0) <= 1e-6
+               and abs(s["nx"] - s["ny"]) < 1e-9
+               and abs(s.get("nx_top", s["nx"]) - s["nx"]) < 1e-9)
+        if iso:
+            return superellipse_area(s["w"], s["h"], s["nx"])
+        return _polygon_area(section_pts(s))
+    if s.get("shape") in ("horseshoe", "flat_sidewall"):
         return _polygon_area(section_pts(s))
     return superellipse_area(s["w"], s["h"], s.get("n", 2.0))
+
+
+def _clip_below(pts: list[tuple[float, float]], y_cut: float):
+    """y < y_cut を捨てた閉ポリゴン（半平面での Sutherland–Hodgman）。"""
+    out: list[tuple[float, float]] = []
+    n = len(pts)
+    for i in range(n):
+        (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % n]
+        in0, in1 = y0 >= y_cut, y1 >= y_cut
+        if in0:
+            out.append((x0, y0))
+        if in0 != in1 and abs(y1 - y0) > 1e-12:
+            t = (y_cut - y0) / (y1 - y0)
+            out.append((x0 + (x1 - x0) * t, y_cut))
+    return out
+
+
+def effective_section_area(p: dict, s: dict) -> float:
+    """リード面（テーブル＋フェイシング）で切った、実際に気柱になる断面積。
+
+    ロフト用ステーションは窓を開けるためカット面より下へはみ出している。そのはみ出しは
+    材料でもなければ気柱でもない（リードが塞ぐ）ので、体積にも音響の断面積にも
+    数えてはいけない。旧実装は `cavity_volume_cc` だけがテーブル平面で切り直しており、
+    Tier3（`openwind_bridge`）は素の `section_area` を使っていて前提が食い違っていた。
+    """
+    y_cut = cut_top_y(p, s["z"])
+    if s["yc"] - s["h"] / 2.0 >= y_cut:
+        return section_area(s)
+    clipped = _clip_below(section_pts(s), y_cut)
+    return _polygon_area(clipped) if len(clipped) >= 3 else 0.0
 
 
 def cavity_volume_cc(p: dict) -> dict:
     """気柱体積の解析近似（断面積の台形積分 + ボア円筒）。
 
-    ウィンドウ区間の断面は下側がリード面（テーブル平面）で閉じられた分だけを数える。
-    ロフト用ステーションは開口のためカット面より下へはみ出しているので、体積計算では
-    リード面で切り直す。
-
     Returns: total_cc(気柱全体), effective_cc(コーク位置まで＝ネック挿入分を除く)
     """
     st = cavity_stations(p)
-    areas = []
-    for s in st:
-        if s["role"] == "window":
-            top = s["yc"] + s["h"] / 2.0
-            bot = max(s["yc"] - s["h"] / 2.0, table_plane_y(p, s["z"]))
-            areas.append(section_area({**s, "yc": (top + bot) / 2.0,
-                                       "h": max(top - bot, 0.0)}))
-        else:
-            areas.append(section_area(s))
+    areas = [effective_section_area(p, s) for s in st]
     vol = 0.0
     for (a, s_a), (b, s_b) in zip(zip(areas, st), zip(areas[1:], st[1:])):
         vol += (a + b) / 2.0 * (s_b["z"] - s_a["z"])
@@ -833,10 +1282,10 @@ def param_regions(p: dict) -> dict:
     """各パラメータが影響するモデル領域 {key: {z0, z1, side, label}}。"""
     length = p["overall_length"]
     fl = p["facing_length"]
-    z_start = window_start_z(p)
+    z_start = window_front_z(p)          # 窓の前縁（＝ティップレール後端）
     zb = bore_start_z(p)
     z_we = window_end_z(p)
-    z_baffle_end = z_start + _BAFFLE_FLAT * p["window_length"]
+    z_baffle_end = baffle_flat_end_z(p)
     heel = heel_z(p)
 
     def r(z0, z1, side, label):
@@ -849,6 +1298,7 @@ def param_regions(p: dict) -> dict:
         "facing_curve":    r(0.0, fl, "bottom", "フェイシングカーブ"),
         "tip_rail_width":  r(0.0, max(z_start + 1.0, 2.5), "bottom", "ティップレール"),
         "tip_rail_thickness": r(0.0, max(z_start + 1.0, 2.5), "all", "ティップレール厚"),
+        "tip_chamfer":     r(0.0, max(tip_chamfer_len(p), 0.05), "all", "ティップ前縁の面取り"),
         "side_rail_width": r(z_start, z_we, "bottom", "サイドレール（窓の両脇）"),
         "table_angle":     r(0.0, heel, "bottom", "テーブル平面（傾き）"),
         "baffle_type":     r(z_start, z_baffle_end, "all", "バッフル（窓の天井）"),
@@ -876,10 +1326,10 @@ def anatomy_regions(p: dict) -> list[dict]:
     """マウスピース各部の名称と占有 z 範囲（パラメータ非依存の純名称マップ）。"""
     length = p["overall_length"]
     fl = p["facing_length"]
-    z_start = window_start_z(p)
+    z_start = window_front_z(p)          # 窓の前縁（＝ティップレール後端）
     zb = bore_start_z(p)
     z_we = window_end_z(p)
-    z_baffle_end = z_start + _BAFFLE_FLAT * p["window_length"]
+    z_baffle_end = baffle_flat_end_z(p)
     z_th = z_we + _THROAT_T * (zb - z_we)
     heel = heel_z(p)
 
@@ -917,7 +1367,7 @@ def side_profile_polylines(p: dict, samples: int = 120) -> dict:
                   if z < heel else -outer_radius(p, z)) for z in zs]
     stations = cavity_stations(p)
     cavity_top = [(s["z"], s["yc"] + s["h"] / 2) for s in stations]
-    cavity_bot = [(s["z"], max(s["yc"] - s["h"] / 2, table_plane_y(p, s["z"])))
+    cavity_bot = [(s["z"], max(s["yc"] - s["h"] / 2, cut_top_y(p, s["z"])))
                   for s in stations]
     r = bore_radius(p)
     cavity_top += [(length, r)]

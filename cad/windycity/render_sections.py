@@ -4,6 +4,8 @@
 出力:
   sections_xy.png   Z 一定の横断面（10枚）
   sections_yz_xz.png  X 一定の縦断面 / Y 一定の水平断面 / リード面から見た窓輪郭
+  window_outline.png  リード面から見た開口の輪郭
+  tip_rail.png      ティップレールの平面視とレール幅プロファイル
 
 点群散布だと重なって潰れるので、`mesh.section` の輪郭線（ポリライン）で描く。
 
@@ -156,6 +158,51 @@ def main():
     ax.legend(fontsize=9)
     fig.savefig(_HERE / "window_outline.png", dpi=110, bbox_inches="tight")
     print("saved:", _HERE / "window_outline.png")
+
+    # ------------------------------------------------- ティップレール（平面視・主題）
+    # 先端輪郭（リード面が胴を切る弦）と窓の縁を重ねると、レールが「先端に沿った
+    # 一定幅の帯」になっているかが一目で分かる。旧実装はここで窓の縁が軸に直角な
+    # 直線になり、コーナーでレールが消えていた。
+    from cad.windycity.verify_base import (_rail_curves, _rail_widths,
+                                            _tip_face_profile)
+    fig, (ax, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 10.4),
+                                       gridspec_kw={"height_ratios": [2.1, 1, 1]})
+    for m, c, lb in ((ref, REF_C, "reference"), (mod, MOD_C, "new base")):
+        zs, we, ce = _rail_curves(m)
+        d = _rail_widths(zs, we, ce)
+        ax.plot(ce, zs, color=c, lw=2.0, label="%s 先端輪郭" % lb)
+        ok = np.isfinite(we)
+        ax.plot(we[ok], zs[ok], color=c, lw=2.0, ls="--",
+                label="%s 窓の縁" % lb)
+        ax2.plot(zs[ok], d[ok], color=c, lw=2.0, label=lb)
+    ax.set_aspect("equal")
+    ax.grid(alpha=0.3)
+    ax.invert_yaxis()
+    ax.set_xlabel("x  (mm)")
+    ax.set_ylabel("z  (mm)   ↑ティップ")
+    ax.set_title("ティップレール 平面視（実線=先端輪郭 / 破線=窓の縁。"
+                 "2本の間隔がレール）", fontsize=11)
+    ax.legend(fontsize=8, loc="lower right")
+    ax2.grid(alpha=0.3)
+    ax2.set_xlabel("z  (mm)")
+    ax2.set_ylabel("レール幅 (mm)")
+    ax2.set_title("レール幅（窓の縁から先端輪郭への垂直距離）", fontsize=11)
+    ax2.legend(fontsize=9)
+
+    # 先端の縦断面（x=0）。実物はリード面側から面取りされていて前面が 0.25mm。
+    for m, c, lb in ((ref, REF_C, "reference"), (mod, MOD_C, "new base")):
+        zt, up, dn = _tip_face_profile(m, x=0.0, z_hi=0.6, dz=0.01)
+        ax3.plot(zt, up, color=c, lw=2.0, label="%s 上面" % lb)
+        ax3.plot(zt, dn, color=c, lw=2.0, ls="--", label="%s 下面（リード面）" % lb)
+    ax3.grid(alpha=0.3)
+    ax3.set_xlabel("z  (mm)")
+    ax3.set_ylabel("y  (mm)")
+    ax3.set_title("先端の縦断面 x=0（上下の間隔が前面の高さ。実物は面取りで 0.25mm）",
+                  fontsize=11)
+    ax3.legend(fontsize=8, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(_HERE / "tip_rail.png", dpi=110, bbox_inches="tight")
+    print("saved:", _HERE / "tip_rail.png")
 
 
 if __name__ == "__main__":

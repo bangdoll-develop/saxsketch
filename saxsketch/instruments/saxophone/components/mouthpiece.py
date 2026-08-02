@@ -45,6 +45,9 @@ def _specs(t: dict) -> list[ParamSpec]:
           "狭いほどレスポンスが速いが雑音が出やすい"),
         f("tip_rail_thickness", "ティップレール厚", "フェイシング", "mm", 0.8, 2.5, 0.05,
           "先端に残る肉厚。薄いほど鳴りは軽いが欠けやすい。ビークの傾きもここから決まる"),
+        f("tip_chamfer", "ティップ前縁の面取り", "フェイシング", "mm", 0.0, 1.2, 0.05,
+          "先端をリード面側から落とす量。実物は前面が 0.25mm しか残らない。"
+          "0 にすると tip_rail_thickness ぶんの角ばった壁が先端に立つ", advanced=True),
         f("side_rail_width", "サイドレール幅", "フェイシング", "mm", 0.6, 2.0, 0.1,
           "狭いほど効率よく鳴るがリードミスに敏感になる"),
         f("table_angle", "テーブル傾斜", "フェイシング", "度", 2.0, 7.0, 0.1,
@@ -138,16 +141,14 @@ class MouthpieceComponent(Component):
         p = params
         length = p["overall_length"]
 
-        # 1) 外形回転体。ノーズと肩で曲率が急なので、そこだけステーションを詰める。
-        heel = profiles.heel_z(p)
-        zs = sorted({*(heel * (i / 24.0) ** 1.6 for i in range(25)),
-                     *(heel + (length - heel) * i / 12.0 for i in range(13))})
+        # 1) 外形回転体。刻みの根拠は `profiles.body_stations`（FreeCAD 側の
+        #    `cad/windycity/build_base.py` と同じ列を使う）。
+        zs = profiles.body_stations(p)
         body = revolve_profile([(z, profiles.outer_radius(p, z)) for z in zs])
 
         # 2) ビークカット（上面）。稜線は直線でも横断面が円弧なので、YZ プリズムでは
         #    表現できない。各 z の「ビーク面より上」の断面をロフトして切除ソリッドにする。
-        n_bk = 44
-        z_bk = [-2.0 + (profiles.heel_z(p) + 4.0) * i / (n_bk - 1) for i in range(n_bk)]
+        z_bk = profiles.beak_cut_stations(p)
         beak_cut = loft_sections([
             {"z": z, "pts": profiles.beak_cut_section(p, z, half_width=p["body_dia"])}
             for z in z_bk])
