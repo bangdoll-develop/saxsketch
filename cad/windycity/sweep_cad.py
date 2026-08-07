@@ -27,14 +27,27 @@ from saxsketch.core.registry import get_registry  # noqa: E402
 SWEEP_KEYS = ["tip_opening", "facing_length", "tip_rail_width", "tip_rail_thickness",
               "tip_chamfer", "side_rail_width", "baffle_height", "table_angle"]
 
+#: バッフル型ごとに効くハンドルの極値。型と組で振らないと意味が無い
+#: （`baffle_step_rise` はステップ型でしか効かない）ので専用の表にする。
+BAFFLE_CASES = [
+    ("straight", {}),
+    ("rollover", {}), ("rollover", {"rollover_radius": 3.0}),
+    ("rollover", {"rollover_radius": 20.0}),
+    ("step", {}), ("step", {"baffle_plateau": 0.10}),
+    ("step", {"baffle_plateau": 0.70}), ("step", {"baffle_step_rise": 0.85}),
+    ("curve", {}), ("curve", {"baffle_curvature": -1.0}),
+    ("curve", {"baffle_curvature": 1.0}),
+]
+
 
 def _cases(comp, base: dict) -> list[tuple[str, dict]]:
     specs = {s.key: s for s in comp.param_specs()}
     out: list[tuple[str, dict]] = [("既定", dict(base))]
     for shape in ["round", "square", "horseshoe", "flat_sidewall"]:
         out.append((f"chamber={shape}", dict(base, chamber_shape=shape)))
-    for bt in ["straight", "rollover", "step", "curve"]:
-        out.append((f"baffle={bt}", dict(base, baffle_type=bt)))
+    for bt, kw in BAFFLE_CASES:
+        tag = "".join(f",{k.replace('baffle_', '')}={v:g}" for k, v in kw.items())
+        out.append((f"baffle={bt}{tag}", dict(base, baffle_type=bt, **kw)))
     for curve in ["radial", "elliptic"]:
         out.append((f"facing={curve}", dict(base, facing_curve=curve)))
     for k in SWEEP_KEYS:

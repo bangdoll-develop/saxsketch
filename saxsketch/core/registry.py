@@ -91,6 +91,23 @@ class Component(ABC):
         """各パラメータの影響領域 {key: {z0, z1, side, label}}（3Dハイライト用）。"""
         return {}
 
+    def section(self, params: dict) -> dict | None:
+        """中央面の断面と、そこで直接ドラッグできるハンドル。
+
+        Returns:
+            {"z_range": [z0, z1],
+             "curves":  {name: [[z, y], …]},
+             "handles": [{key, label, axis, z, y, value, min, max, span,
+                          unit, step, active}, …],
+             "warnings": [str, …],
+             "title": str}
+            対応しないコンポーネントは None（UI は断面タブを出さない）。
+
+        **CAD ビルドを伴わないこと**が要件。ドラッグ中に毎回叩かれるので、
+        形状法則の数値計算だけで組み立てる。
+        """
+        return None
+
     # --- 採寸ワークフロー（Phase 4-A）。対応コンポーネントだけがオーバーライドする ---
 
     def survey_targets(self) -> dict:

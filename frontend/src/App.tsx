@@ -3,6 +3,7 @@ import {
   api, type ManualEdit, type ProjectData, type Region, type Simulation,
 } from "./api";
 import ParamPanel from "./components/ParamPanel";
+import SectionEditor from "./components/SectionEditor";
 import SimPanel from "./components/SimPanel";
 import Viewer3D from "./components/Viewer3D";
 import {
@@ -26,6 +27,8 @@ export default function App() {
   const [manualEdit, setManualEdit] = useState<ManualEdit | null>(null);
   const [viewDerived, setViewDerived] = useState(false);
   const [staleWarn, setStaleWarn] = useState(false);
+  const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
+  const [hasSection, setHasSection] = useState(false);
 
   const paramTimer = useRef<number>(0);
   const modelTimer = useRef<number>(0);
@@ -59,6 +62,15 @@ export default function App() {
     if (!project) return;
     api.regions().then(setRegions).catch(() => {});
   }, [modelVersion, project]);
+
+  useEffect(() => {
+    // 断面編集を持つコンポーネントかはサーバに聞く（404 なら持たない）。
+    // UI に「マウスピースだけ」という楽器固有の知識を置かないため。
+    if (!project) { setHasSection(false); return; }
+    api.section()
+      .then(() => setHasSection(true))
+      .catch(() => { setHasSection(false); setViewMode("3d"); });
+  }, [project]);
 
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
@@ -192,25 +204,44 @@ export default function App() {
           )}
         </div>
         <div className="viewer">
+          {/* 3D は常にマウントしたままにする（アンマウントするとカメラ位置と
+              読み込み済みメッシュを毎回捨てることになる）。ResizeObserver が
+              あるので表示に戻したときに正しくリサイズされる。 */}
           {project && (
-            <Viewer3D modelVersion={modelVersion} highlight={highlight}
-                      srcOverride={viewDerived && manualEdit?.derived
-                        ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
-                        : null}
-                      onBusy={setModelBusy} />
+            <div className="view-pane"
+                 style={{ display: viewMode === "3d" ? "block" : "none" }}>
+              <Viewer3D modelVersion={modelVersion} highlight={highlight}
+                        srcOverride={viewDerived && manualEdit?.derived
+                          ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
+                          : null}
+                        onBusy={setModelBusy} />
+            </div>
+          )}
+          {project && viewMode === "section" && (
+            <SectionEditor params={params} onChange={onParamChange} />
           )}
           <div className="badge">
             {project
-              ? (viewDerived
-                  ? (manualEdit?.derived?.kind === "external"
-                      ? "外部取込モデル（整列後の形状）"
-                      : "外部編集済みモデル（凍結時の形状ベース）")
-                  : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
-                (modelBusy ? "　⏳ 形状を再生成中…" : "")
+              ? (viewMode === "section"
+                  ? `${project.component_label} — 丸ポチをドラッグしてバッフルを調整`
+                  : viewDerived
+                    ? (manualEdit?.derived?.kind === "external"
+                        ? "外部取込モデル（整列後の形状）"
+                        : "外部編集済みモデル（凍結時の形状ベース）")
+                    : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
+                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "")
               : "プロジェクトを作成してください"}
           </div>
-          {manualEdit?.derived && (
+          {project && hasSection && (
             <div className="view-tabs">
+              <button className={viewMode === "3d" ? "active" : ""}
+                      onClick={() => setViewMode("3d")}>3D</button>
+              <button className={viewMode === "section" ? "active" : ""}
+                      onClick={() => setViewMode("section")}>断面</button>
+            </div>
+          )}
+          {manualEdit?.derived && viewMode === "3d" && (
+            <div className={"view-tabs" + (hasSection ? " second" : "")}>
               <button className={viewDerived ? "" : "active"}
                       onClick={() => setViewDerived(false)}>設計形状</button>
               <button className={viewDerived ? "active" : ""}
@@ -220,7 +251,7 @@ export default function App() {
               </button>
             </div>
           )}
-          {highlight && !viewDerived && (
+          {highlight && !viewDerived && viewMode === "3d" && (
             <div className="badge region-badge">
               🟠 変更部位: {highlight.label}
             </div>

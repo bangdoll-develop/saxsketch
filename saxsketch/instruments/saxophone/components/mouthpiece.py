@@ -62,16 +62,31 @@ def _specs(t: dict) -> list[ParamSpec]:
         ParamSpec(key="baffle_type", label="バッフル種別", category="バッフル",
                   type="choice", default=t["baffle_type"],
                   choices=[Choice("straight", "ストレート"),
-                           Choice("rollover", "ロールオーバー"),
                            Choice("step", "ステップ"),
-                           Choice("curve", "カーブ")],
-                  effect="音色の性格を決める最重要要素。ストレート=ダーク／ロールオーバー=バランス"
-                         "／ステップ=くっきり／カーブ=メタリックでアグレッシブ"),
+                           Choice("curve", "カーブ"),
+                           Choice("rollover", "ロールオーバー")],
+                  effect="音色の性格を決める最重要要素。ストレート=暗くソフトな音／"
+                         "ステップ=バランスのとれた音色（実測 WindyCity がこれ）／"
+                         "カーブ=メタリックでアグレッシブな音／"
+                         "ロールオーバー=ストレートの肩を丸めた中間"),
         f("baffle_height", "バッフル高さ", "バッフル", "mm", 0.0, 5.0, 0.1,
           "リード直上の天井をどれだけ下げるか。高いほど明るくエッジの効いた音、"
           "0でクラシカルなダークトーン"),
+        # 以下3つは「断面」タブのハンドルで直接ドラッグできる。実効範囲は
+        # バッフル種別で変わる（型の特徴を壊さないため。profiles._PLATEAU_RANGE）ので、
+        # ここの min/max は全型を覆う広い値。正確な可動域は断面タブが示す。
+        f("baffle_plateau", "バッフル平坦長", "バッフル", "比", 0.02, 0.75, 0.01,
+          "リード直上の天井が平坦なまま続く長さ（ボア開始位置に対する比）。"
+          "ステップ/ロールオーバーで有効。長いほど棚がはっきりする。"
+          "ストレート/カーブでは型の定義上ごく短い範囲に制限される"),
+        f("baffle_step_rise", "段の立ち上がり", "バッフル", "比", 0.0, 0.85, 0.05,
+          "ステップで有効。棚の終わりで天井がどれだけ一気に立ち上がるか。"
+          "0 は実測どおりのなだらかな肩、大きいほど切り立った段差になる"),
+        f("baffle_curvature", "カーブ量", "バッフル", "比", -1.0, 1.0, 0.05,
+          "カーブで有効。正で天井が低いまま粘って気道を絞る（明るくアグレッシブ）、"
+          "負で早く開くスクープ（ダーク）、0 でストレートと同じ直線"),
         f("rollover_radius", "ロールオーバー半径", "バッフル", "mm", 3.0, 20.0, 0.5,
-          "ロールオーバー時の肩の丸み。小さいほどエッジ感が強い", advanced=True),
+          "ロールオーバーで有効。肩の丸み。小さいほどエッジ感が強い", advanced=True),
         # --- チェンバー ---
         f("throat_ratio", "スロート断面積比", "チェンバー", "比", 0.60, 1.35, 0.01,
           "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い"),
@@ -279,6 +294,22 @@ class MouthpieceComponent(Component):
 
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
+
+    def section(self, params: dict) -> dict:
+        """中央面 x=0 の断面とバッフルのドラッグハンドル。
+
+        バッフル種別ごとに `active` なハンドルが変わる（型の形状的特徴を壊す
+        操作をそもそも出さない）。可動域は `profiles._PLATEAU_RANGE` などの
+        法則側の実効範囲そのままで、UI に閾値を持たせない。
+        """
+        return {
+            "z_range": [0.0, params["overall_length"]],
+            "curves": profiles.section_curves(params),
+            "handles": profiles.baffle_handles(params),
+            "warnings": profiles.baffle_warnings(params),
+            "baffle_type": params.get("baffle_type", "step"),
+            "title": "側面断面（中央面）— バッフルの丸ポチをドラッグ",
+        }
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
 

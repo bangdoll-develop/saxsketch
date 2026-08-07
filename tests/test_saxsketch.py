@@ -907,34 +907,114 @@ def test_mp_chamber_shapes_build_watertight(tmp_path):
             assert q["watertight"] and q["winding_consistent"], (tmpl, shape, q)
 
 
+#: バッフル型 × ハンドル極値。掃引の種になる（型ごとに効くハンドルだけ振る）。
+_BAFFLE_CASES = [
+    ("straight", {}),
+    ("rollover", {}),
+    ("rollover", {"rollover_radius": 3.0}),
+    ("rollover", {"rollover_radius": 20.0}),
+    ("step", {}),
+    ("step", {"baffle_plateau": 0.10}),
+    ("step", {"baffle_plateau": 0.70}),
+    ("step", {"baffle_step_rise": 0.85}),
+    ("curve", {}),
+    ("curve", {"baffle_curvature": -1.0}),
+    ("curve", {"baffle_curvature": 1.0}),
+]
+
+
 def test_mp_baffle_types_build_watertight(tmp_path):
-    """4バッフル型が水密。step は実段差（近接zで天井が大きく変わる）。"""
+    """4バッフル型 × ハンドル極値が水密。段は `baffle_step_rise` で立てる。"""
     from saxsketch.export.models import check_mesh, export_model
     from saxsketch.instruments.saxophone.components import profiles as pf
     reg = get_registry()
     comp = reg.get("saxophone").make_component("mouthpiece", "tenor")
     base = {s.key: s.default for s in comp.param_specs()}
-    for bt in ["straight", "rollover", "step", "curve"]:
-        p = dict(base, baffle_type=bt)
+    for bt, kw in _BAFFLE_CASES:
+        p = dict(base, baffle_type=bt, **kw)
+        name = bt + "".join(f"_{k}{v}" for k, v in kw.items())
         part = comp.build(p)
-        assert part.is_valid and part.volume > 5000, bt
-        f = tmp_path / f"baffle_{bt}.stl"
+        assert part.is_valid and part.volume > 5000, name
+        f = tmp_path / f"baffle_{name}.stl"
         export_model(part, f, "stl")
         q = check_mesh(f)
-        assert q["watertight"] and q["winding_consistent"], (bt, q)
-    # step は天井が一気に立ち上がる（rollover よりずっと急）。ステーション間隔に
-    # 依存しないよう、段差の高さではなく**勾配**で見る。
-    def max_ceiling_slope(bt):
-        win = [s for s in pf.cavity_stations(dict(base, baffle_type=bt))
+        assert q["watertight"] and q["winding_consistent"], (name, q)
+
+    # 段差はステーション間隔に依存しないよう、高さではなく**勾配**で見る。
+    def max_ceiling_slope(**kw):
+        win = [s for s in pf.cavity_stations(dict(base, **kw))
                if s["role"] == "window"]
         c = [(s["z"], s["yc"] + s["h"] / 2.0) for s in win]
         return max((b[1] - a[1]) / (b[0] - a[0]) for a, b in zip(c, c[1:]))
 
-    # 段差の高さは `shell_limit`（ビーク下の肉厚）で頭打ちになるので、rollover の
-    # 2倍程度が上限。それでも「段差」と呼べる急勾配であることを確認する。
-    s_step, s_roll = max_ceiling_slope("step"), max_ceiling_slope("rollover")
-    assert s_step > 2.0, s_step                  # 準垂直の段差面
-    assert s_step > 1.8 * s_roll, (s_step, s_roll)
+    # 既定の step は実測どおりのなだらかな肩。段は rise を上げて初めて立つ。
+    s_flat = max_ceiling_slope(baffle_type="step")
+    s_sharp = max_ceiling_slope(baffle_type="step", baffle_step_rise=0.85)
+    assert s_sharp > 2.0, s_sharp                     # 準垂直の段差面
+    assert s_sharp > 2.5 * s_flat, (s_sharp, s_flat)
+    # ストレートは棚の後ろが一定勾配＝勾配のばらつきが小さい（型の特徴）。
+    st = [s for s in pf.cavity_stations(dict(base, baffle_type="straight"))
+          if s["z"] > pf.baffle_plateau_end_z(dict(base, baffle_type="straight")) + 1.0
+          and s["z"] < pf.window_end_z(base)]
+    c = [(s["z"], s["yc"] + s["h"] / 2.0) for s in st]
+    slopes = [(b[1] - a[1]) / (b[0] - a[0]) for a, b in zip(c, c[1:])]
+    assert max(slopes) - min(slopes) < 0.05, slopes
+
+
+def test_mp_baffle_progress_endpoints_and_monotone():
+    """v(σ) は 4 型 × ハンドル極値で v(0)=0 / v(1)=1 / 単調非減少。
+
+    単調性は「天井が z に対して逆流しない」＝ロフト面が折り返さないための
+    必要条件。ここが破れると `_contain` の安全網が発動して形が折れる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt, kw in _BAFFLE_CASES:
+        p = dict(base, baffle_type=bt, **kw)
+        vs = [pf._baffle_progress(p, i / 1500.0) for i in range(1501)]
+        assert vs[0] == pytest.approx(0.0, abs=1e-12), (bt, kw)
+        assert vs[-1] == pytest.approx(1.0, abs=1e-12), (bt, kw)
+        assert min(b - a for a, b in zip(vs, vs[1:])) >= -1e-12, (bt, kw)
+
+
+def test_mp_baffle_step_default_is_the_measured_curve():
+    """既定（step / plateau 0.36 / rise 0）は実測 `_CAVITY_C` と厳密に一致する。
+
+    型の作り直しで**既定形状が動いていない**ことの担保。ここがずれると
+    `cad/windycity/verify_base.py` の全項目（気柱 18.686cc 等）が一斉に動く。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    assert p["baffle_type"] == "step"          # テンプレート既定がステップ型
+    err = max(abs(pf._baffle_progress(p, i / 2000.0)
+                  - pf._pchip(pf._CAVITY_C, i / 2000.0)) for i in range(2001))
+    assert err < 1e-12, err
+
+
+def test_mp_baffle_plateau_clamped_per_type():
+    """棚の長さは型ごとに制限される＝「型の形状的特徴」が構造的に保たれる。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt in ("straight", "curve"):
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.75)) <= 0.12
+    for bt in ("step", "rollover"):
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.75)) == 0.70
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.0)) == 0.10
+
+
+def test_mp_baffle_keeps_tip_rail_law():
+    """どの型・どのハンドル値でも「窓の開き始め＝ティップレール幅」が保たれる。
+
+    棚の下限を 0 にしない理由がこれ（`profiles._PLATEAU_RANGE`）。ティップ側で
+    ランプを立てると天井がリード面を横切る z が前へずれ、指定より細いレールになる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    for tmpl in ("soprano", "alto", "tenor"):
+        base = _template_params("mouthpiece", tmpl)
+        for bt, kw in _BAFFLE_CASES:
+            p = dict(base, baffle_type=bt, **kw)
+            d = pf.window_open_z(p) - pf.window_front_z(p)
+            assert abs(d) < 0.10, (tmpl, bt, kw, d)
 
 
 def test_mp_chamber_area_ratio_holds():
@@ -1842,3 +1922,101 @@ def test_neck_export_endpoint(tmp_path):
     assert Path(e.json()["files"]["bom.csv"]).exists()
     html = Path(e.json()["files"]["spec.html"]).read_text(encoding="utf-8")
     assert html.count("<svg") == 1
+
+
+# ------------------------------------------------------------------ 断面編集（バッフル）
+
+def test_mp_section_curves_are_consistent():
+    """断面の輪郭が「材料の中に空洞がある」形になっている。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    c = pf.section_curves(p)
+    for key in ("outer_top", "outer_bot", "reed", "roof", "floor",
+                "shell_top", "bore_top", "bore_bot"):
+        assert len(c[key]) >= 2, key
+        zs = [z for z, _ in c[key]]
+        assert zs == sorted(zs), key                      # z 昇順
+    # 天井は床より上。天井は外殻の上限を（soft-min のバイアスぶんを見て）超えない。
+    for (z, roof), (_, floor), (_, lim) in zip(c["roof"], c["floor"], c["shell_top"]):
+        assert roof > floor, (z, roof, floor)
+        assert roof <= lim + 1e-6, (z, roof, lim)
+    # 折れ目（棚の終わり）が標本に必ず入っている＝描画で段が丸まらない
+    assert any(abs(z - pf.baffle_plateau_end_z(p)) < 1e-6 for z, _ in c["roof"])
+
+
+def test_mp_baffle_handles_span_and_activity():
+    """ハンドルは型ごとに出し分けられ、span が線形写像として使える形になっている。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    expect = {
+        "straight": {"baffle_height"},
+        "step": {"baffle_height", "baffle_plateau", "baffle_step_rise"},
+        "curve": {"baffle_height", "baffle_curvature"},
+        "rollover": {"baffle_height", "baffle_plateau", "rollover_radius"},
+    }
+    for bt, keys in expect.items():
+        hs = pf.baffle_handles(dict(base, baffle_type=bt))
+        assert {h["key"] for h in hs if h["active"]} == keys, bt
+        for h in hs:
+            if not h["active"]:
+                continue
+            assert h["min"] < h["max"], (bt, h["key"])
+            assert h["axis"] in ("z", "y"), (bt, h["key"])
+            # span が潰れているとドラッグ→値の逆写像が作れない
+            assert abs(h["span"][1] - h["span"][0]) > 0.3, (bt, h["key"], h["span"])
+            assert h["min"] <= h["value"] <= h["max"], (bt, h["key"])
+
+
+def test_mp_baffle_handle_drag_moves_the_roof():
+    """span の端まで動かすと天井が実際にその向きへ動く（ハンドルが効いている）。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt, key in [("step", "baffle_step_rise"), ("curve", "baffle_curvature"),
+                    ("step", "baffle_plateau"), ("straight", "baffle_height")]:
+        p = dict(base, baffle_type=bt)
+        h = next(x for x in pf.baffle_handles(p) if x["key"] == key)
+        lo = pf.cavity_roof_y(dict(p, **{key: h["min"]}), h["z"])
+        hi = pf.cavity_roof_y(dict(p, **{key: h["max"]}), h["z"])
+        assert abs(hi - lo) > 0.3, (bt, key, lo, hi)
+
+
+def test_section_endpoint_and_preview_override():
+    """/api/section が断面を返し、クエリの上書きは状態を変えない。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "tenor",
+        "component_id": "mouthpiece"})
+    r = c.get("/api/section")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["baffle_type"] == "step"
+    assert len(body["curves"]["roof"]) > 50
+    base_end = next(h for h in body["handles"] if h["key"] == "baffle_plateau")["z"]
+
+    prev = c.get("/api/section?baffle_plateau=0.60")
+    assert prev.status_code == 200
+    moved = next(h for h in prev.json()["handles"]
+                 if h["key"] == "baffle_plateau")["z"]
+    assert moved > base_end + 5.0                      # プレビューは動いている
+    # プロジェクトのパラメータは変わっていない
+    assert c.get("/api/project").json()["params"]["baffle_plateau"] == 0.36
+    assert next(h for h in c.get("/api/section").json()["handles"]
+                if h["key"] == "baffle_plateau")["z"] == base_end
+    # 断面を持たないコンポーネントは 404
+    c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "tenor", "component_id": "reed"})
+    assert c.get("/api/section").status_code == 404
+
+
+def test_mp_baffle_handles_move_tone_metrics():
+    """断面ハンドルを動かすと Tier2 の指標が動く（画面が形を説明している）。"""
+    from saxsketch.acoustics import brightness as br
+    base = _template_params("mouthpiece", "tenor")
+    b0 = br.tone_metrics(base)["brightness"]
+    assert br.tone_metrics(dict(base, baffle_step_rise=0.85))["brightness"] > b0 + 0.2
+    assert br.tone_metrics(dict(base, baffle_plateau=0.70))["brightness"] > b0 + 0.2
+    cv = dict(base, baffle_type="curve")
+    assert (br.tone_metrics(dict(cv, baffle_curvature=1.0))["brightness"]
+            > br.tone_metrics(dict(cv, baffle_curvature=-1.0))["brightness"] + 0.4)

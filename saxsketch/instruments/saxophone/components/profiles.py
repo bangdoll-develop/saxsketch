@@ -838,9 +838,20 @@ def window_open_z(p: dict) -> float:
     return 0.5 * (lo + hi)
 
 
+def baffle_plateau_end_z(p: dict) -> float:
+    """バッフル天井の平坦区間（棚）が終わる z＝段／ランプの起点。"""
+    return baffle_plateau(p) * bore_start_z(p)
+
+
+def baffle_step_end_z(p: dict) -> float:
+    """段（ライザー）が終わる z。ステップ型以外では棚の終わりと同じ扱いでよい。"""
+    return min((baffle_plateau(p) + _STEP_RISER_W) * bore_start_z(p),
+               bore_start_z(p))
+
+
 def baffle_flat_end_z(p: dict) -> float:
-    """バッフル天井の平坦区間が終わる z（＝ランプの起点）。"""
-    return _BAFFLE_FLAT * bore_start_z(p)
+    """[互換] `baffle_plateau_end_z` の旧名。"""
+    return baffle_plateau_end_z(p)
 
 
 #: 天井の頭打ちに使う soft-min の幅。ティップの天井は「窓がどこで開くか」を
@@ -974,25 +985,131 @@ def _floor_limit(p: dict, z: float) -> float:
     return shell_limit(p, z)["bot"] - _FLOOR_RELIEF * (1.0 - w)
 
 
-def _baffle_progress(p: dict, sigma: float) -> float:
-    """天井の立ち上がり率 v∈[0,1]（σ=z/zb、σ=1 でボア天井）。
+# --------------------------------------------------------------- バッフル型
+#
+# バッフル解説図（ストレート型 / ステップ型 / カーブ型）の分類に合わせた 4 型。
+# どれも「平坦な棚 → 立ち上がり → ボア天井」という同じ骨格の上に乗っていて、
+# 違うのは**立ち上がり方だけ**なので、v(σ) の作り分けだけで表現する。
+#
+#   step      平坦な棚 → 段 → ボアへ。**実測 WindyCity がこれ**（棚が z=18mm 続く）
+#   straight  棚の終わりからボア天井まで一定勾配の直線
+#   rollover  ストレートの肩を `rollover_radius` で丸めたもの
+#   curve     天井が低いまま粘って後半で開く（気道が絞られる＝明るくアグレッシブ）
+#
+# 4 型とも **v(0)=0 / v(1)=1 / 単調非減少** を構成上満たす。単調性は「天井が z に
+# 対して逆流しない」＝ロフト面が折り返さないための必要条件で、ここが破れると
+# `_contain` の安全網が発動して形が折れる。
 
-    rollover=実測どおり（基準）、straight=平坦端から線形、step=急峻な段差、
-    curve=早く立ち上がって高天井で張り出す（メタリック/アグレッシブ）。
-    step だけは**意図的に**段差を残す（そういうバッフルなので）。
+#: 型ごとの `baffle_plateau`（平坦区間 σ）の実効範囲。
+#:
+#: 下限を 0 にしないのは、σ < `_TIP_ROOF_SPAN` (=0.10) で天井が「レール基準 →
+#: バッフル基準」へ乗り移るため。そこでランプを立てると天井がリード面を横切る z が
+#: 前へずれ、`tip_rail_width` の指定より細いティップレールになる（C-1b で立てた
+#: 「レール幅＝天井がリード面を突き抜ける z」の関係が壊れる）。
+#:
+#: straight / curve の上限が短いのは**型の定義そのもの**。長い棚を許せば、それは
+#: もうストレートでもカーブでもなくステップになる。UI で型ごとに調整範囲を絞る
+#: 根拠はこの 1 テーブルに集約してある。
+_PLATEAU_RANGE = {
+    "step": (0.10, 0.70), "rollover": (0.10, 0.70),
+    "straight": (0.02, 0.12), "curve": (0.02, 0.12),
+}
+#: ステップ型のライザー（段）の幅 σ。テナー（zb=50）で 3mm。
+_STEP_RISER_W = 0.06
+
+
+def baffle_plateau(p: dict) -> float:
+    """平坦な天井が続く区間（σ）。型ごとの実効範囲へクランプした値。"""
+    lo, hi = _PLATEAU_RANGE.get(p.get("baffle_type", "step"), (0.10, 0.70))
+    return min(max(p.get("baffle_plateau", _BAFFLE_FLAT), lo), hi)
+
+
+def _plateau_warp(sigma: float, a: float) -> float:
+    """σ を「棚の長さ a」から実測基準 `_BAFFLE_FLAT` の尺度へ写す区分線形写像。
+
+    [0, a] → [0, 0.36]、[a, 1] → [0.36, 1]。**a = 0.36 で恒等**なので、既定値では
+    実測カーブ `_CAVITY_C` がそのまま出る（既定形状を動かさないための条件）。
+    折れ点 σ=a では基準カーブの傾きがほぼ 0（`_CAVITY_C` は 0.36 まで完全に平坦で
+    0.38 でようやく 0.013）なので、合成しても実質 C1 のまま。
     """
+    f = _BAFFLE_FLAT
+    if sigma <= a:
+        return f * (sigma / a) if a > 1e-9 else f
+    return f + (1.0 - f) * (sigma - a) / (1.0 - a)
+
+
+def _v_step(p: dict, sigma: float) -> float:
+    """ステップ型。`baffle_step_rise` で段の切り立ち具合を足す。
+
+    `baffle_step_rise=0` かつ `baffle_plateau=_BAFFLE_FLAT` のとき、v は
+    `_pchip(_CAVITY_C, σ)` と**厳密に一致する**（実測そのもの）。既定値をこれに
+    してあるので、型の作り直しで既定形状は 1μm も動かない。
+    """
+    a = baffle_plateau(p)
+    r = min(max(p.get("baffle_step_rise", 0.0), 0.0), 0.85)
+    base = _pchip(_CAVITY_C, _plateau_warp(sigma, a))
+    if r <= 0.0:
+        return base
+    return r * _smoothstep((sigma - a) / _STEP_RISER_W) + (1.0 - r) * base
+
+
+def _v_straight(p: dict, sigma: float) -> float:
+    """ストレート型。棚の終わりからボア天井まで一定勾配。
+
+    y = y0 + (bore_r − y0)·v で y0 は棚の区間で定数なので、**v が線形なら
+    断面の天井線もそのまま直線**になる（型の特徴がそのまま出る）。
+    """
+    a = baffle_plateau(p)
+    return min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
+
+
+def _v_rollover(p: dict, sigma: float) -> float:
+    """ロールオーバー型。ストレートの肩を `rollover_radius` で丸めた形。
+
+    直線に放物線フィレットを付ける（t<w で t²/2w、以降 t−w/2 を正規化）。
+    接線連続なので肩に稜線が残らない。w は肩の丸みを σ 尺度へ直したもの。
+    """
+    a = baffle_plateau(p)
+    span = max((1.0 - a) * bore_start_z(p), 1e-6)
+    w = min(max(p.get("rollover_radius", 8.0) / span, 0.02), 0.9)
+    t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
+
+    def f(u: float) -> float:
+        return u * u / (2.0 * w) if u < w else u - 0.5 * w
+
+    return f(t) / f(1.0)
+
+
+def _v_curve(p: dict, sigma: float) -> float:
+    """カーブ型。天井が低いまま粘って後半で開く＝ティップ側で気道を絞る。
+
+    `baffle_curvature` > 0 でふくらみ（明るくアグレッシブ）、< 0 でスクープ
+    （早く開く＝ダーク）、0 でストレートと同じ直線。
+
+    符号の向きは旧実装と逆。旧実装は `1−(1−t)^n` で**4型のうち最も早く開く**のに、
+    `brightness._BAFFLE_BONUS` では最も明るい 0.24 が当たっていた（解説図の
+    「メタリックでアグレッシブな音」とも合わない）。幾何と音響の向きをここで揃える。
+
+    スクープ側に `t^m` (m<1) を使わないのは、**t=0 で傾きが発散する**から。
+    c=−1 だと棚の直後 0.7mm で天井が 3.4mm 立ち上がる垂直壁になり、ルールドロフトの
+    弦誤差が 1.4mm に達した。`1−(1−t)^n` なら t=0 の傾きが n で有限に収まる
+    （c=−1 で 0.87mm/mm）。ふくらみ側とスクープ側は、この式で互いの鏡像になる。
+    """
+    a = baffle_plateau(p)
+    c = min(max(p.get("baffle_curvature", 0.5), -1.0), 1.0)
+    t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
+    n = 2.0 ** (1.6 * abs(c))
+    return t ** n if c >= 0.0 else 1.0 - (1.0 - t) ** n
+
+
+_V_BUILDERS = {"step": _v_step, "straight": _v_straight,
+               "rollover": _v_rollover, "curve": _v_curve}
+
+
+def _baffle_progress(p: dict, sigma: float) -> float:
+    """天井の立ち上がり率 v∈[0,1]（σ=z/zb、σ=1 でボア天井）。"""
     sigma = min(max(sigma, 0.0), 1.0)
-    kind = p.get("baffle_type", "rollover")
-    if kind == "rollover":
-        return _pchip(_CAVITY_C, sigma)
-    s0 = _BAFFLE_FLAT
-    t = 0.0 if sigma <= s0 else (sigma - s0) / (1.0 - s0)
-    if kind == "straight":
-        return t
-    if kind == "step":
-        return 0.06 + 0.94 * _smoothstep((t - 0.18) / 0.10)
-    expo = 1.6 + p.get("rollover_radius", 8.0) / 10.0   # curve
-    return 1.0 - (1.0 - t) ** expo
+    return _V_BUILDERS.get(p.get("baffle_type", "step"), _v_step)(p, sigma)
 
 
 #: 天井側の肉厚が `tip_rail_thickness` から `min_wall` へ戻るまでの区間（σ）。
@@ -1133,6 +1250,14 @@ def _station_zs(p: dict) -> list[float]:
     zs |= {z0 + 0.35 * i for i in range(1, int((4.6 - z0) / 0.35) + 1)}
     zs |= {4.6 + 0.7 * i for i in range(1, int(3.0 / 0.7) + 1)}
     zs |= {z_we - 1.5 + 0.5 * i for i in range(1, int(3.5 / 0.5))}
+    # バッフルの棚の終わり。ここで v の傾きが 0 から立ち上がる（型による）。
+    z_pl, z_st = baffle_plateau_end_z(p), baffle_step_end_z(p)
+    zs |= {z_pl}
+    # 切り立った段を作ったときだけ、段の終わりも折れ目として置く。区間の細分は
+    # 下の `_refine_for_roof` が弦誤差を見て自動でやる。既定（rise=0）では段が
+    # 無いので**足さない** — 足すと STEP 側の面数が理由もなく増える。
+    if p.get("baffle_step_rise", 0.0) > 1e-9 and p.get("baffle_type") == "step":
+        zs |= {z_st}
     out = sorted(z for z in zs if z0 - 1e-9 <= z <= zb + 1e-9)
     # 近すぎる z は捨てる。ロフトが "Segments do not have sufficient separation" で
     # 落ちるだけでなく、生き残っても薄いセグメントが局所的な面の乱れを作る
@@ -1142,9 +1267,41 @@ def _station_zs(p: dict) -> list[float]:
     for z in out[1:]:
         if z - keep[-1] > 0.40:
             keep.append(z)
-        elif z in (z_we, z_th, zb):
+        elif z in (z_we, z_th, zb, z_pl, z_st):
             keep[-1] = z
-    return keep
+    return _refine_for_roof(p, keep)
+
+
+#: 天井の弦誤差の許容値 [mm]。**既定（実測 WindyCity）の弦誤差 0.132mm がこの値の
+#: すぐ下に来るようにしてある**。既定のステーション列を動かさないためで、ここを
+#: 下げると既定の形が変わり、C-1b の校正（ティップレール幅 0.891mm）と
+#: `verify_base.py` の全項目、STEP の面数まで一斉に動く。実測形状そのものが
+#: 「この粗さで足りる」という基準になっている、という立て方。
+_ROOF_CHORD_TOL = 0.14
+#: 分割の下限間隔 [mm]。ノーズで既に 0.35mm 刻みを使っていて実績がある値。
+_ROOF_MIN_DZ = 0.35
+
+
+def _refine_for_roof(p: dict, zs: list[float]) -> list[float]:
+    """天井が急な区間を二分割する。
+
+    ルールドロフトは断面間を**直線**で結ぶので、等間隔のままだと勾配の大きい所で
+    弦が内側へ落ちて実際の形が痩せる（`baffle_curvature=-1` で 1.41mm、
+    `baffle_step_rise=0.8` で 0.54mm）。中点で弦との差を見て割るだけの素朴な適応
+    分割で、既定の形状には（許容値の立て方により）一切手を入れない。
+    """
+    out = list(zs)
+    i = 0
+    while i < len(out) - 1 and len(out) < 400:
+        a, b = out[i], out[i + 1]
+        m = 0.5 * (a + b)
+        sag = abs(cavity_roof_y(p, m)
+                  - 0.5 * (cavity_roof_y(p, a) + cavity_roof_y(p, b)))
+        if b - a >= 2.0 * _ROOF_MIN_DZ - 1e-9 and sag > _ROOF_CHORD_TOL:
+            out.insert(i + 1, m)
+        else:
+            i += 1
+    return out
 
 
 def _station_role(p: dict, z: float) -> str:
@@ -1473,9 +1630,12 @@ def param_regions(p: dict) -> dict:
         "tip_chamfer":     r(0.0, max(tip_chamfer_len(p), 0.05), "all", "ティップ前縁の面取り"),
         "side_rail_width": r(z_start, z_we, "bottom", "サイドレール（窓の両脇）"),
         "table_angle":     r(0.0, heel, "bottom", "テーブル平面（傾き）"),
-        "baffle_type":     r(z_start, z_baffle_end, "all", "バッフル（窓の天井）"),
+        "baffle_type":     r(z_start, zb, "all", "バッフル（窓の天井）"),
         "baffle_height":   r(z_start, z_baffle_end, "all", "バッフル（窓の天井）"),
-        "rollover_radius": r(z_start, zb, "all", "バッフル肩の丸み"),
+        "baffle_plateau":  r(z_start, zb, "all", "バッフルの棚とランプ"),
+        "baffle_step_rise": r(z_baffle_end, baffle_step_end_z(p), "all", "バッフルの段"),
+        "baffle_curvature": r(z_baffle_end, zb, "all", "バッフルのカーブ"),
+        "rollover_radius": r(z_baffle_end, zb, "all", "バッフル肩の丸み"),
         "throat_ratio":    r(zb - 6.0, zb, "all", "スロート（最狭部）"),
         "chamber_ratio":   r(z_we, zb - 2.0, "all", "チェンバー（最大部）"),
         "chamber_shape":   r(z_we, zb, "all", "チェンバー断面"),
@@ -1553,3 +1713,160 @@ def side_profile_polylines(p: dict, samples: int = 120) -> dict:
         "table_plane": [(0.0, table_plane_y(p, 0.0)), (heel, table_plane_y(p, heel))],
         "bore_start": bore_start_z(p),
     }
+
+
+# ------------------------------------------------- 断面エディタ（中央面 x=0）
+#
+# 上の `side_profile_polylines` は**仕様書用**で、空洞をロフトのステーション列
+# （＝実際に造形される表現）で描く。ここから下は**編集用**で、法則そのもの
+# （`cavity_roof_y` などの連続関数）を細かく標本化し、外殻の上限線まで返す。
+# 用途が違うので別関数にしてある。
+#
+# 座標はどちらも「z [mm]（ティップ=0）／ y [mm]（ボア軸=0、+がビーク側）」。
+
+#: 断面ポリラインの標本数。SVG 表示用なので tenor(107mm) で 0.45mm 刻み相当。
+_SECTION_N = 240
+
+
+def _section_poly(f, z0: float, z1: float, breaks=(),
+                  n: int = _SECTION_N) -> list[list[float]]:
+    """[z, f(z)] のポリライン。`breaks` の z は必ず標本に入れる。
+
+    折れ目を等間隔標本の網の目から漏らすと、段や面取りが描画で丸まって
+    「UI で見えている形」と「造形される形」がずれる。
+    """
+    zs = {z0 + (z1 - z0) * i / n for i in range(n + 1)}
+    zs |= {b for b in breaks if z0 < b < z1}
+    return [[round(z, 4), round(f(z), 4)] for z in sorted(zs)]
+
+
+def _section_breaks(p: dict) -> tuple[float, ...]:
+    """断面で傾きが折れる z（面取り端・棚の端・段の端・窓の終端・踵）。"""
+    return (tip_chamfer_len(p), baffle_plateau_end_z(p), baffle_step_end_z(p),
+            window_end_z(p), heel_z(p))
+
+
+def section_curves(p: dict) -> dict:
+    """中央面 x=0 の輪郭一式。断面エディタと検証図が同じ関数を見る。
+
+    ここは**表示用の座標を作るだけ**で形状の法則は持たない。法則が UI 側へ
+    複製されないようにするための境界で、フロントは返ってきた点を描くだけでよい。
+    """
+    length = p["overall_length"]
+    zb, rb = bore_start_z(p), bore_radius(p)
+    heel = heel_z(p)
+    z0 = window_start_z(p)
+    brk = _section_breaks(p)
+
+    def bot(z: float) -> float:
+        # 踵より後ろはテーブルカットが当たらないので胴の下端そのもの。
+        return max(-outer_radius(p, z), cut_top_y(p, z)) if z < heel \
+            else -outer_radius(p, z)
+
+    return {
+        "outer_top": _section_poly(
+            lambda z: min(outer_radius(p, z), beak_apex_y(p, z)), 0.0, length, brk),
+        "outer_bot": _section_poly(bot, 0.0, length, brk),
+        "reed": _section_poly(lambda z: cut_top_y(p, z), 0.0, heel, brk),
+        "roof": _section_poly(lambda z: cavity_roof_y(p, z), z0, zb, brk),
+        "floor": _section_poly(lambda z: cavity_floor_y(p, z), z0, zb, brk),
+        "shell_top": _section_poly(
+            lambda z: shell_limit(p, z)["top"], z0, zb, brk),
+        "bore_top": [[round(zb, 4), round(rb, 4)], [round(length, 4), round(rb, 4)]],
+        "bore_bot": [[round(zb, 4), round(-rb, 4)], [round(length, 4), round(-rb, 4)]],
+    }
+
+
+#: 断面ハンドルが有効になるバッフル型。ここに無い型では UI に出さない。
+_HANDLE_TYPES = {
+    "baffle_height": {"straight", "step", "curve", "rollover"},
+    "baffle_plateau": {"step", "rollover"},
+    "baffle_step_rise": {"step"},
+    "baffle_curvature": {"curve"},
+    "rollover_radius": {"rollover"},
+}
+
+
+def _roof_at(p: dict, key: str, value, z: float) -> float:
+    return cavity_roof_y({**p, key: value}, z)
+
+
+def baffle_handles(p: dict) -> list[dict]:
+    """断面エディタのドラッグハンドル（断面座標つき）。
+
+    各要素:
+      key/label/unit/step  対応するパラメータ
+      axis                 "z" か "y"。この向きにだけ動かせる
+      z, y                 いまの断面上の位置 [mm]
+      value, min, max      パラメータの値と**この型での**実効範囲
+      span                 [value=min のときの座標, value=max のときの座標]
+      active               この型で有効か
+
+    `span` を返すのは、フロントが線形補間するだけで値へ戻せるようにするため。
+    形状の法則をフロントへ複製しないための仕掛けで、非線形（`_soft_min` が
+    効く領域）でも、次に返ってくる `curves` が真値なので描画は自己補正する。
+    """
+    kind = p.get("baffle_type", "step")
+    zb = bore_start_z(p)
+    a = baffle_plateau(p)
+    pl_lo, pl_hi = _PLATEAU_RANGE.get(kind, (0.10, 0.70))
+    z_pl = baffle_plateau_end_z(p)
+
+    # 高さは棚の途中で掴む。`_TIP_ROOF_SPAN`（天井がレール基準からバッフル基準へ
+    # 移り終わる σ）より前で掴むと、`baffle_height` を端から端まで振っても
+    # ハンドルが 2mm しか動かず操作にならないので、そこから後ろに置く。
+    z_h = min(max(0.5 * z_pl, _TIP_ROOF_SPAN * zb), zb)
+    z_rise = min(z_pl + 0.5 * _STEP_RISER_W * zb, zb)
+    z_curve = (a + 0.5 * (1.0 - a)) * zb
+
+    def h(key, label, axis, z, lo, hi, unit, step, span):
+        return {
+            "key": key, "label": label, "axis": axis,
+            "z": round(z, 3), "y": round(cavity_roof_y(p, z), 3),
+            "value": round(float(p.get(key, 0.0)), 4),
+            "min": round(lo, 4), "max": round(hi, 4),
+            "span": [round(span[0], 3), round(span[1], 3)],
+            "unit": unit, "step": step,
+            "active": kind in _HANDLE_TYPES[key],
+        }
+
+    return [
+        h("baffle_height", "バッフル高さ", "y", z_h, 0.0, 5.0, "mm", 0.1,
+          (_roof_at(p, "baffle_height", 0.0, z_h),
+           _roof_at(p, "baffle_height", 5.0, z_h))),
+        h("baffle_plateau", "棚の終わり（段の位置）", "z", z_pl, pl_lo, pl_hi, "比", 0.01,
+          (pl_lo * zb, pl_hi * zb)),
+        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, 0.0, 0.85, "比", 0.05,
+          (_roof_at(p, "baffle_step_rise", 0.0, z_rise),
+           _roof_at(p, "baffle_step_rise", 0.85, z_rise))),
+        h("baffle_curvature", "カーブ量", "y", z_curve, -1.0, 1.0, "比", 0.05,
+          (_roof_at(p, "baffle_curvature", -1.0, z_curve),
+           _roof_at(p, "baffle_curvature", 1.0, z_curve))),
+        h("rollover_radius", "肩の丸みの終わり", "z",
+          min(z_pl + p.get("rollover_radius", 8.0), zb), 3.0, 20.0, "mm", 0.5,
+          (min(z_pl + 3.0, zb), min(z_pl + 20.0, zb))),
+    ]
+
+
+def baffle_warnings(p: dict) -> list[str]:
+    """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。"""
+    out: list[str] = []
+    zb = bore_start_z(p)
+    rb = bore_radius(p)
+    # 天井が外殻（ビーク下の肉厚）で頭打ちになっている＝これ以上バッフルを
+    # 下げても形が変わらない領域。`_soft_min` が効いている境界を素の値で見る。
+    hit = None
+    for i in range(101):
+        z = window_start_z(p) + (zb - window_start_z(p)) * i / 100
+        y0 = _roof_base_y(p, _cav_sigma(p, z))
+        raw = y0 + (rb - y0) * _baffle_progress(p, _cav_sigma(p, z))
+        if raw > shell_limit(p, z)["top"] - 0.02:
+            hit = z if hit is None else hit
+    if hit is not None:
+        out.append(f"z≈{hit:.1f}mm から先で天井がビーク下の肉厚上限に当たっています。"
+                   "これ以上バッフルを開いても形は変わりません（min_wall / beak_height で決まる上限）")
+    d = window_open_z(p) - window_front_z(p)
+    if abs(d) > 0.15:
+        out.append(f"窓の開き始めが設計値より {d:+.2f}mm ずれています"
+                   "（ティップレール幅が指定どおりになりません）")
+    return out

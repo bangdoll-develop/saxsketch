@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import platform
 import re
@@ -13,7 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -293,6 +294,33 @@ def model_regions():
     """各パラメータの影響領域（3Dハイライト用）。現在のパラメータ値で計算。"""
     _require_project()
     return STATE.component.regions(dict(STATE.paramset.values))
+
+
+@app.get("/api/section")
+def model_section(request: Request):
+    """中央面の断面とドラッグハンドル。**CAD ビルドを伴わない**。
+
+    ドラッグ中に毎フレーム叩かれるので、形状法則の数値計算だけで返す
+    （3D の再生成は従来どおりデバウンスされた `/api/model.stl` のまま）。
+    断面を持たないコンポーネントでは 404 を返し、UI は断面タブを出さない。
+
+    クエリでパラメータを渡すと「**もしこの値にしたら**」の断面を返す（ドラッグ中の
+    プレビュー用）。プロジェクトの状態は変えないので、確定は従来どおり
+    `PUT /api/project/params` で行う。検証は通常の適用と同じ `ParamSpec.validate`。
+    """
+    _require_project()
+    values = dict(STATE.paramset.values)
+    for k, v in request.query_params.items():
+        spec = STATE.paramset.specs.get(k)
+        if spec is None:
+            continue
+        # 数値に読めないクエリは無視して現在値のままにする（500 にしない）。
+        with contextlib.suppress(ValueError, TypeError):
+            values[k] = spec.validate(v)
+    data = STATE.component.section(values)
+    if data is None:
+        raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
+    return data
 
 
 class GoalSeekReq(BaseModel):
@@ -703,6 +731,13 @@ def main():
     import sys
 
     import uvicorn
+
+    # 起動メッセージに ▶ ✔ ⚠ を使っている。Windows の既定コンソール（cp932）だと
+    # ここで UnicodeEncodeError を出して**サーバが起動する前に落ちる**ので、
+    # 出力の符号化だけ先に UTF-8 へ寄せる（端末が出せない字は置換に任せる）。
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     host = os.environ.get("WF_HOST", "127.0.0.1")
     want = int(os.environ.get("WF_PORT", "8712"))
