@@ -196,6 +196,7 @@ canvas.scope { width: 100%; height: 74px; background: #10141a; border-radius: 6p
 .sec-chip b { color: var(--text); margin-left: 6px; font-variant-numeric: tabular-nums; }
 .sec-chip i { color: var(--muted); font-style: normal; margin-left: 2px; }
 .sec-chip.live { border-color: var(--warn); color: var(--text); }
+.sec-chip.busy { border-style: dashed; }
 .sec-warn {
   flex: none; color: var(--warn); font-size: 11.5px; padding-top: 4px;
 }

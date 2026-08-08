@@ -29,7 +29,92 @@ ny>1 なら上下どちらの半分も X=±1 で接線が垂直なので、赤�
 """
 from __future__ import annotations
 
+import functools
 import math
+import threading
+
+
+# ---------------------------------------------------------------- 同一 p のあいだのキャッシュ
+#
+# このモジュールは「p と z を受け取って数を返す」小さな関数の集まりで、そのうち
+# **z に依存しないもの**（`heel_z` など）が z のサンプルごとに呼び直されている。
+# 断面 1 枚（6 曲線 × 245 点）で `heel_z` が 8,357 回、`_pchip` が 8,285 回。
+# ドラッグ中は毎フレームこれが走るので、そのぶんがそのまま応答の遅れになる。
+#
+# キャッシュが効くのは **`params_scope()` に渡した dict オブジェクトと `is` で
+# 同一のときだけ**。`{**p, key: v}` で作った別オブジェクト（`sensitivity()` の
+# 摂動や `_roof_at()`）は自動的に素通りするので、摂動計算が元の値を拾う事故が
+# 構造的に起きない。値の同一性ではなくオブジェクトの同一性で見ているのが要点。
+
+_SCOPE = threading.local()
+
+
+class _ParamScope:
+    __slots__ = ("p", "cache")
+
+    def __init__(self, p: dict) -> None:
+        self.p = p
+        self.cache: dict = {}
+
+
+class params_scope:
+    """`p` を変えないと分かっている区間で、`p` だけに依存する値を使い回す。
+
+    入れ子にしてよい（内側が優先され、抜けると外側へ戻る）。区間の中で `p` を
+    書き換えてはいけない — 書き換えるなら新しい dict を作ること（そうすれば
+    `is` 判定で自動的にキャッシュ外になる）。
+    """
+
+    __slots__ = ("_scope", "_prev")
+
+    def __init__(self, p: dict) -> None:
+        self._scope = _ParamScope(p)
+
+    def __enter__(self) -> "params_scope":
+        prev = getattr(_SCOPE, "cur", None)
+        self._prev = prev
+        # 同じ `p` で入れ子になったら外側のキャッシュをそのまま使う。入口を
+        # 二重に張っても（component.section → section_curves）損をしないように。
+        if prev is not None and prev.p is self._scope.p:
+            self._scope = prev
+        _SCOPE.cur = self._scope
+        return self
+
+    def __exit__(self, *exc) -> None:
+        _SCOPE.cur = self._prev
+
+
+def _pcached(fn):
+    """`p` を第1引数に取る純関数の結果を、スコープ中の同一 `p` についてだけ覚える。"""
+    name = fn.__name__
+
+    @functools.wraps(fn)
+    def wrap(p, *args):
+        sc = getattr(_SCOPE, "cur", None)
+        if sc is None or sc.p is not p:
+            return fn(p, *args)
+        key = (name, args)
+        hit = sc.cache.get(key, _MISS)
+        if hit is _MISS:
+            hit = sc.cache[key] = fn(p, *args)
+        return hit
+
+    wrap.__wrapped__ = fn      # キャッシュ無しの実体（テストが素の値と突き合わせる）
+    return wrap
+
+
+def _scoped(fn):
+    """第1引数の `p` で `params_scope` を張ってから実行する（同じ `p` を何度も
+    標本化する入口用）。返り値そのものはキャッシュしない — list/dict を返す
+    関数に付けるので、呼び出し側が書き換えても安全なままにしておく。"""
+    @functools.wraps(fn)
+    def wrap(p, *args, **kw):
+        with params_scope(p):
+            return fn(p, *args, **kw)
+    return wrap
+
+
+_MISS = object()
 
 
 # ---------------------------------------------------------------- 補間ユーティリティ
@@ -55,17 +140,9 @@ def _soft_max(a: float, b: float, k: float = 0.35) -> float:
     return -_soft_min(-a, -b, k)
 
 
-def _pchip(pts: list[tuple[float, float]], x: float) -> float:
-    """単調保存の3次エルミート補間（Fritsch–Carlson）。
-
-    外形プロファイルを制御点から滑らかに起こすために使う。単調性を保存するので、
-    制御点が単調増加なら生成される回転体も単調で、ロフトが自己交差しない。
-    """
+def _pchip_table(pts: list[tuple[float, float]]) -> tuple[list, list, list, list]:
+    """Fritsch–Carlson の傾き `m` を含む係数表。制御点だけで決まるので使い回せる。"""
     n = len(pts)
-    if x <= pts[0][0]:
-        return pts[0][1]
-    if x >= pts[-1][0]:
-        return pts[-1][1]
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     h = [xs[i + 1] - xs[i] for i in range(n - 1)]
@@ -81,8 +158,48 @@ def _pchip(pts: list[tuple[float, float]], x: float) -> float:
     for i in range(n - 1):
         if d[i] == 0.0:
             m[i] = m[i + 1] = 0.0
+    return xs, ys, h, m
+
+
+#: モジュール定数の表（下の `_register_static_pchip()` が import 時に一度だけ登録）。
+#: `id()` キーだが**表そのものへの参照も持つ**ので id が使い回されてすり替わることは
+#: なく、登録された表しか入らないので伸びもしない。20 点の表を毎回ハッシュせずに済む。
+_PCHIP_STATIC: dict[int, tuple] = {}
+#: その場で組み立てる 4〜5 点の表用。同じ `p` の中では毎回同じ表になるので、
+#: 値をキーにしても 1 回目以降は全部ヒットする。
+_PCHIP_BY_VALUE: dict[tuple, tuple] = {}
+
+
+def _pchip(pts: list[tuple[float, float]], x: float) -> float:
+    """単調保存の3次エルミート補間（Fritsch–Carlson）。
+
+    外形プロファイルを制御点から滑らかに起こすために使う。単調性を保存するので、
+    制御点が単調増加なら生成される回転体も単調で、ロフトが自己交差しない。
+
+    係数表（`_pchip_table`）は制御点だけで決まるのでキャッシュする。断面 1 枚で
+    8,285 回呼ばれ、毎回この表を作り直していた。**補間の演算そのものは変えて
+    いない**ので、同じ入力には同じ浮動小数が返る。
+    """
+    if x <= pts[0][0]:
+        return pts[0][1]
+    if x >= pts[-1][0]:
+        return pts[-1][1]
+
+    ent = _PCHIP_STATIC.get(id(pts))
+    if ent is not None and ent[0] is pts:
+        xs, ys, h, m = ent[1]
+    else:
+        vkey = tuple(pts)
+        tab = _PCHIP_BY_VALUE.get(vkey)
+        if tab is None:
+            tab = _pchip_table(pts)
+            if len(_PCHIP_BY_VALUE) > 512:
+                _PCHIP_BY_VALUE.clear()
+            _PCHIP_BY_VALUE[vkey] = tab
+        xs, ys, h, m = tab
+
     k = 0
-    for i in range(n - 1):
+    for i in range(len(xs) - 1):
         if xs[i] <= x <= xs[i + 1]:
             k = i
             break
@@ -1751,30 +1868,36 @@ def section_curves(p: dict) -> dict:
 
     ここは**表示用の座標を作るだけ**で形状の法則は持たない。法則が UI 側へ
     複製されないようにするための境界で、フロントは返ってきた点を描くだけでよい。
+
+    6 曲線 × 245 点を同じ `p` で標本化するので `params_scope` の中で回す
+    （ドラッグ中に毎フレーム叩かれる経路）。
     """
-    length = p["overall_length"]
-    zb, rb = bore_start_z(p), bore_radius(p)
-    heel = heel_z(p)
-    z0 = window_start_z(p)
-    brk = _section_breaks(p)
+    with params_scope(p):
+        length = p["overall_length"]
+        zb, rb = bore_start_z(p), bore_radius(p)
+        heel = heel_z(p)
+        z0 = window_start_z(p)
+        brk = _section_breaks(p)
 
-    def bot(z: float) -> float:
-        # 踵より後ろはテーブルカットが当たらないので胴の下端そのもの。
-        return max(-outer_radius(p, z), cut_top_y(p, z)) if z < heel \
-            else -outer_radius(p, z)
+        def bot(z: float) -> float:
+            # 踵より後ろはテーブルカットが当たらないので胴の下端そのもの。
+            return max(-outer_radius(p, z), cut_top_y(p, z)) if z < heel \
+                else -outer_radius(p, z)
 
-    return {
-        "outer_top": _section_poly(
-            lambda z: min(outer_radius(p, z), beak_apex_y(p, z)), 0.0, length, brk),
-        "outer_bot": _section_poly(bot, 0.0, length, brk),
-        "reed": _section_poly(lambda z: cut_top_y(p, z), 0.0, heel, brk),
-        "roof": _section_poly(lambda z: cavity_roof_y(p, z), z0, zb, brk),
-        "floor": _section_poly(lambda z: cavity_floor_y(p, z), z0, zb, brk),
-        "shell_top": _section_poly(
-            lambda z: shell_limit(p, z)["top"], z0, zb, brk),
-        "bore_top": [[round(zb, 4), round(rb, 4)], [round(length, 4), round(rb, 4)]],
-        "bore_bot": [[round(zb, 4), round(-rb, 4)], [round(length, 4), round(-rb, 4)]],
-    }
+        return {
+            "outer_top": _section_poly(
+                lambda z: min(outer_radius(p, z), beak_apex_y(p, z)), 0.0, length, brk),
+            "outer_bot": _section_poly(bot, 0.0, length, brk),
+            "reed": _section_poly(lambda z: cut_top_y(p, z), 0.0, heel, brk),
+            "roof": _section_poly(lambda z: cavity_roof_y(p, z), z0, zb, brk),
+            "floor": _section_poly(lambda z: cavity_floor_y(p, z), z0, zb, brk),
+            "shell_top": _section_poly(
+                lambda z: shell_limit(p, z)["top"], z0, zb, brk),
+            "bore_top": [[round(zb, 4), round(rb, 4)],
+                         [round(length, 4), round(rb, 4)]],
+            "bore_bot": [[round(zb, 4), round(-rb, 4)],
+                         [round(length, 4), round(-rb, 4)]],
+        }
 
 
 #: 断面ハンドルが有効になるバッフル型。ここに無い型では UI に出さない。
@@ -1791,6 +1914,7 @@ def _roof_at(p: dict, key: str, value, z: float) -> float:
     return cavity_roof_y({**p, key: value}, z)
 
 
+@_scoped
 def baffle_handles(p: dict) -> list[dict]:
     """断面エディタのドラッグハンドル（断面座標つき）。
 
@@ -1848,6 +1972,7 @@ def baffle_handles(p: dict) -> list[dict]:
     ]
 
 
+@_scoped
 def baffle_warnings(p: dict) -> list[str]:
     """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。"""
     out: list[str] = []
@@ -1870,3 +1995,53 @@ def baffle_warnings(p: dict) -> list[str]:
         out.append(f"窓の開き始めが設計値より {d:+.2f}mm ずれています"
                    "（ティップレール幅が指定どおりになりません）")
     return out
+
+
+# ---------------------------------------------------------------- キャッシュの登録
+#
+# 定義に直接デコレータを付けず末尾でまとめて包むのは、**何をキャッシュ対象と
+# みなしているか**を 1 箇所で読めるようにするため。ここに挙がっていない関数は
+# 素のまま呼ばれる。
+#
+# 載せてよい条件は2つだけ:
+#   1. `p`（と挙げた追加引数）だけで決まる純関数であること
+#   2. **不変な値を返すこと**。list / dict を返す関数は載せない —
+#      呼び出し側が返り値を書き換える（例: `mouthpiece.build_cad` の
+#      `secs.append(...)`）とキャッシュごと汚染されるため。
+
+#: `p` だけで決まるスカラ／タプル。断面 1 枚で数千回ずつ呼ばれる。
+_PARAM_ONLY = (
+    "shank_length", "shank_radius", "heel_z", "shoulder_length", "shank_start_z",
+    "bore_radius", "bore_start_z", "ligature_seat_range",
+    "tip_chamfer_depth", "tip_chamfer_len",
+    "table_angle", "table_y", "table_cut_end_z", "facing_cut_z_range",
+    "beak_ridge_radius", "beak_angle", "beak_apex_y0", "beak_cut_range",
+    "beak_ramp_end_z", "beak_blend_end_z", "beak_cut_cap_y",
+    "window_width", "window_front_z", "window_start_z", "window_end_z",
+    "window_open_z",
+    "baffle_plateau", "baffle_plateau_end_z", "baffle_step_end_z",
+    "baffle_flat_end_z", "tip_roof_y", "baffle_plateau_y",
+    "_throat_n", "_chamber_n", "throat_radius", "chamber_size",
+    "chamber_saturated", "_section_breaks",
+)
+
+#: `(p, z)` で決まるもの。同じ z を複数の呼び出し元が引き直すので効く
+#: （`outer_radius_nominal` は 1 断面 7,022 回に対し相異なる z は 245 個）。
+_PARAM_AND_Z = (
+    "outer_radius_nominal", "outer_radius", "table_plane_y", "cut_top_y",
+    "beak_apex_y", "_cav_sigma",
+)
+
+for _n in _PARAM_ONLY + _PARAM_AND_Z:
+    globals()[_n] = _pcached(globals()[_n])
+del _n
+
+
+def _register_static_pchip() -> None:
+    """モジュール定数の制御点表の係数を先に作っておく（`_pchip` の注記を参照）。"""
+    for tab in (_BODY_PROFILE, _SHOULDER_PROFILE, _CAVITY_W, _CAVITY_C,
+                _CAVITY_D, _RAIL_WEIGHT, _TOP_ARCH):
+        _PCHIP_STATIC[id(tab)] = (tab, _pchip_table(tab))
+
+
+_register_static_pchip()

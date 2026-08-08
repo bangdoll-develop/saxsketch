@@ -36,6 +36,7 @@ class AppState:
         self.paramset: ParamSet | None = None
         self.build_lock = threading.Lock()
         self._stl_cache: dict[str, bytes] = {}
+        self._sim_cache: dict[str, dict] = {}
         self._imp_cache: dict[str, dict] = {}
         self._wav_cache: dict[str, tuple] = {}
         # 採寸ワークフロー（Phase 4-A）。音響基準定数(size_info)へのプロジェクト局所上書き。
@@ -180,9 +181,7 @@ class AppState:
             self.project.refs[ref_id] = {
                 "source": path, "label": src.name, "params": dict(ps.values)}
         self.component.set_refs(self.project.refs)
-        self._stl_cache.clear()
-        self._imp_cache.clear()
-        self._wav_cache.clear()
+        self._clear_caches()
 
     def reference_summary(self) -> dict | None:
         """フロント表示用の参照情報。参照不要なコンポーネントでは None。"""
@@ -215,6 +214,7 @@ class AppState:
 
     def _clear_caches(self) -> None:
         self._stl_cache.clear()
+        self._sim_cache.clear()
         self._imp_cache.clear()
         self._wav_cache.clear()
 
@@ -232,25 +232,70 @@ class AppState:
         with self.build_lock:
             return self.component.build_cad(dict(self.paramset.values))
 
+    def build_spec(self, tolerance: float, cad: bool = False) -> dict:
+        """ビルドに必要な入力だけを取り出した、プロセス間で運べる辞書。"""
+        return {
+            "instrument_id": self.project.instrument_id,
+            "template_id": self.project.template_id,
+            "component_id": self.project.component_id,
+            "refs": copy.deepcopy(self.project.refs),
+            "params": dict(self.paramset.values),
+            "tolerance": tolerance,
+            "cad": cad,
+        }
+
     def get_stl_bytes(self, tolerance: float = 0.03) -> bytes:
+        """プレビュー/エクスポート用の STL。
+
+        ビルド自体は**別プロセス**へ出す。OCCT が GIL を離さないので、親で回すと
+        再生成中に断面もパラメータ更新も止まる（`buildworker` の注記を参照）。
+        ワーカが使えない環境では親で作る — 遅いだけで結果は同じ。
+        """
         key = self._params_key() + f":{tolerance}"
         cached = self._stl_cache.get(key)
         if cached is not None:
             return cached
-        from saxsketch.export.models import export_model
-        part = self.build_part()
-        with tempfile.TemporaryDirectory() as td:
-            f = Path(td) / "model.stl"
-            export_model(part, f, "stl", tolerance=tolerance)
-            data = f.read_bytes()
+
+        from saxsketch.server.buildworker import WORKER
+        data = None
+        if WORKER.alive:
+            with contextlib.suppress(RuntimeError):
+                data = WORKER.build_stl(self.build_spec(tolerance))
+        if data is None:
+            data = self._stl_bytes_inproc(tolerance)
+
         # キャッシュは直近3件のみ保持
         if len(self._stl_cache) > 3:
             self._stl_cache.clear()
         self._stl_cache[key] = data
         return data
 
+    def _stl_bytes_inproc(self, tolerance: float) -> bytes:
+        from saxsketch.export.models import export_model
+        part = self.build_part()
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "model.stl"
+            export_model(part, f, "stl", tolerance=tolerance)
+            return f.read_bytes()
+
     def simulate(self) -> dict:
-        return self.component.simulate(dict(self.paramset.values))
+        """シミュレーション結果。同じパラメータなら作り直さない。
+
+        `GET /api/project` と `PUT /api/project/params` の両方から呼ばれるので、
+        スライダーを1目盛り動かすたびに走る。中身は決定的（乱数なし）なので
+        `_params_key()` でそのままキャッシュしてよい。パラメータ・参照・
+        size_overrides のどれかが変われば鍵が変わり、明示的な `_clear_caches()`
+        でも消える。
+        """
+        key = self._params_key()
+        cached = self._sim_cache.get(key)
+        if cached is not None:
+            return cached
+        res = self.component.simulate(dict(self.paramset.values))
+        if len(self._sim_cache) > 4:
+            self._sim_cache.clear()
+        self._sim_cache[key] = res
+        return res
 
     # ---------------------------------------------------------- Tier3（インピーダンス・音合成）
 

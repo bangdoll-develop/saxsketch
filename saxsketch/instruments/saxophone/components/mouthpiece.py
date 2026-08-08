@@ -156,6 +156,10 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ 形状生成
 
     def build(self, params: dict):
+        with profiles.params_scope(params):
+            return self._build(params)
+
+    def _build(self, params: dict):
         p = params
 
         # 1) 外形回転体。刻みの根拠は `profiles.body_stations`（FreeCAD 側の
@@ -258,6 +262,13 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
+        with profiles.params_scope(params):
+            return self._simulate(params)
+
+    def _simulate(self, params: dict) -> dict:
+        # `sensitivity` は各 ParamSpec を摂動した `{**params, k: v}` で回すが、
+        # そちらは別 dict なので上のスコープのキャッシュには当たらない（当たったら
+        # 摂動が効かず壊れる）。スコープが効くのは tier1/tier2 と本体側だけ。
         tier1 = ac_volume.tier1_report(profiles.cavity_volume_cc(params), self.size_info,
                                        saturated=profiles.chamber_saturated(params))
         tier2 = ac_brightness.tone_metrics(params)

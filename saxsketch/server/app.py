@@ -26,7 +26,23 @@ from saxsketch.export.package import build_package, readme_text
 from saxsketch.export.spec import spec_html
 from .state import STATE
 
-app = FastAPI(title="SaxSketch", version="0.1.0")
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """CAD ビルド用の子プロセスを先に上げておく。
+
+    build123d の import に 2〜3 秒かかるので、最初の 3D 表示にそれを払わせない。
+    上がらない環境（`SAXSKETCH_NO_BUILD_WORKER=1` やテスト）でも黙って親側の
+    経路に落ちるだけなので、ここでは失敗を握りつぶしてよい。
+    """
+    from .buildworker import WORKER
+    await asyncio.to_thread(WORKER.start)
+    try:
+        yield
+    finally:
+        WORKER.stop()
+
+
+app = FastAPI(title="SaxSketch", version="0.1.0", lifespan=_lifespan)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 

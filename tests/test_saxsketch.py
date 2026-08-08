@@ -1701,15 +1701,33 @@ def test_survey_measure_commit(tmp_path):
     assert r.json()["params"]["overall_length"] == measured["overall_length"]
 
 
-def test_region_deviations_foreign_bounded():
-    """別座標系（ほぼ重ならない）メッシュ同士でも region_deviations が短時間で返ること。
+def test_region_deviations_foreign_bounded(monkeypatch):
+    """別座標系（ほぼ重ならない）メッシュでは、厳密計算の経路に一切入らないこと。
 
-    以前は全サンプル点が疑い化して on_surface が数十万点に膨れ、事実上ハングした。
-    厳密計算に上限を設けたので、取り違えた外部モデルでもフリーズしない。
+    trimesh の `on_surface` は近い点なら 0.12ms/点だが、離れた点だと 5.4ms/点になる
+    （`nearby_faces` が最近傍頂点までの距離を半径に rtree を引くので、遠い点では
+    メッシュの全面が候補になる）。以前はここへ全サンプル点が流れ込んで 26 秒かかり、
+    他の重い処理と並行しただけで壁時計の上限を割っていた。遠い点の厳密値は
+    「変化あり」判定に何も足さないので、`_REFINE_MAX` で落として経路に入れない。
+
+    壁時計は性能テストではなく**ハングしていないこと**の最後の砦として残してある
+    （実測 0.6 秒に対して桁違いの上限）。守りたい性質は点数 0 の方で見る。
     """
     import time
 
+    from trimesh.proximity import ProximityQuery
+
     from saxsketch.analysis import meshdiff
+
+    exact_pts = 0
+    original = ProximityQuery.on_surface
+
+    def counting(self, points):
+        nonlocal exact_pts
+        exact_pts += len(points)
+        return original(self, points)
+
+    monkeypatch.setattr(ProximityQuery, "on_surface", counting)
 
     comp, params, ref = _tenor_mesh()
     foreign = ref.copy()
@@ -1718,10 +1736,65 @@ def test_region_deviations_foreign_bounded():
 
     t = time.time()
     out = meshdiff.region_deviations(ref, foreign, regions)
-    assert time.time() - t < 30.0        # ハングしない（実測 数秒）
+    assert exact_pts == 0                 # 遠い点は厳密計算に回さない
+    assert time.time() - t < 120.0        # ハングしない（実測 0.6 秒）
     assert out                            # ゾーンは返る
     # 重なっていないので大きな偏差＝「変化あり」判定になる（誤って「変化なし」にしない）
     assert any(z["verdict"] == "変化あり" for z in out)
+
+
+def test_build_worker_stl_matches_inproc():
+    """常駐ワーカで作った STL が、親プロセスで作ったものと**バイト一致**すること。
+
+    アプリはワーカ経由、テストは親経由（`TestClient` を素で作ると lifespan が
+    走らないのでワーカは上がらない）と経路が分かれるので、その差が形に出ない
+    ことをここで押さえる。ワーカを起動できない環境では skip する。
+    """
+    from saxsketch.server.buildworker import WORKER
+    from saxsketch.server.state import STATE
+
+    if not WORKER.start():
+        pytest.skip("この環境ではビルドワーカを起動できません")
+    try:
+        STATE.new_project("saxophone", "tenor", "mouthpiece", None)
+        spec = STATE.build_spec(0.05)
+        assert WORKER.build_stl(spec) == STATE._stl_bytes_inproc(0.05)
+    finally:
+        WORKER.stop()
+
+
+def test_region_deviations_identical_is_unchanged():
+    """未編集のモデルを取り込んだら全ゾーン「変化なし」になること。
+
+    点対点の最近傍だけで測っていた頃は、サンプル間隔（tenor で 0.25mm）ぶん必ず
+    過大評価するので**同じメッシュ同士でも最大 0.51mm**が出て、「変化あり」8 ゾーン・
+    「軽微」11 ゾーンという嘘の判定になっていた。領域別偏差は外部編集モデルの
+    判断根拠なので、ここが素通りするとレポート全体が信用できない。
+    """
+    from saxsketch.analysis import meshdiff
+
+    comp, params, ref = _tenor_mesh()
+    out = meshdiff.region_deviations(ref, ref, comp.regions(params))
+
+    judged = [z for z in out if z["max_dev_mm"] is not None]
+    assert judged
+    assert max(z["max_dev_mm"] for z in judged) <= meshdiff.DEV_UNCHANGED
+    assert all(z["verdict"] == "変化なし" for z in judged)
+
+
+def test_region_deviations_matches_known_edit():
+    """既知の編集量（バッフル +0.30mm）が、その数字のまま報告されること。"""
+    from saxsketch.analysis import meshdiff
+
+    comp, params, ref = _tenor_mesh()
+    edited_p = dict(params)
+    edited_p["baffle_height"] = params["baffle_height"] + 0.30
+    edited = meshdiff.part_to_mesh(comp.build(edited_p), tolerance=0.03)
+
+    out = meshdiff.region_deviations(ref, edited, comp.regions(params))
+    zone = next(z for z in out if "baffle_height" in z["params"])
+    assert zone["max_dev_mm"] == pytest.approx(0.30, abs=0.05)
+    assert zone["verdict"] == "軽微"
 
 
 def test_external_load_view_and_export(tmp_path):
@@ -1925,6 +1998,63 @@ def test_neck_export_endpoint(tmp_path):
 
 
 # ------------------------------------------------------------------ 断面編集（バッフル）
+
+def test_pchip_table_cache_is_bit_identical():
+    """`_pchip` の係数表キャッシュが結果を 1 ビットも変えないこと。
+
+    ドラッグ応答のために入れた高速化なので、形が動いたら意味がない
+    （既定形状は実物 WindyCity の実測に合わせて校正してある）。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+
+    def uncached(pts, x):
+        if x <= pts[0][0]:
+            return pts[0][1]
+        if x >= pts[-1][0]:
+            return pts[-1][1]
+        xs, ys, h, m = pf._pchip_table(pts)
+        k = next(i for i in range(len(xs) - 1) if xs[i] <= x <= xs[i + 1])
+        t = (x - xs[k]) / h[k]
+        t2, t3 = t * t, t * t * t
+        return (ys[k] * (2 * t3 - 3 * t2 + 1) + h[k] * m[k] * (t3 - 2 * t2 + t)
+                + ys[k + 1] * (-2 * t3 + 3 * t2) + h[k] * m[k + 1] * (t3 - t2))
+
+    tables = [pf._BODY_PROFILE, pf._SHOULDER_PROFILE, pf._CAVITY_W, pf._CAVITY_C,
+              pf._CAVITY_D, pf._RAIL_WEIGHT, pf._TOP_ARCH]
+    for tab in tables:
+        lo, hi = tab[0][0], tab[-1][0]
+        for i in range(501):
+            x = lo + (hi - lo) * i / 500
+            assert pf._pchip(tab, x).hex() == uncached(tab, x).hex(), (tab[0], x)
+
+
+def test_params_scope_does_not_leak_across_dicts():
+    """スコープ中でも**別の dict** を渡した呼び出しはキャッシュを素通りすること。
+
+    `sensitivity()` は `{**p, key: v}` で摂動した dict を渡す。ここが素通り
+    しないと摂動が効かず、感度表が全部ゼロになる（音色レーダーが嘘になる）。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+
+    p = _template_params("mouthpiece", "tenor")
+    other = {**p, "overall_length": p["overall_length"] + 10.0}
+    with pf.params_scope(p):
+        a = pf.heel_z(p)
+        b = pf.heel_z(other)
+        assert b != a
+        assert pf.heel_z(p) == a        # 元の p は汚れていない
+    assert pf.heel_z(p) == a            # スコープを出ても同じ
+
+
+def test_simulate_sensitivity_still_moves():
+    """スコープ導入後も感度（摂動）が効いていること。"""
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "tenor")
+    p = {s.key: s.default for s in comp.param_specs()}
+    table = comp.simulate(p)["sensitivity"]["table"]
+    moved = [k for k, row in table.items()
+             if any(abs(v) > 1e-9 for v in row["deltas"].values())]
+    assert len(moved) >= 3, table
+
 
 def test_mp_section_curves_are_consistent():
     """断面の輪郭が「材料の中に空洞がある」形になっている。"""

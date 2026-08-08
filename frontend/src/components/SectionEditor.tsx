@@ -6,6 +6,11 @@ interface Props {
   params: Record<string, unknown>;
   /** 確定時にパラメータへ反映する（App のデバウンス経路に乗る） */
   onChange: (key: string, value: number) => void;
+  /** ドラッグ中の未確定値を App へ流す。null で解除。
+   *  左のパラメータ欄がこれを重ねて表示するので、離す前から数値が追随する。 */
+  onPreview: (updates: Record<string, number> | null) => void;
+  /** 3D 形状の再生成中か。断面タブからでも「まだ計算中」だと分かるように出す */
+  modelBusy?: boolean;
 }
 
 /** クエリに載せられる値だけ抜く（数値と選択肢）。 */
@@ -37,7 +42,7 @@ function valueAt(h: SectionHandle, coord: number): number {
   return Math.min(Math.max(Math.round(v / step) * step, h.min), h.max);
 }
 
-export default function SectionEditor({ params, onChange }: Props) {
+export default function SectionEditor({ params, onChange, onPreview, modelBusy }: Props) {
   const [data, setData] = useState<SectionData | null>(null);
   const [err, setErr] = useState("");
   const [zoomAll, setZoomAll] = useState(false);
@@ -70,11 +75,20 @@ export default function SectionEditor({ params, onChange }: Props) {
 
   useEffect(() => { if (!dragging.current) load(); }, [paramsKey, load]);
 
+  // アンマウント（タブ切替）でドラッグが宙に浮くと、App 側の未確定値が
+  // 残り続けて数値が固まる。必ず解除する。
+  useEffect(() => () => { onPreview(null); }, [onPreview]);
+
+  // 画面座標 → mm の逆行列は**掴んだ瞬間に固定する**。
+  // 値によって警告メッセージの数が変わり、その高さぶん SVG がリサイズされる。
+  // 毎回 getScreenCTM() を取り直すと、同じ場所を指しているのに mm が変わり、
+  // 図がカーソルの下で跳ねる（実測: 同じ画面 y が -4.48mm → -6.57mm → -4.79mm）。
+  const dragCtm = useRef<DOMMatrix | null>(null);
+
   const toMm = (e: React.PointerEvent) => {
-    const svg = svgRef.current;
-    const m = svg?.getScreenCTM();
-    if (!svg || !m) return { z: 0, y: 0 };
-    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+    const m = dragCtm.current ?? svgRef.current?.getScreenCTM()?.inverse();
+    if (!m) return { z: 0, y: 0 };
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m);
     return { z: p.x, y: -p.y };
   };
 
@@ -83,9 +97,11 @@ export default function SectionEditor({ params, onChange }: Props) {
     // ポインタキャプチャは環境によっては拒否される。掴めなくてもドラッグ自体は
     // svg 上のイベントで成立するので、失敗しても続行する。
     try { svgRef.current?.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    dragCtm.current = svgRef.current?.getScreenCTM()?.inverse() ?? null;
     dragging.current = h;
     pending.current = h.value;
     setDragKey(h.key);
+    onPreview({ [h.key]: h.value });
   };
 
   const onMove = (e: React.PointerEvent) => {
@@ -94,6 +110,7 @@ export default function SectionEditor({ params, onChange }: Props) {
     const pt = toMm(e);
     const v = valueAt(h, h.axis === "z" ? pt.z : pt.y);
     pending.current = v;
+    onPreview({ [h.key]: v });   // 左のパラメータ欄をその場で追随させる
     // プレビューは1本だけ飛ばす（応答待ちの間は間引く）。CAD ビルドを伴わない
     // エンドポイントなので、この間引きだけで十分追従する。
     if (!inflight.current) {
@@ -107,11 +124,15 @@ export default function SectionEditor({ params, onChange }: Props) {
     if (!h) return;
     try { svgRef.current?.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     dragging.current = null;
+    dragCtm.current = null;
     setDragKey(null);
+    // 先に確定してから未確定値を解除する。逆にすると 1 フレームだけ古い値へ
+    // 戻って数値がちらつく。
     if (pending.current !== null && pending.current !== h.value) {
       onChange(h.key, pending.current);
     }
     pending.current = null;
+    onPreview(null);
   };
 
   // 取得に失敗しても直前の断面は残す（ドラッグ中の1本が落ちただけで画面が
@@ -184,6 +205,9 @@ export default function SectionEditor({ params, onChange }: Props) {
         {handles.length === 0 && (
           <span className="sec-chip">この種別に断面ハンドルはありません</span>
         )}
+        {/* 断面と数値は即座に追随するが 3D は数秒遅れる。壊れているのではなく
+            まだ計算中だと分かるように、断面タブからも見えるようにしておく。 */}
+        {modelBusy && <span className="sec-chip busy">⏳ 3D を再生成中…</span>}
       </div>
 
       {err && <div className="sec-warn">⚠ 断面の更新に失敗しました: {err}</div>}
