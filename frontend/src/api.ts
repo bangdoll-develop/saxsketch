@@ -104,6 +104,21 @@ export interface GoalSeekResult {
 export interface Region {
   z0: number; z1: number; side: "top" | "bottom" | "all"; label: string;
 }
+/** 断面エディタのドラッグハンドル。span はパラメータ min/max に対応する断面座標 */
+export interface SectionHandle {
+  key: string; label: string; axis: "z" | "y";
+  z: number; y: number;
+  value: number; min: number; max: number; span: [number, number];
+  unit: string; step: number; active: boolean;
+}
+export interface SectionData {
+  z_range: [number, number];
+  curves: Record<string, [number, number][]>;
+  handles: SectionHandle[];
+  warnings: string[];
+  baffle_type: string;
+  title: string;
+}
 export interface ManualEdit {
   frozen: { frozen_at: string; export_dir: string | null;
             solid_volume_cc: number | null } | null;
@@ -185,6 +200,16 @@ export const api = {
   dialog: (mode: string, suggested = "") =>
     req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),
+  /** override を渡すと「もしこの値にしたら」の断面を返す（プロジェクトは変えない）。
+   *  画面が持っているパラメータをそのまま渡せば、PUT の完了を待たずに常に
+   *  「いま画面で見えている値」の断面が得られる。確定は putParams 経由で行う。 */
+  section: (override?: Record<string, string | number>) => {
+    const q = override
+      ? "?" + new URLSearchParams(
+          Object.entries(override).map(([k, v]) => [k, String(v)])).toString()
+      : "";
+    return req<SectionData>("/api/section" + q);
+  },
   manualUnfreeze: () => req<ManualEdit>("/api/manual/unfreeze", json({})),
   manualImport: (path: string) =>
     req<ImportAnalysis>("/api/manual/import", json({ path })),

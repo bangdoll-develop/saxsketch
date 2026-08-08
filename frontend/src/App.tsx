@@ -3,6 +3,7 @@ import {
   api, type ManualEdit, type ProjectData, type Region, type Simulation,
 } from "./api";
 import ParamPanel from "./components/ParamPanel";
+import SectionEditor from "./components/SectionEditor";
 import SimPanel from "./components/SimPanel";
 import Viewer3D from "./components/Viewer3D";
 import {
@@ -26,9 +27,17 @@ export default function App() {
   const [manualEdit, setManualEdit] = useState<ManualEdit | null>(null);
   const [viewDerived, setViewDerived] = useState(false);
   const [staleWarn, setStaleWarn] = useState(false);
+  const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
+  const [hasSection, setHasSection] = useState(false);
+  // ドラッグ中の未確定値。断面ハンドルを掴んでいる間だけ非 null になる。
+  // 左のパラメータ欄はこれを重ねて表示するので、確定（PUT）を待たずに数値が
+  // 追随する。非 null の間は 3D を作り直さない（1回のビルドが数秒かかるので、
+  // ドラッグ中に走らせると GIL を奪われて断面まで固まる）。
+  const [preview, setPreview] = useState<Record<string, number> | null>(null);
 
   const paramTimer = useRef<number>(0);
   const modelTimer = useRef<number>(0);
+  const previewRef = useRef<Record<string, number> | null>(null);
   const pendingParams = useRef<Record<string, unknown>>({});
   const manualEditRef = useRef<ManualEdit | null>(null);
   useEffect(() => { manualEditRef.current = manualEdit; }, [manualEdit]);
@@ -59,6 +68,15 @@ export default function App() {
     if (!project) return;
     api.regions().then(setRegions).catch(() => {});
   }, [modelVersion, project]);
+
+  useEffect(() => {
+    // 断面編集を持つコンポーネントかはサーバに聞く（404 なら持たない）。
+    // UI に「マウスピースだけ」という楽器固有の知識を置かないため。
+    if (!project) { setHasSection(false); return; }
+    api.section()
+      .then(() => setHasSection(true))
+      .catch(() => { setHasSection(false); setViewMode("3d"); });
+  }, [project]);
 
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
@@ -98,22 +116,43 @@ export default function App() {
       pendingParams.current = {};
       try {
         const r = await api.putParams(payload);
-        setParams(r.params); setSim(r.simulation);
+        setSim(r.simulation);
+        // サーバ側でクランプされた値だけ拾い直す。丸ごと入れ替えると、値が
+        // 同じでもオブジェクトが変わって断面が無駄に取り直される。
+        setParams((prev) => {
+          const diff = Object.entries(r.params)
+            .filter(([k, v]) => prev[k] !== v);
+          return diff.length ? { ...prev, ...Object.fromEntries(diff) } : prev;
+        });
         const prev = manualEditRef.current;
         if (prev && r.stale && !prev.stale) setStaleWarn(true);  // 陳腐化した瞬間に警告
         if (prev && prev.stale !== r.stale) setManualEdit({ ...prev, stale: r.stale });
       } catch (e) { setError(String((e as Error).message)); }
-      // 形状再生成は重いので長めのデバウンス
-      window.clearTimeout(modelTimer.current);
-      modelTimer.current = window.setTimeout(
-        () => setModelVersion((v) => v + 1), 500);
     }, 250);
+    // 形状再生成のデバウンスは PUT と**並行**に数える。await の後ろに置くと
+    // 「250ms + PUT の往復 + 500ms」が直列に積算して、連続操作のたびに伸びる。
+    window.clearTimeout(modelTimer.current);
+    modelTimer.current = window.setTimeout(() => {
+      if (previewRef.current) return;   // ドラッグ中は作り直さない
+      setModelVersion((v) => v + 1);
+    }, 750);
   }, []);
 
   const onParamChange = useCallback((key: string, value: unknown) => {
     setParams((prev) => ({ ...prev, [key]: value }));  // 楽観更新
     pushParams({ [key]: value });
   }, [pushParams]);
+
+  // 断面ハンドルのドラッグ中。値は画面にだけ反映し、サーバへは送らない。
+  const onPreview = useCallback((updates: Record<string, number> | null) => {
+    previewRef.current = updates;
+    setPreview(updates);
+  }, []);
+
+  // 表示に使う値。ドラッグ中は未確定値を重ねる（確定すると preview が消えて
+  // params 側に同じ値が入っているので、切り替わりで数値が飛ばない）。
+  const shownParams = useMemo(
+    () => (preview ? { ...params, ...preview } : params), [params, preview]);
 
   const saveProject = useCallback(async (saveAs: boolean) => {
     if (!project) return;
@@ -184,7 +223,7 @@ export default function App() {
       <div className="main">
         <div className="panel">
           {project && (
-            <ParamPanel schema={project.schema} params={params} onChange={onParamChange}
+            <ParamPanel schema={project.schema} params={shownParams} onChange={onParamChange}
                         onHover={setHoverKey} regionKeys={regionKeys}
                         reference={project.reference}
                         onPickReference={pickReference}
@@ -192,25 +231,45 @@ export default function App() {
           )}
         </div>
         <div className="viewer">
+          {/* 3D は常にマウントしたままにする（アンマウントするとカメラ位置と
+              読み込み済みメッシュを毎回捨てることになる）。ResizeObserver が
+              あるので表示に戻したときに正しくリサイズされる。 */}
           {project && (
-            <Viewer3D modelVersion={modelVersion} highlight={highlight}
-                      srcOverride={viewDerived && manualEdit?.derived
-                        ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
-                        : null}
-                      onBusy={setModelBusy} />
+            <div className="view-pane"
+                 style={{ display: viewMode === "3d" ? "block" : "none" }}>
+              <Viewer3D modelVersion={modelVersion} highlight={highlight}
+                        srcOverride={viewDerived && manualEdit?.derived
+                          ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
+                          : null}
+                        onBusy={setModelBusy} />
+            </div>
+          )}
+          {project && viewMode === "section" && (
+            <SectionEditor params={params} onChange={onParamChange}
+                           onPreview={onPreview} modelBusy={modelBusy} />
           )}
           <div className="badge">
             {project
-              ? (viewDerived
-                  ? (manualEdit?.derived?.kind === "external"
-                      ? "外部取込モデル（整列後の形状）"
-                      : "外部編集済みモデル（凍結時の形状ベース）")
-                  : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
-                (modelBusy ? "　⏳ 形状を再生成中…" : "")
+              ? (viewMode === "section"
+                  ? `${project.component_label} — 丸ポチをドラッグしてバッフルを調整`
+                  : viewDerived
+                    ? (manualEdit?.derived?.kind === "external"
+                        ? "外部取込モデル（整列後の形状）"
+                        : "外部編集済みモデル（凍結時の形状ベース）")
+                    : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
+                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "")
               : "プロジェクトを作成してください"}
           </div>
-          {manualEdit?.derived && (
+          {project && hasSection && (
             <div className="view-tabs">
+              <button className={viewMode === "3d" ? "active" : ""}
+                      onClick={() => setViewMode("3d")}>3D</button>
+              <button className={viewMode === "section" ? "active" : ""}
+                      onClick={() => setViewMode("section")}>断面</button>
+            </div>
+          )}
+          {manualEdit?.derived && viewMode === "3d" && (
+            <div className={"view-tabs" + (hasSection ? " second" : "")}>
               <button className={viewDerived ? "" : "active"}
                       onClick={() => setViewDerived(false)}>設計形状</button>
               <button className={viewDerived ? "active" : ""}
@@ -220,7 +279,7 @@ export default function App() {
               </button>
             </div>
           )}
-          {highlight && !viewDerived && (
+          {highlight && !viewDerived && viewMode === "3d" && (
             <div className="badge region-badge">
               🟠 変更部位: {highlight.label}
             </div>
@@ -228,7 +287,7 @@ export default function App() {
         </div>
         <div className="panel right">
           {sim && (
-            <SimPanel sim={sim} paramsKey={JSON.stringify(params)}
+            <SimPanel sim={sim} paramsKey={JSON.stringify(shownParams)}
                       onGoalSeek={() => setDialog("goalseek")} />
           )}
         </div>

@@ -150,4 +150,53 @@ canvas.scope { width: 100%; height: 74px; background: #10141a; border-radius: 6p
   background: rgba(20,23,28,0.8); color: var(--muted);
 }
 .view-tabs button.active { background: var(--accent); color: #10151c; font-weight: 600; }
+.view-tabs.second { top: 38px; }
 .busy { color: var(--muted); font-size: 11px; }
+
+/* ---- 断面エディタ（バッフルのマウス調整） ---- */
+.view-pane { position: absolute; inset: 0; }
+.section-editor {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  padding: 34px 12px 8px;
+}
+.sec-msg { position: absolute; inset: 0; display: grid; place-items: center;
+  color: var(--muted); }
+.sec-svg { flex: 1; min-height: 0; width: 100%; touch-action: none; }
+.sec-svg path { vector-effect: non-scaling-stroke; fill: none; }
+.sec-body { fill: #2b3442; stroke: #55637a; stroke-width: 1.2; }
+.sec-air { fill: #14171c; stroke: none; }
+.sec-limit { stroke: #6b7a90; stroke-width: 1; stroke-dasharray: 5 4; }
+.sec-reed { stroke: #e07a7a; stroke-width: 1.4; }
+.sec-roof { stroke: var(--accent); stroke-width: 2; }
+.sec-floor { stroke: var(--accent2); stroke-width: 1.4; }
+.sec-rail {
+  stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.45;
+  vector-effect: non-scaling-stroke;
+}
+.sec-handle circle {
+  fill: var(--warn); stroke: #10151c; stroke-width: 1.5; cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+.sec-handle:hover circle { fill: #ffd489; }
+.sec-handle.live circle { fill: #fff; cursor: grabbing; }
+
+.sec-legend {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding-top: 6px;
+}
+.sec-tabs { display: flex; border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden; margin-right: 4px; }
+.sec-tabs button { border: none; border-radius: 0; padding: 3px 10px; font-size: 11.5px;
+  background: var(--panel2); color: var(--muted); }
+.sec-tabs button.active { background: var(--accent); color: #10151c; font-weight: 600; }
+.sec-chip {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 10px; font-size: 11.5px; color: var(--muted);
+}
+.sec-chip b { color: var(--text); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.sec-chip i { color: var(--muted); font-style: normal; margin-left: 2px; }
+.sec-chip.live { border-color: var(--warn); color: var(--text); }
+.sec-chip.busy { border-style: dashed; }
+.sec-warn {
+  flex: none; color: var(--warn); font-size: 11.5px; padding-top: 4px;
+}

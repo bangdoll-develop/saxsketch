@@ -101,7 +101,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     #      各サンプル点の「含意ティップ値」 (y-ty)/カーブ係数 の下側パーセンタイルを採る。
     #      面より上の点は含意値が大きく出るので下側が面の真値。）
     if ty_meas is not None:
-        z_rail_end = p["tip_rail_width"] + 0.2  # 空洞開始 = レール面の終端
+        z_rail_end = profiles.window_front_z(p)   # 窓の前縁 = レール面の終端
         # レール面はカーブで傾くため法線フィルタは緩め、上方の点は含意値の上位に逃がす
         fz = (normals[:, 1] < -0.6) & (pts[:, 2] < z_rail_end) \
             & (pts[:, 2] > 0.05) & (pts[:, 1] < ty_meas + 5.0)
@@ -154,8 +154,8 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         # ウィンドウ長(実効): 下方から +Y レイを z 走査し「窓が開いている」範囲を測る。
         # 閉じている z ではカット面(≈ty)にヒット、開いている z では空洞天井
         # (≥ty+0.4、クランプ時でも)にヒットする → しきい値 ty+0.35。
-        # ティップレール面はカーブで持ち上がり誤判定するため z_start より後方から走査。
-        z_start = p["tip_rail_width"] + 0.2
+        # ティップレール面はカーブで持ち上がり誤判定するため窓の前縁より後方から走査。
+        z_start = profiles.window_front_z(p)
         z_scan = np.arange(z_start + 0.5,
                            min(z_start + p["window_length"] + 10.0, zb - 4.0), 1.0)
         origins = [[0.0, ty_meas - 6.0, z + z_off] for z in z_scan]
@@ -163,29 +163,34 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         open_z = [z for z, d in zip(z_scan, hits)
                   if d is not None and (ty_meas - 6.0 + d) > ty_meas + 0.35]
         if len(open_z) >= 3:
-            # 窓はステーション補間により t≈0.86 で閉じる → 開口実測長を逆補正
-            est["window_length"] = (
-                (float(open_z[-1]) + 0.5 - z_start) / 0.86,
-                "下方レイ走査(÷開口率0.86)", 1.5)
+            # 窓は床 F(z) がリード面を横切る所で閉じ、それが定義上ちょうど
+            # `window_end_z` になる。旧実装はステーション補間の都合で 86% で
+            # 閉じていたため ÷0.86 の補正が要ったが、いまは補正なしで一致する。
+            est["window_length"] = (float(open_z[-1]) + 0.5 - z_start,
+                                    "下方レイ走査", 1.5)
 
-
-    # バッフル高さ: 窓区間の空洞天井を実測し、天井式 ceil -= h_b·0.55·(1-t) を逆算
+    # バッフル高さ: 窓区間の空洞天井を実測して天井式から逆算する。
+    # 感度は `profiles.baffle_sensitivity`（ティップ側はレール基準・ボア側は
+    # 天井がボアに達するのでどちらも 0 に落ちる＝そこでは測れない）。
+    # 旧実装は 0.55·(1−t) という別の天井式の係数を使い、しかも窓ステーションを
+    # 固定 index で拾っていたので、ステーション列を等間隔にした時点で崩れる書き方だった。
     stations = profiles.cavity_stations(p)
-    win_st = profiles.stations_by_role(stations, "window")
-    # 窓ステーションは profiles._STATION 系の t 列と 1:1。天井式の逆算に t が要る
-    window_ts = [0.12, 0.25, 0.40]
-    st_by_t = dict(zip(window_ts, win_st[1:4]))
+    z_start_w = profiles.window_front_z(p)
+    z_we = profiles.window_end_z(p)
     deltas = []
-    for t in window_ts:
-        s = st_by_t[t]
+    for frac in (0.12, 0.25, 0.40):
+        z_want = z_start_w + frac * (z_we - z_start_w)
+        s = min(stations, key=lambda q: abs(q["z"] - z_want))
+        weight = profiles.baffle_sensitivity(p, s["z"])
+        if weight < 0.15:            # 天井がほぼボアに達していて感度が無い
+            continue
         o = [0.0, s["yc"], s["z"] + z_off]
         d = _first_hit_dists(mesh, [o], [[0, 1, 0]])[0]
         if d is None or d > 25.0:
             continue
         ceil_meas = s["yc"] + d
         ceil_analytic = s["yc"] + s["h"] / 2.0
-        # 天井が analytic より Δ 低い → h_b が Δ/(0.55(1-t)) 大きい
-        deltas.append((ceil_analytic - ceil_meas) / (0.55 * (1.0 - t)))
+        deltas.append((ceil_analytic - ceil_meas) / weight)
     if len(deltas) >= 2:
         hb_est = p["baffle_height"] + float(np.mean(deltas))
         est["baffle_height"] = (max(0.0, min(5.0, hb_est)), "空洞天井レイ(3断面)")

@@ -21,12 +21,38 @@ _BAFFLE_BONUS = {"straight": 0.0, "rollover": 0.06, "step": 0.14, "curve": 0.24}
 _CHAMBER_EDGE = {"round": 0.0, "square": 0.06, "horseshoe": 0.0, "flat_sidewall": 0.03}
 
 
+def _baffle_shape_bonus(p: dict) -> float:
+    """バッフルの作り込み（断面ハンドル）ぶんの明るさ寄与。
+
+    `_BAFFLE_BONUS` の型別一律だけだと、断面エディタでハンドルを動かしても
+    指標が微動だにしない＝画面が形を説明していないことになる。向きは
+    「気道を絞るほど明るい」で統一する:
+      - 棚が長い（`baffle_plateau` 大）ほどリード直上の絞りが長く続く
+      - 段が切り立つ（`baffle_step_rise` 大）ほど衝突が強い
+      - カーブが正（`baffle_curvature` > 0）ほどティップ側で絞る
+    係数は `_BAFFLE_BONUS` と同じく**経験値**で実測の裏付けは無い。
+    実効値（型ごとのクランプ後）を使うため `profiles` の関数を借りる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles
+
+    kind = p.get("baffle_type", "step")
+    bonus = 0.0
+    if kind in ("step", "rollover"):
+        bonus += 0.10 * (profiles.baffle_plateau(p) - 0.36) / 0.34
+    if kind == "step":
+        bonus += 0.12 * min(max(p.get("baffle_step_rise", 0.0), 0.0), 0.85) / 0.85
+    if kind == "curve":
+        bonus += 0.10 * min(max(p.get("baffle_curvature", 0.0), -1.0), 1.0)
+    return bonus
+
+
 def tone_metrics(p: dict) -> dict:
     """音色指標（0-10）。"""
     n_tip = _norm(p["tip_opening"], 1.0, 3.2)
     n_facing = _norm(p["facing_length"], 16.0, 30.0)
-    n_baffle = min(_norm(p["baffle_height"], 0.0, 5.0)
-                   + _BAFFLE_BONUS.get(p.get("baffle_type", "rollover"), 0.0), 1.0)
+    n_baffle = min(max(_norm(p["baffle_height"], 0.0, 5.0)
+                       + _BAFFLE_BONUS.get(p.get("baffle_type", "step"), 0.0)
+                       + _baffle_shape_bonus(p), 0.0), 1.0)
     n_throat_small = 1.0 - _norm(p["throat_ratio"], 0.60, 1.35)
     square_bonus = _CHAMBER_EDGE.get(p.get("chamber_shape", "round"), 0.0)
 

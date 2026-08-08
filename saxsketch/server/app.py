@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import platform
 import re
@@ -13,7 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,7 +26,23 @@ from saxsketch.export.package import build_package, readme_text
 from saxsketch.export.spec import spec_html
 from .state import STATE
 
-app = FastAPI(title="SaxSketch", version="0.1.0")
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """CAD ビルド用の子プロセスを先に上げておく。
+
+    build123d の import に 2〜3 秒かかるので、最初の 3D 表示にそれを払わせない。
+    上がらない環境（`SAXSKETCH_NO_BUILD_WORKER=1` やテスト）でも黙って親側の
+    経路に落ちるだけなので、ここでは失敗を握りつぶしてよい。
+    """
+    from .buildworker import WORKER
+    await asyncio.to_thread(WORKER.start)
+    try:
+        yield
+    finally:
+        WORKER.stop()
+
+
+app = FastAPI(title="SaxSketch", version="0.1.0", lifespan=_lifespan)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
@@ -295,6 +312,33 @@ def model_regions():
     return STATE.component.regions(dict(STATE.paramset.values))
 
 
+@app.get("/api/section")
+def model_section(request: Request):
+    """中央面の断面とドラッグハンドル。**CAD ビルドを伴わない**。
+
+    ドラッグ中に毎フレーム叩かれるので、形状法則の数値計算だけで返す
+    （3D の再生成は従来どおりデバウンスされた `/api/model.stl` のまま）。
+    断面を持たないコンポーネントでは 404 を返し、UI は断面タブを出さない。
+
+    クエリでパラメータを渡すと「**もしこの値にしたら**」の断面を返す（ドラッグ中の
+    プレビュー用）。プロジェクトの状態は変えないので、確定は従来どおり
+    `PUT /api/project/params` で行う。検証は通常の適用と同じ `ParamSpec.validate`。
+    """
+    _require_project()
+    values = dict(STATE.paramset.values)
+    for k, v in request.query_params.items():
+        spec = STATE.paramset.specs.get(k)
+        if spec is None:
+            continue
+        # 数値に読めないクエリは無視して現在値のままにする（500 にしない）。
+        with contextlib.suppress(ValueError, TypeError):
+            values[k] = spec.validate(v)
+    data = STATE.component.section(values)
+    if data is None:
+        raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
+    return data
+
+
 class GoalSeekReq(BaseModel):
     targets: dict
 
@@ -485,6 +529,7 @@ async def export(req: ExportReq):
         used_derived = True
 
     files: dict[str, Path] = {}
+    part_cad = None
     for fmt in req.formats:
         f = out_dir / f"model.{fmt}"
         if fmt == "stl" and used_derived:
@@ -492,7 +537,14 @@ async def export(req: ExportReq):
             f.write_bytes(derived_stl)
             files["model_edited.stl"] = f
             continue
-        await asyncio.to_thread(export_model, part, f, fmt)
+        # STEP だけは面を1枚ずつに畳んだ表現で出す（FreeCAD での面選択・フィレット用）。
+        # 生成に十数秒かかるので、STEP を要求されたときだけ組む。
+        if fmt == "step":
+            if part_cad is None:
+                part_cad = await asyncio.to_thread(STATE.build_part_cad)
+            await asyncio.to_thread(export_model, part_cad, f, fmt)
+        else:
+            await asyncio.to_thread(export_model, part, f, fmt)
         files[f"model.{fmt}"] = f
 
     quality = None
@@ -695,6 +747,13 @@ def main():
     import sys
 
     import uvicorn
+
+    # 起動メッセージに ▶ ✔ ⚠ を使っている。Windows の既定コンソール（cp932）だと
+    # ここで UnicodeEncodeError を出して**サーバが起動する前に落ちる**ので、
+    # 出力の符号化だけ先に UTF-8 へ寄せる（端末が出せない字は置換に任せる）。
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     host = os.environ.get("WF_HOST", "127.0.0.1")
     want = int(os.environ.get("WF_PORT", "8712"))

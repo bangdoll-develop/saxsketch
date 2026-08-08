@@ -1,4 +1,5 @@
 """SaxSketch 結合テスト: ジオメトリ・音響・プロジェクトI/O・API。"""
+import collections
 import math
 from pathlib import Path
 
@@ -213,33 +214,47 @@ def test_ligature_seat_matches_reed_heel():
 
 
 def test_cavity_station_roles():
-    """空洞は 窓→チェンバー(最大)→スロート(最狭)→ボア の三段であること。"""
+    """空洞は 窓→チェンバー→スロート→ボア の順に並び、比 1.0 では単調にボアへ開く。
+
+    実測（WindyCity Tenor）のリファレンスは **チェンバーの膨らみもスロートの狭窄も
+    持たない**。断面積は窓の終端からボアまで単調に増える。以前はここで
+    「スロートはチェンバーより狭い」を無条件に要求していたが、それは比 1.0 でも
+    くびれがある前提で、実物と食い違っていた（ソプラノで実際に落ちていた）。
+    くびれは `throat_ratio < 1.0` を指定したときに現れるべきもの。
+    """
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
         st = profiles.cavity_stations(p)
         assert all("role" in s for s in st)
-        assert [s["role"] for s in st][-3:] == ["chamber", "throat", "bore"]
+        # role は z 範囲のラベル。出現順が 窓→チェンバー→スロート→ボア であること
+        seen = [r for i, r in enumerate([s["role"] for s in st])
+                if i == 0 or r != st[i - 1]["role"]]
+        assert seen == ["window", "chamber", "throat", "bore"], (tid, seen)
+        assert all(a["z"] < b["z"] for a, b in zip(st, st[1:])), tid   # ロフトが潰れない
 
-        def area(s):
-            return profiles.superellipse_area(s["w"], s["h"], s["n"])
+        area = profiles.section_area
+        # 比 1.0 では**くびれが無い**こと。実物の断面積は窓の終端からボアまで
+        # 208→227mm² と増えるだけで、最狭部は存在しない。
+        # 単調増加までは要求しない: 窓区間の断面は側壁が立った角丸長方形、
+        # チェンバーは丸なので、その形状係数の移り変わりで数 % の上下は出る
+        # （実物との断面積差は窓直後で最大 20%、z=45 以降は 3% 以内）。天井の
+        # 横アーチ（`_TOP_ARCH`）が抜ける区間でも同じ程度の上下が出る。
+        after = [s for s in st if s["role"] != "window"]
+        a_bore = area(profiles.stations_by_role(st, "bore")[0])
+        assert min(area(s) for s in after) >= 0.95 * a_bore, (
+            tid, [(s["role"], round(area(s))) for s in after])
 
-        # チェンバー最大部はスロートより広い。窓直後のステーションはビークの下で
-        # 外殻に切り詰められスロートより狭くなりうるので、index でなく最大部を見る。
-        chamber = profiles.chamber_max_station(st)
-        throat = profiles.stations_by_role(st, "throat")[0]
+        # throat_ratio を絞ると本当にスロートが最狭部になる
+        narrow = profiles.cavity_stations(dict(p, throat_ratio=0.70))
+        chamber = profiles.chamber_max_station(narrow)
+        throat = profiles.stations_by_role(narrow, "throat")[0]
         assert area(throat) < area(chamber), tid
-        # スロートはチェンバー最大部からボアまでの最狭部
-        after = [s for s in st if s["z"] >= chamber["z"]]
-        assert min(after, key=area) is throat, (tid, [(s["role"], round(area(s))) for s in after])
-        # throat_ratio は面積比。半径比で定義していたとき、指数の違う真円ボアとの間で
-        # 比 1.0 でもスロートの方が 1.8% 広くなり、最狭部が最狭でなくなっていた。
-        p10 = dict(p, throat_ratio=1.0)
-        st10 = profiles.cavity_stations(p10)
-        th10 = profiles.stations_by_role(st10, "throat")[0]
-        bo10 = profiles.stations_by_role(st10, "bore")[0]
-        assert area(th10) == pytest.approx(area(bo10), rel=1e-6), tid
-        # z は単調増加（ロフトが潰れない）
-        assert all(a["z"] < b["z"] for a, b in zip(st, st[1:])), tid
+        tail = [s for s in narrow if s["z"] >= chamber["z"]]
+        assert min(tail, key=area)["role"] == "throat", (
+            tid, [(s["role"], round(area(s))) for s in tail])
+        # chamber_ratio を上げるとチェンバーが太る
+        wide = profiles.cavity_stations(dict(p, chamber_ratio=1.6))
+        assert area(profiles.chamber_max_station(wide)) > area(chamber), tid
 
 
 def test_reference_card_all_match():
@@ -762,6 +777,117 @@ def test_all_templates_build(tmp_path):
         assert q["watertight"] and q["winding_consistent"], (tmpl, q)
 
 
+# ------------------------------------------------------------------ STEP 用プリミティブ表現
+
+
+@pytest.fixture(scope="module")
+def alto_part_cad(alto):
+    comp, params = alto
+    return comp.build_cad(params)
+
+
+def test_body_segments_cover_and_join(alto):
+    """胴の母線区間が端点を共有して全長を覆い、C1 の折れ目で切れていること。
+
+    区間の切れ目がずれるとスプライン母線が折れ目をまたいでうねる（実測で
+    0.58mm のオーバーシュート）。ここは OCCT を呼ばずに列だけで確かめる。
+    """
+    _, p = alto
+    segs = profiles.body_segments(p)
+    assert segs[0][0][0] == pytest.approx(0.0)
+    assert segs[-1][-1][0] == pytest.approx(p["overall_length"])
+    for a, b in zip(segs, segs[1:]):
+        assert a[-1] == pytest.approx(b[0])              # 端点を共有
+    breaks = {round(s[0][0], 6) for s in segs[1:]}
+    wanted = [profiles.heel_z(p), profiles.shank_start_z(p)]
+    if profiles.tip_chamfer_len(p) > 0.0:      # 面取り 0 なら折れ目も無い
+        wanted.append(profiles.tip_chamfer_len(p))
+    for z in wanted:
+        assert round(z, 6) in breaks, z
+    # 各区間の半径は法則そのもの（サンプルし直しても一致する）
+    for seg in segs:
+        for z, r in seg:
+            assert r == pytest.approx(profiles.outer_radius(p, z), abs=1e-9)
+
+
+def test_body_spline_stays_on_the_law(alto):
+    """区間ごとのスプライン母線が、サンプル点の**間**でも法則から外れないこと。
+
+    全区間を1本のスプラインで内挿していた試作では、ティップ面取りの折れ目で
+    0.58mm オーバーシュートして胴の体積が 1.3% 痩せた。刻みを 0.05mm まで詰めても
+    直らない（標本化ではなく折れ目の問題）ので、区切りが正しいかはここで見る。
+    ソリッドを作らないので速い。
+    """
+    from build123d import Edge, Vector
+
+    _, p = alto
+    for seg in profiles.body_segments(p):
+        if len(seg) < 3:
+            continue                       # 直線区間は法則そのもの
+        edge = Edge.make_spline([Vector(r, 0.0, z) for (z, r) in seg])
+        for i in range(201):
+            v = edge.position_at(i / 200.0)
+            assert v.X == pytest.approx(profiles.outer_radius(p, v.Z), abs=0.01), (
+                seg[0][0], seg[-1][0], v.Z, v.X)
+
+
+def test_mp_cad_face_count(alto_part_cad):
+    """STEP 用表現が「面を選べる」粒度に畳まれていること。
+
+    多角形版は 2547 面・微小エッジ 5000本超で、FreeCAD では外周面を1クリックで
+    選ぶこともフィレットを掛けることもできない。畳んだ後の実測は 60 面。
+    """
+    faces = alto_part_cad.faces()
+    assert len(faces) < 100, len(faces)
+    slivers = [f for f in faces if f.area < 0.5]
+    assert len(slivers) < 5, [(f.area, str(f.geom_type)) for f in slivers]
+    kinds = collections.Counter(str(f.geom_type) for f in faces)
+    # 胴＝回転体、ビークの直線ランプ＝押出、テーブル＝平面が1枚ずつ残っていること
+    assert kinds["GeomType.REVOLUTION"] >= 1, kinds
+    assert kinds["GeomType.EXTRUSION"] >= 1, kinds
+    assert kinds["GeomType.PLANE"] >= 1, kinds
+
+
+def test_mp_cad_matches_build(alto, alto_part, alto_part_cad, tmp_path):
+    """プリミティブ表現が `build()` と**同じ形**であること。
+
+    面の張り方だけを替えるのが Stage C-2 の趣旨なので、ここがこのステージの
+    防波堤になる。残る差はすべて `build()` 側の近似（多角形母線の弦誤差・
+    ルールドロフトの断面間補間）で、向きは常に「プリミティブ版の方が法則に近い」。
+    実測（alto/tenor）: 体積差 +0.11%、表面距離 p95 0.045 / 最大 0.18mm。
+    最大が出るのはビークが胴へ溶けるブレンド区間（多角形版が 1.9mm 刻みの
+    ルールドで内側を通る所）と肩のテーパ。
+    """
+    import numpy as np
+    import trimesh
+    from saxsketch.analysis import meshdiff
+    from saxsketch.export.models import check_mesh, export_model
+
+    _, p = alto
+    assert alto_part_cad.is_valid
+    assert len(alto_part_cad.solids()) == 1
+    f = tmp_path / "cad.stl"
+    export_model(alto_part_cad, f, "stl")
+    q = check_mesh(f)
+    assert q["watertight"] and q["winding_consistent"], q
+
+    dv = (alto_part_cad.volume - alto_part.volume) / alto_part.volume
+    assert abs(dv) < 0.0025, dv
+
+    ma = meshdiff.part_to_mesh(alto_part, tolerance=0.02)
+    mb = meshdiff.part_to_mesh(alto_part_cad, tolerance=0.02)
+    # bbox は `Shape.bounding_box()` ではなくテッセレーション後の頂点で測る。
+    # 曲面の外接箱は制御点から取る緩いもので、回転体では実形状より大きく出る。
+    assert np.abs(np.asarray(mb.bounds) - np.asarray(ma.bounds)).max() < 0.05
+
+    d = trimesh.proximity.closest_point(ma, mb.vertices)[1]
+    assert np.percentile(d, 95) < 0.08, np.percentile(d, 95)
+    assert d.max() < 0.25, d.max()
+
+    # 材料は増える側にしかずれない（多角形母線の弦が内側を通るぶん、多角形版が痩せている）
+    assert dv > 0, dv
+
+
 # ------------------------------------------------------------------ 仕様変更: 実物解剖
 
 def test_mp_chamber_shapes_build_watertight(tmp_path):
@@ -781,27 +907,114 @@ def test_mp_chamber_shapes_build_watertight(tmp_path):
             assert q["watertight"] and q["winding_consistent"], (tmpl, shape, q)
 
 
+#: バッフル型 × ハンドル極値。掃引の種になる（型ごとに効くハンドルだけ振る）。
+_BAFFLE_CASES = [
+    ("straight", {}),
+    ("rollover", {}),
+    ("rollover", {"rollover_radius": 3.0}),
+    ("rollover", {"rollover_radius": 20.0}),
+    ("step", {}),
+    ("step", {"baffle_plateau": 0.10}),
+    ("step", {"baffle_plateau": 0.70}),
+    ("step", {"baffle_step_rise": 0.85}),
+    ("curve", {}),
+    ("curve", {"baffle_curvature": -1.0}),
+    ("curve", {"baffle_curvature": 1.0}),
+]
+
+
 def test_mp_baffle_types_build_watertight(tmp_path):
-    """4バッフル型が水密。step は実段差（近接zで天井が大きく変わる）。"""
+    """4バッフル型 × ハンドル極値が水密。段は `baffle_step_rise` で立てる。"""
     from saxsketch.export.models import check_mesh, export_model
     from saxsketch.instruments.saxophone.components import profiles as pf
     reg = get_registry()
     comp = reg.get("saxophone").make_component("mouthpiece", "tenor")
     base = {s.key: s.default for s in comp.param_specs()}
-    for bt in ["straight", "rollover", "step", "curve"]:
-        p = dict(base, baffle_type=bt)
+    for bt, kw in _BAFFLE_CASES:
+        p = dict(base, baffle_type=bt, **kw)
+        name = bt + "".join(f"_{k}{v}" for k, v in kw.items())
         part = comp.build(p)
-        assert part.is_valid and part.volume > 5000, bt
-        f = tmp_path / f"baffle_{bt}.stl"
+        assert part.is_valid and part.volume > 5000, name
+        f = tmp_path / f"baffle_{name}.stl"
         export_model(part, f, "stl")
         q = check_mesh(f)
-        assert q["watertight"] and q["winding_consistent"], (bt, q)
-    # step は近接する2ステーションで天井高が急変（準垂直の段差面）
-    win = [s for s in pf.cavity_stations(dict(base, baffle_type="step"))
-           if s["role"] == "window"]
-    ceils = [(s["z"], s["yc"] + s["h"] / 2.0) for s in win]
-    jumps = [abs(b[1] - a[1]) for a, b in zip(ceils, ceils[1:]) if b[0] - a[0] < 1.5]
-    assert jumps and max(jumps) > 3.0, ceils
+        assert q["watertight"] and q["winding_consistent"], (name, q)
+
+    # 段差はステーション間隔に依存しないよう、高さではなく**勾配**で見る。
+    def max_ceiling_slope(**kw):
+        win = [s for s in pf.cavity_stations(dict(base, **kw))
+               if s["role"] == "window"]
+        c = [(s["z"], s["yc"] + s["h"] / 2.0) for s in win]
+        return max((b[1] - a[1]) / (b[0] - a[0]) for a, b in zip(c, c[1:]))
+
+    # 既定の step は実測どおりのなだらかな肩。段は rise を上げて初めて立つ。
+    s_flat = max_ceiling_slope(baffle_type="step")
+    s_sharp = max_ceiling_slope(baffle_type="step", baffle_step_rise=0.85)
+    assert s_sharp > 2.0, s_sharp                     # 準垂直の段差面
+    assert s_sharp > 2.5 * s_flat, (s_sharp, s_flat)
+    # ストレートは棚の後ろが一定勾配＝勾配のばらつきが小さい（型の特徴）。
+    st = [s for s in pf.cavity_stations(dict(base, baffle_type="straight"))
+          if s["z"] > pf.baffle_plateau_end_z(dict(base, baffle_type="straight")) + 1.0
+          and s["z"] < pf.window_end_z(base)]
+    c = [(s["z"], s["yc"] + s["h"] / 2.0) for s in st]
+    slopes = [(b[1] - a[1]) / (b[0] - a[0]) for a, b in zip(c, c[1:])]
+    assert max(slopes) - min(slopes) < 0.05, slopes
+
+
+def test_mp_baffle_progress_endpoints_and_monotone():
+    """v(σ) は 4 型 × ハンドル極値で v(0)=0 / v(1)=1 / 単調非減少。
+
+    単調性は「天井が z に対して逆流しない」＝ロフト面が折り返さないための
+    必要条件。ここが破れると `_contain` の安全網が発動して形が折れる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt, kw in _BAFFLE_CASES:
+        p = dict(base, baffle_type=bt, **kw)
+        vs = [pf._baffle_progress(p, i / 1500.0) for i in range(1501)]
+        assert vs[0] == pytest.approx(0.0, abs=1e-12), (bt, kw)
+        assert vs[-1] == pytest.approx(1.0, abs=1e-12), (bt, kw)
+        assert min(b - a for a, b in zip(vs, vs[1:])) >= -1e-12, (bt, kw)
+
+
+def test_mp_baffle_step_default_is_the_measured_curve():
+    """既定（step / plateau 0.36 / rise 0）は実測 `_CAVITY_C` と厳密に一致する。
+
+    型の作り直しで**既定形状が動いていない**ことの担保。ここがずれると
+    `cad/windycity/verify_base.py` の全項目（気柱 18.686cc 等）が一斉に動く。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    assert p["baffle_type"] == "step"          # テンプレート既定がステップ型
+    err = max(abs(pf._baffle_progress(p, i / 2000.0)
+                  - pf._pchip(pf._CAVITY_C, i / 2000.0)) for i in range(2001))
+    assert err < 1e-12, err
+
+
+def test_mp_baffle_plateau_clamped_per_type():
+    """棚の長さは型ごとに制限される＝「型の形状的特徴」が構造的に保たれる。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt in ("straight", "curve"):
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.75)) <= 0.12
+    for bt in ("step", "rollover"):
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.75)) == 0.70
+        assert pf.baffle_plateau(dict(base, baffle_type=bt, baffle_plateau=0.0)) == 0.10
+
+
+def test_mp_baffle_keeps_tip_rail_law():
+    """どの型・どのハンドル値でも「窓の開き始め＝ティップレール幅」が保たれる。
+
+    棚の下限を 0 にしない理由がこれ（`profiles._PLATEAU_RANGE`）。ティップ側で
+    ランプを立てると天井がリード面を横切る z が前へずれ、指定より細いレールになる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    for tmpl in ("soprano", "alto", "tenor"):
+        base = _template_params("mouthpiece", tmpl)
+        for bt, kw in _BAFFLE_CASES:
+            p = dict(base, baffle_type=bt, **kw)
+            d = pf.window_open_z(p) - pf.window_front_z(p)
+            assert abs(d) < 0.10, (tmpl, bt, kw, d)
 
 
 def test_mp_chamber_area_ratio_holds():
@@ -835,12 +1048,21 @@ def test_mp_section_area_matches_shoelace():
 
 
 def test_mp_tier1_round_baseline():
-    """round/rollover テナーの内容積が改修前基準と一致（校正保全）。"""
+    """round/rollover テナーの内容積が基準と一致（校正保全）。
+
+    基準値は **実物 WindyCity Tenor .100" LS の実測 18.59cc** に対して 1% 以内。
+    以前の 19.636747 は実物実測へ作り直す前の形状のもので、Stage A で形状が
+    変わったあと更新されていなかった（ずっと落ちていた）。ここが動いたら
+    音響 Tier1 の校正が動いたということなので、意図した変更か必ず確認すること。
+    18.7757 → 18.6862 は Stage C-1b（天井の横アーチとティップの管幅）で
+    意図的に動かした分。実測 18.59 との差は 1.0% → 0.5% へ縮んでいる。
+    """
     from saxsketch.instruments.saxophone.components import profiles as pf
     p = _template_params("mouthpiece", "tenor")
     v = pf.cavity_volume_cc(p)
-    assert v["total_cc"] == pytest.approx(19.636747, abs=1e-4)
-    assert v["effective_cc"] == pytest.approx(13.133713, abs=1e-4)
+    assert v["total_cc"] == pytest.approx(18.6862, abs=2e-3)
+    assert v["total_cc"] == pytest.approx(18.59, rel=0.02)   # 実測との一致
+    assert v["effective_cc"] == pytest.approx(v["total_cc"] - 4.9938, abs=2e-3)
 
 
 def test_mp_shape_enums():
@@ -1479,15 +1701,33 @@ def test_survey_measure_commit(tmp_path):
     assert r.json()["params"]["overall_length"] == measured["overall_length"]
 
 
-def test_region_deviations_foreign_bounded():
-    """別座標系（ほぼ重ならない）メッシュ同士でも region_deviations が短時間で返ること。
+def test_region_deviations_foreign_bounded(monkeypatch):
+    """別座標系（ほぼ重ならない）メッシュでは、厳密計算の経路に一切入らないこと。
 
-    以前は全サンプル点が疑い化して on_surface が数十万点に膨れ、事実上ハングした。
-    厳密計算に上限を設けたので、取り違えた外部モデルでもフリーズしない。
+    trimesh の `on_surface` は近い点なら 0.12ms/点だが、離れた点だと 5.4ms/点になる
+    （`nearby_faces` が最近傍頂点までの距離を半径に rtree を引くので、遠い点では
+    メッシュの全面が候補になる）。以前はここへ全サンプル点が流れ込んで 26 秒かかり、
+    他の重い処理と並行しただけで壁時計の上限を割っていた。遠い点の厳密値は
+    「変化あり」判定に何も足さないので、`_REFINE_MAX` で落として経路に入れない。
+
+    壁時計は性能テストではなく**ハングしていないこと**の最後の砦として残してある
+    （実測 0.6 秒に対して桁違いの上限）。守りたい性質は点数 0 の方で見る。
     """
     import time
 
+    from trimesh.proximity import ProximityQuery
+
     from saxsketch.analysis import meshdiff
+
+    exact_pts = 0
+    original = ProximityQuery.on_surface
+
+    def counting(self, points):
+        nonlocal exact_pts
+        exact_pts += len(points)
+        return original(self, points)
+
+    monkeypatch.setattr(ProximityQuery, "on_surface", counting)
 
     comp, params, ref = _tenor_mesh()
     foreign = ref.copy()
@@ -1496,10 +1736,65 @@ def test_region_deviations_foreign_bounded():
 
     t = time.time()
     out = meshdiff.region_deviations(ref, foreign, regions)
-    assert time.time() - t < 30.0        # ハングしない（実測 数秒）
+    assert exact_pts == 0                 # 遠い点は厳密計算に回さない
+    assert time.time() - t < 120.0        # ハングしない（実測 0.6 秒）
     assert out                            # ゾーンは返る
     # 重なっていないので大きな偏差＝「変化あり」判定になる（誤って「変化なし」にしない）
     assert any(z["verdict"] == "変化あり" for z in out)
+
+
+def test_build_worker_stl_matches_inproc():
+    """常駐ワーカで作った STL が、親プロセスで作ったものと**バイト一致**すること。
+
+    アプリはワーカ経由、テストは親経由（`TestClient` を素で作ると lifespan が
+    走らないのでワーカは上がらない）と経路が分かれるので、その差が形に出ない
+    ことをここで押さえる。ワーカを起動できない環境では skip する。
+    """
+    from saxsketch.server.buildworker import WORKER
+    from saxsketch.server.state import STATE
+
+    if not WORKER.start():
+        pytest.skip("この環境ではビルドワーカを起動できません")
+    try:
+        STATE.new_project("saxophone", "tenor", "mouthpiece", None)
+        spec = STATE.build_spec(0.05)
+        assert WORKER.build_stl(spec) == STATE._stl_bytes_inproc(0.05)
+    finally:
+        WORKER.stop()
+
+
+def test_region_deviations_identical_is_unchanged():
+    """未編集のモデルを取り込んだら全ゾーン「変化なし」になること。
+
+    点対点の最近傍だけで測っていた頃は、サンプル間隔（tenor で 0.25mm）ぶん必ず
+    過大評価するので**同じメッシュ同士でも最大 0.51mm**が出て、「変化あり」8 ゾーン・
+    「軽微」11 ゾーンという嘘の判定になっていた。領域別偏差は外部編集モデルの
+    判断根拠なので、ここが素通りするとレポート全体が信用できない。
+    """
+    from saxsketch.analysis import meshdiff
+
+    comp, params, ref = _tenor_mesh()
+    out = meshdiff.region_deviations(ref, ref, comp.regions(params))
+
+    judged = [z for z in out if z["max_dev_mm"] is not None]
+    assert judged
+    assert max(z["max_dev_mm"] for z in judged) <= meshdiff.DEV_UNCHANGED
+    assert all(z["verdict"] == "変化なし" for z in judged)
+
+
+def test_region_deviations_matches_known_edit():
+    """既知の編集量（バッフル +0.30mm）が、その数字のまま報告されること。"""
+    from saxsketch.analysis import meshdiff
+
+    comp, params, ref = _tenor_mesh()
+    edited_p = dict(params)
+    edited_p["baffle_height"] = params["baffle_height"] + 0.30
+    edited = meshdiff.part_to_mesh(comp.build(edited_p), tolerance=0.03)
+
+    out = meshdiff.region_deviations(ref, edited, comp.regions(params))
+    zone = next(z for z in out if "baffle_height" in z["params"])
+    assert zone["max_dev_mm"] == pytest.approx(0.30, abs=0.05)
+    assert zone["verdict"] == "軽微"
 
 
 def test_external_load_view_and_export(tmp_path):
@@ -1700,3 +1995,158 @@ def test_neck_export_endpoint(tmp_path):
     assert Path(e.json()["files"]["bom.csv"]).exists()
     html = Path(e.json()["files"]["spec.html"]).read_text(encoding="utf-8")
     assert html.count("<svg") == 1
+
+
+# ------------------------------------------------------------------ 断面編集（バッフル）
+
+def test_pchip_table_cache_is_bit_identical():
+    """`_pchip` の係数表キャッシュが結果を 1 ビットも変えないこと。
+
+    ドラッグ応答のために入れた高速化なので、形が動いたら意味がない
+    （既定形状は実物 WindyCity の実測に合わせて校正してある）。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+
+    def uncached(pts, x):
+        if x <= pts[0][0]:
+            return pts[0][1]
+        if x >= pts[-1][0]:
+            return pts[-1][1]
+        xs, ys, h, m = pf._pchip_table(pts)
+        k = next(i for i in range(len(xs) - 1) if xs[i] <= x <= xs[i + 1])
+        t = (x - xs[k]) / h[k]
+        t2, t3 = t * t, t * t * t
+        return (ys[k] * (2 * t3 - 3 * t2 + 1) + h[k] * m[k] * (t3 - 2 * t2 + t)
+                + ys[k + 1] * (-2 * t3 + 3 * t2) + h[k] * m[k + 1] * (t3 - t2))
+
+    tables = [pf._BODY_PROFILE, pf._SHOULDER_PROFILE, pf._CAVITY_W, pf._CAVITY_C,
+              pf._CAVITY_D, pf._RAIL_WEIGHT, pf._TOP_ARCH]
+    for tab in tables:
+        lo, hi = tab[0][0], tab[-1][0]
+        for i in range(501):
+            x = lo + (hi - lo) * i / 500
+            assert pf._pchip(tab, x).hex() == uncached(tab, x).hex(), (tab[0], x)
+
+
+def test_params_scope_does_not_leak_across_dicts():
+    """スコープ中でも**別の dict** を渡した呼び出しはキャッシュを素通りすること。
+
+    `sensitivity()` は `{**p, key: v}` で摂動した dict を渡す。ここが素通り
+    しないと摂動が効かず、感度表が全部ゼロになる（音色レーダーが嘘になる）。
+    """
+    from saxsketch.instruments.saxophone.components import profiles as pf
+
+    p = _template_params("mouthpiece", "tenor")
+    other = {**p, "overall_length": p["overall_length"] + 10.0}
+    with pf.params_scope(p):
+        a = pf.heel_z(p)
+        b = pf.heel_z(other)
+        assert b != a
+        assert pf.heel_z(p) == a        # 元の p は汚れていない
+    assert pf.heel_z(p) == a            # スコープを出ても同じ
+
+
+def test_simulate_sensitivity_still_moves():
+    """スコープ導入後も感度（摂動）が効いていること。"""
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "tenor")
+    p = {s.key: s.default for s in comp.param_specs()}
+    table = comp.simulate(p)["sensitivity"]["table"]
+    moved = [k for k, row in table.items()
+             if any(abs(v) > 1e-9 for v in row["deltas"].values())]
+    assert len(moved) >= 3, table
+
+
+def test_mp_section_curves_are_consistent():
+    """断面の輪郭が「材料の中に空洞がある」形になっている。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    p = _template_params("mouthpiece", "tenor")
+    c = pf.section_curves(p)
+    for key in ("outer_top", "outer_bot", "reed", "roof", "floor",
+                "shell_top", "bore_top", "bore_bot"):
+        assert len(c[key]) >= 2, key
+        zs = [z for z, _ in c[key]]
+        assert zs == sorted(zs), key                      # z 昇順
+    # 天井は床より上。天井は外殻の上限を（soft-min のバイアスぶんを見て）超えない。
+    for (z, roof), (_, floor), (_, lim) in zip(c["roof"], c["floor"], c["shell_top"]):
+        assert roof > floor, (z, roof, floor)
+        assert roof <= lim + 1e-6, (z, roof, lim)
+    # 折れ目（棚の終わり）が標本に必ず入っている＝描画で段が丸まらない
+    assert any(abs(z - pf.baffle_plateau_end_z(p)) < 1e-6 for z, _ in c["roof"])
+
+
+def test_mp_baffle_handles_span_and_activity():
+    """ハンドルは型ごとに出し分けられ、span が線形写像として使える形になっている。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    expect = {
+        "straight": {"baffle_height"},
+        "step": {"baffle_height", "baffle_plateau", "baffle_step_rise"},
+        "curve": {"baffle_height", "baffle_curvature"},
+        "rollover": {"baffle_height", "baffle_plateau", "rollover_radius"},
+    }
+    for bt, keys in expect.items():
+        hs = pf.baffle_handles(dict(base, baffle_type=bt))
+        assert {h["key"] for h in hs if h["active"]} == keys, bt
+        for h in hs:
+            if not h["active"]:
+                continue
+            assert h["min"] < h["max"], (bt, h["key"])
+            assert h["axis"] in ("z", "y"), (bt, h["key"])
+            # span が潰れているとドラッグ→値の逆写像が作れない
+            assert abs(h["span"][1] - h["span"][0]) > 0.3, (bt, h["key"], h["span"])
+            assert h["min"] <= h["value"] <= h["max"], (bt, h["key"])
+
+
+def test_mp_baffle_handle_drag_moves_the_roof():
+    """span の端まで動かすと天井が実際にその向きへ動く（ハンドルが効いている）。"""
+    from saxsketch.instruments.saxophone.components import profiles as pf
+    base = _template_params("mouthpiece", "tenor")
+    for bt, key in [("step", "baffle_step_rise"), ("curve", "baffle_curvature"),
+                    ("step", "baffle_plateau"), ("straight", "baffle_height")]:
+        p = dict(base, baffle_type=bt)
+        h = next(x for x in pf.baffle_handles(p) if x["key"] == key)
+        lo = pf.cavity_roof_y(dict(p, **{key: h["min"]}), h["z"])
+        hi = pf.cavity_roof_y(dict(p, **{key: h["max"]}), h["z"])
+        assert abs(hi - lo) > 0.3, (bt, key, lo, hi)
+
+
+def test_section_endpoint_and_preview_override():
+    """/api/section が断面を返し、クエリの上書きは状態を変えない。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "tenor",
+        "component_id": "mouthpiece"})
+    r = c.get("/api/section")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["baffle_type"] == "step"
+    assert len(body["curves"]["roof"]) > 50
+    base_end = next(h for h in body["handles"] if h["key"] == "baffle_plateau")["z"]
+
+    prev = c.get("/api/section?baffle_plateau=0.60")
+    assert prev.status_code == 200
+    moved = next(h for h in prev.json()["handles"]
+                 if h["key"] == "baffle_plateau")["z"]
+    assert moved > base_end + 5.0                      # プレビューは動いている
+    # プロジェクトのパラメータは変わっていない
+    assert c.get("/api/project").json()["params"]["baffle_plateau"] == 0.36
+    assert next(h for h in c.get("/api/section").json()["handles"]
+                if h["key"] == "baffle_plateau")["z"] == base_end
+    # 断面を持たないコンポーネントは 404
+    c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "tenor", "component_id": "reed"})
+    assert c.get("/api/section").status_code == 404
+
+
+def test_mp_baffle_handles_move_tone_metrics():
+    """断面ハンドルを動かすと Tier2 の指標が動く（画面が形を説明している）。"""
+    from saxsketch.acoustics import brightness as br
+    base = _template_params("mouthpiece", "tenor")
+    b0 = br.tone_metrics(base)["brightness"]
+    assert br.tone_metrics(dict(base, baffle_step_rise=0.85))["brightness"] > b0 + 0.2
+    assert br.tone_metrics(dict(base, baffle_plateau=0.70))["brightness"] > b0 + 0.2
+    cv = dict(base, baffle_type="curve")
+    assert (br.tone_metrics(dict(cv, baffle_curvature=1.0))["brightness"]
+            > br.tone_metrics(dict(cv, baffle_curvature=-1.0))["brightness"] + 0.4)

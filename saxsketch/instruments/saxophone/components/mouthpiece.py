@@ -1,10 +1,10 @@
 """サクソフォン マウスピース コンポーネント。
 
-ジオメトリ構成:
-  1. 外形回転体（Z軸回り、アウターR プロファイル）
-  2. ビークカット（上面の斜めカット）
-  3. テーブル/フェイシングカット（下面。フェイシングカーブ含む）
-  4. 内部空洞（窓〜バッフル〜チェンバーのスーパー楕円ロフト + ボア円筒）を減算
+ジオメトリ構成（実在マウスピースの実測に基づく構造。詳細は profiles.py）:
+  1. 外形回転体（ボア軸回りの真円。ノーズ→最大径→シャンク肩→シャンク平行部）
+  2. ビークカット（18°の直線ランプ＋円筒面。x 方向に曲率を持つので断面ロフトで切る）
+  3. テーブル/フェイシングカット（ボア軸に対し傾いた平面＋フェイシングカーブ）
+  4. 内部空洞（窓〜バッフル〜チェンバーのロフト + ボア円筒）を減算
 """
 from __future__ import annotations
 
@@ -13,9 +13,14 @@ import math
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import (
+    extrude_arc_prism,
+    loft_arc_sections,
     loft_sections,
+    loft_spline_sections,
     revolve_profile,
+    revolve_spline_profile,
     yz_profile_cut_solid,
+    yz_profile_cut_solid_curved,
 )
 from . import profiles
 from . import reference_check
@@ -43,21 +48,45 @@ def _specs(t: dict) -> list[ParamSpec]:
                   effect="吹奏感の性格。楕円=現代的で反応が速い、円弧=クラシカル"),
         f("tip_rail_width", "ティップレール幅", "フェイシング", "mm", 0.5, 2.0, 0.1,
           "狭いほどレスポンスが速いが雑音が出やすい"),
+        f("tip_rail_thickness", "ティップレール厚", "フェイシング", "mm", 0.8, 2.5, 0.05,
+          "先端に残る肉厚。薄いほど鳴りは軽いが欠けやすい。ビークの傾きもここから決まる"),
+        f("tip_chamfer", "ティップ前縁の面取り", "フェイシング", "mm", 0.0, 1.2, 0.05,
+          "先端をリード面側から落とす量。実物は前面が 0.25mm しか残らない。"
+          "0 にすると tip_rail_thickness ぶんの角ばった壁が先端に立つ", advanced=True),
         f("side_rail_width", "サイドレール幅", "フェイシング", "mm", 0.6, 2.0, 0.1,
           "狭いほど効率よく鳴るがリードミスに敏感になる"),
+        f("table_angle", "テーブル傾斜", "フェイシング", "度", 2.0, 7.0, 0.1,
+          "テーブル平面のボア軸に対する傾き。実物は約4.2°で、これが胴の中でリードを"
+          "どこまで深く座らせるかを決める", advanced=True),
         # --- バッフル ---
         ParamSpec(key="baffle_type", label="バッフル種別", category="バッフル",
                   type="choice", default=t["baffle_type"],
                   choices=[Choice("straight", "ストレート"),
-                           Choice("rollover", "ロールオーバー"),
                            Choice("step", "ステップ"),
-                           Choice("curve", "カーブ")],
-                  effect="音色の性格を決める最重要要素。ストレート=ダーク／ロールオーバー=バランス"
-                         "／ステップ=くっきり／カーブ=メタリックでアグレッシブ"),
+                           Choice("curve", "カーブ"),
+                           Choice("rollover", "ロールオーバー")],
+                  effect="音色の性格を決める最重要要素。ストレート=暗くソフトな音／"
+                         "ステップ=バランスのとれた音色（実測 WindyCity がこれ）／"
+                         "カーブ=メタリックでアグレッシブな音／"
+                         "ロールオーバー=ストレートの肩を丸めた中間"),
         f("baffle_height", "バッフル高さ", "バッフル", "mm", 0.0, 5.0, 0.1,
-          "高いほど明るくエッジの効いた音。0でクラシカルなダークトーン"),
+          "リード直上の天井をどれだけ下げるか。高いほど明るくエッジの効いた音、"
+          "0でクラシカルなダークトーン"),
+        # 以下3つは「断面」タブのハンドルで直接ドラッグできる。実効範囲は
+        # バッフル種別で変わる（型の特徴を壊さないため。profiles._PLATEAU_RANGE）ので、
+        # ここの min/max は全型を覆う広い値。正確な可動域は断面タブが示す。
+        f("baffle_plateau", "バッフル平坦長", "バッフル", "比", 0.02, 0.75, 0.01,
+          "リード直上の天井が平坦なまま続く長さ（ボア開始位置に対する比）。"
+          "ステップ/ロールオーバーで有効。長いほど棚がはっきりする。"
+          "ストレート/カーブでは型の定義上ごく短い範囲に制限される"),
+        f("baffle_step_rise", "段の立ち上がり", "バッフル", "比", 0.0, 0.85, 0.05,
+          "ステップで有効。棚の終わりで天井がどれだけ一気に立ち上がるか。"
+          "0 は実測どおりのなだらかな肩、大きいほど切り立った段差になる"),
+        f("baffle_curvature", "カーブ量", "バッフル", "比", -1.0, 1.0, 0.05,
+          "カーブで有効。正で天井が低いまま粘って気道を絞る（明るくアグレッシブ）、"
+          "負で早く開くスクープ（ダーク）、0 でストレートと同じ直線"),
         f("rollover_radius", "ロールオーバー半径", "バッフル", "mm", 3.0, 20.0, 0.5,
-          "ロールオーバー時の肩の丸み。小さいほどエッジ感が強い", advanced=True),
+          "ロールオーバーで有効。肩の丸み。小さいほどエッジ感が強い", advanced=True),
         # --- チェンバー ---
         f("throat_ratio", "スロート断面積比", "チェンバー", "比", 0.60, 1.35, 0.01,
           "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い"),
@@ -91,7 +120,12 @@ def _specs(t: dict) -> list[ParamSpec]:
           "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
           "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨"),
         f("body_dia", "ボディ径", "外形", "mm", 20.0, 34.0, 0.1,
-          "リガチャー適合寸法", advanced=True),
+          "リガチャー適合寸法（最大径）", advanced=True),
+        f("shank_dia", "シャンク径", "外形", "mm", 16.0, 28.0, 0.1,
+          "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True),
+        f("shank_length", "シャンク長", "外形", "mm", 8.0, 30.0, 0.5,
+          "シャンク平行部の長さ。長いほどロングシャンク仕様。テーブル踵の位置は"
+          "全長からこれを引いて決まるので、リードの座りにも効く"),
         f("overall_length", "全長", "外形", "mm", 70.0, 130.0, 0.5,
           "マウスピース全長", advanced=True),
         # --- 製造 ---
@@ -122,45 +156,119 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ 形状生成
 
     def build(self, params: dict):
-        from build123d import Pos, Solid
+        with profiles.params_scope(params):
+            return self._build(params)
 
+    def _build(self, params: dict):
         p = params
-        length = p["overall_length"]
 
-        # 1) 外形回転体
-        n_st = 28
-        radii = [(length * i / (n_st - 1), profiles.outer_radius(p, length * i / (n_st - 1)))
-                 for i in range(n_st)]
-        body = revolve_profile(radii)
+        # 1) 外形回転体。刻みの根拠は `profiles.body_stations`（FreeCAD 側の
+        #    `cad/windycity/build_base.py` と同じ列を使う）。
+        zs = profiles.body_stations(p)
+        body = revolve_profile([(z, profiles.outer_radius(p, z)) for z in zs])
 
-        # 2) ビークカット（上面）。曲線なので端点2点では平面になってしまう。
-        n_bk = 40
-        beak_pts = [(-3.0 + (length + 6.0) * i / (n_bk - 1), 0.0) for i in range(n_bk)]
-        beak_pts = [(z, profiles.beak_y(p, z)) for z, _ in beak_pts]
-        beak_pts += [(length + 3.0, 80.0), (-3.0, 80.0)]
-        beak_cut = yz_profile_cut_solid(beak_pts, half_width=p["body_dia"])
+        # 2) ビークカット（上面）。稜線は直線でも横断面が円弧なので、YZ プリズムでは
+        #    表現できない。各 z の「ビーク面より上」の断面をロフトして切除ソリッドにする。
+        z_bk = profiles.beak_cut_stations(p)
+        beak_cut = loft_sections([
+            {"z": z, "pts": profiles.beak_cut_section(p, z, half_width=p["body_dia"])}
+            for z in z_bk])
 
-        # 3) テーブル/フェイシングカット（下面）
-        z_end = profiles.table_cut_end_z(p)
-        n_f = 48
-        face_pts = [(-3.0 + (z_end + 3.0) * i / (n_f - 1), 0.0) for i in range(n_f)]
-        face_pts = [(z, profiles.cut_top_y(p, z)) for z, _ in face_pts]
-        face_pts += [(z_end, -80.0), (-3.0, -80.0)]
-        facing_cut = yz_profile_cut_solid(face_pts, half_width=p["body_dia"])
+        # 3) テーブル/フェイシングカット（下面）。傾斜平面は踵より後ろで自然に胴の
+        #    外へ出るため、全長ぶん伸ばしても余計な切除は起きない。
+        facing_cut = yz_profile_cut_solid(profiles.facing_cut_points(p),
+                                          half_width=p["body_dia"])
 
         # 4) 内部空洞（任意断面ロフト + ボア円筒）。窓/スロート/ボアの円形断面と
         #    チェンバーの非対称断面（馬蹄/フラットサイドウォール）を点数一定で通す。
         cavity = loft_sections(profiles.cavity_sections(p))
-        zb = profiles.bore_start_z(p)
-        r = profiles.bore_radius(p)
-        bore = Pos(0, 0, zb) * Solid.make_cylinder(r, length - zb + 1.5)
+        bore = self._bore_solid(p)
 
         part = body - beak_cut - facing_cut - cavity - bore
         return part
 
+    def _bore_solid(self, p: dict):
+        from build123d import Pos, Solid
+        zb = profiles.bore_start_z(p)
+        r = profiles.bore_radius(p)
+        return Pos(0, 0, zb) * Solid.make_cylinder(r, p["overall_length"] - zb + 1.5)
+
+    def build_cad(self, params: dict):
+        """STEP 出力用。`build()` と**同じ形**を、1面ずつのプリミティブで張り直す。
+
+        `build()` の結果はテナーで 2547 面・微小エッジ 5000本超あり、FreeCAD で
+        外周面を1クリックで選ぶことも外周エッジへフィレットを掛けることもできない
+        （`docs/manual-edit-workflow.md` の L1 が事実上使えない）。ここでは同じ
+        `profiles.py` の値から、面の張り方だけを替えて 100 面未満に畳む。
+
+        法則は一切変えない。断面 z も多角形版と同じ列を使うので、体積・寸法とも
+        多角形版と一致する（`test_mp_cad_matches_build` が担保）。残る差は多角形版
+        自身の近似（母線の弦誤差・ルールドの断面間補間）で、向きは常に
+        「こちらの方が法則に近い」。実測でテナーの材料体積が +0.1%。
+
+        ブーリアンが 4 倍以上遅い（4.6s → 20s）ので、対話中に走る `build()` とは
+        別経路にしてある。落ちたときは黙って `build()` へ落とす —— STEP が重くなる
+        だけで、出力自体は失われない。
+        """
+        try:
+            return self._build_cad(params)
+        except Exception:                      # noqa: BLE001 - 形状生成の失敗全般
+            import logging
+            logging.getLogger(__name__).warning(
+                "build_cad が失敗したため build() の表現で STEP を出力します",
+                exc_info=True)
+            return self.build(params)
+
+    def _build_cad(self, params: dict):
+        p = params
+        hw = p["body_dia"]
+
+        # 1) 外形回転体。母線は C1 の折れ目で区切る（区切らないと面取りの端で
+        #    スプラインがうねる。根拠は `profiles.body_segments`）。
+        part = revolve_spline_profile(profiles.body_segments(p))
+
+        # 2) ビークカット。直線ランプの区間は「一定半径の円弧を直線に沿って
+        #    平行移動した面」そのものなので、斜めプリズムで厳密に作れる。
+        #    胴へ溶けるブレンド区間だけは断面の曲率半径が z で変わるのでロフト。
+        cap = profiles.beak_cut_cap_y(p)
+        breaks = profiles.beak_prism_breaks(p)
+        for za, zb in zip(breaks, breaks[1:]):
+            slope = (profiles.beak_apex_y(p, zb) - profiles.beak_apex_y(p, za)) / (zb - za)
+            part = part - extrude_arc_prism(
+                profiles.beak_cut_arc(p, za, half_width=hw), cap,
+                direction=(0.0, slope, 1.0),
+                length=(zb - za) * math.hypot(1.0, slope))
+        part = part - loft_arc_sections(
+            [profiles.beak_cut_arc(p, z, half_width=hw)
+             for z in profiles.beak_blend_stations(p)], cap)
+
+        # 3) テーブル/フェイシングカット。テーブル＝平面1面、フェイシング＝曲面1面。
+        part = part - yz_profile_cut_solid_curved(profiles.facing_cut_segments(p),
+                                                  half_width=hw)
+
+        # 4) 内部空洞。断面は多角形版と同じで、ワイヤだけ周期スプラインにする
+        #    （`ruled=True` のままなので断面間の補間＝形は変わらない）。
+        #
+        #    ボアはここでは別の円筒にせず、**ロフトをそのまま延長して**作る。
+        #    空洞の最終断面はちょうどボア円なので、別ソリッドにすると円筒と
+        #    円周まるごとで接して交わる＝OCCT が最も苦手な条件になり、実測で
+        #    0.5mm² 未満のスリバー面が 35 枚出た（多角形版は 72角形が円に内接して
+        #    いるので横断して交わり、この問題が起きない）。同じ断面をもう一枚
+        #    後ろに置けば区間は厳密な円筒のままで、ブーリアンが1回減る。
+        secs = profiles.cavity_sections(p)
+        secs.append({"z": p["overall_length"] + 1.5, "pts": secs[-1]["pts"]})
+        return part - loft_spline_sections(secs)
+
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
+        with profiles.params_scope(params):
+            return self._simulate(params)
+
+    def _simulate(self, params: dict) -> dict:
+        # `sensitivity` は各 ParamSpec を摂動した `{**params, k: v}` で回すが、
+        # そちらは別 dict なので上のスコープのキャッシュには当たらない（当たったら
+        # 摂動が効かず壊れる）。スコープが効くのは tier1/tier2 と本体側だけ。
         tier1 = ac_volume.tier1_report(profiles.cavity_volume_cc(params), self.size_info,
                                        saturated=profiles.chamber_saturated(params))
         tier2 = ac_brightness.tone_metrics(params)
@@ -197,6 +305,22 @@ class MouthpieceComponent(Component):
 
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
+
+    def section(self, params: dict) -> dict:
+        """中央面 x=0 の断面とバッフルのドラッグハンドル。
+
+        バッフル種別ごとに `active` なハンドルが変わる（型の形状的特徴を壊す
+        操作をそもそも出さない）。可動域は `profiles._PLATEAU_RANGE` などの
+        法則側の実効範囲そのままで、UI に閾値を持たせない。
+        """
+        return {
+            "z_range": [0.0, params["overall_length"]],
+            "curves": profiles.section_curves(params),
+            "handles": profiles.baffle_handles(params),
+            "warnings": profiles.baffle_warnings(params),
+            "baffle_type": params.get("baffle_type", "step"),
+            "title": "側面断面（中央面）— バッフルの丸ポチをドラッグ",
+        }
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
 
