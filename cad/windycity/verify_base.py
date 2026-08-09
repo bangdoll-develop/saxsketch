@@ -31,7 +31,8 @@ from saxsketch.instruments.saxophone.components import profiles as P  # noqa: E4
 from saxsketch.instruments.saxophone.components.mouthpiece import (  # noqa: E402
     MouthpieceComponent)
 from cad.windycity.align_reference import (  # noqa: E402
-    facing_fit, facing_rise_profile, table_plane, window_outline, window_span)
+    SAMPLE_SEED, facing_fit, facing_rise_profile, table_plane, window_outline,
+    window_span)
 
 REF_STL = _HERE / "reference_aligned.stl"
 OUT_STL = _HERE / "base_tenor.stl"
@@ -56,9 +57,13 @@ def _load(size):
 
 
 def _surface_dev(a: trimesh.Trimesh, b: trimesh.Trimesh, n=120_000):
-    """a の表面サンプルから b 表面への距離（片側・KDTree 近似）。"""
-    pa, _ = trimesh.sample.sample_surface(a, n)
-    pb, _ = trimesh.sample.sample_surface(b, n)
+    """a の表面サンプルから b 表面への距離（片側・KDTree 近似）。
+
+    **両側で別のシードを使う**。ref とモデルは近い形なので、同じ乱数列で叩くと
+    pa の各点のすぐ隣に pb の点が来て最近傍距離が過小に出る恐れがある。
+    """
+    pa, _ = trimesh.sample.sample_surface(a, n, seed=SAMPLE_SEED)
+    pb, _ = trimesh.sample.sample_surface(b, n, seed=SAMPLE_SEED + 1)
     d = cKDTree(np.asarray(pb)).query(np.asarray(pa), workers=-1)[0]
     return np.asarray(pa), d
 
@@ -341,6 +346,10 @@ def main():
     t_cad = time.time()
     part_cad = comp.build_cad(p)
     t_cad = time.time() - t_cad
+    # 生成時間は**レポートに入れない**。実行のたびに数秒動くので、形状を一切変えずに
+    # 2 回走らせるだけで verify_report.md に差分が出てしまい、「本当に形が変わったのか」
+    # がレビューで判別できなくなる。見たい人には標準出力で出す。
+    print("build: 多角形 %.1fs / プリミティブ %.1fs" % (t_poly, t_cad), flush=True)
     model_cad = meshdiff.part_to_mesh(part_cad, tolerance=0.02)
     export_model(part_cad, OUT_STEP, "step")
     faces_cad = part_cad.faces()
@@ -402,7 +411,6 @@ def main():
               "|---|---|---|",
               "| 面数 | %d | **%d** |" % (len(part.faces()), len(faces_cad)),
               "| 微小面 (<0.5mm²) | – | %d |" % slivers_cad,
-              "| 生成＋ブーリアン | %.1f s | %.1f s |" % (t_poly, t_cad),
               "| ソリッド体積 | %.1f mm³ | %.1f mm³ (%+.3f%%) |" % (
                   part.volume, part_cad.volume,
                   100.0 * (part_cad.volume - part.volume) / part.volume), "",
