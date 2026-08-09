@@ -53,17 +53,37 @@ def test_missing_cone_derived_not_constant():
     assert ccs[0] < ccs[1] < ccs[2]
 
 
-# 実測した残差 [cent]。テナーだけ届かない。
+# 実測した残差 [cent]。3 サイズとも大きく flat 側に外れる。
 #
-# 空洞を外殻に封じ込めた（Phase 3.6）結果、実物寸法の胴に入る容積が上限になった。
-# テナーは目標 18.0cc に対し到達上限が 13.7cc しかない。以前は封じ込め拘束が無く、
-# チェンバーが本体の外へ膨らんだ分まで体積積分が数えて「-0.1 cent」と表示していた。
-# 合格の方が嘘だったので、緩めるのではなく事実を記録する。
+# 直前の値は {-1.0, -0.5, +53.9} で、ソプラノとアルトは「良好」に見えていた。
+# それが崩れたのは Stage B.2 で descriptor のネック寸法を実測に置き換えたから。
+# 目標体積は `cc ∝ r0³`（r0 = ネック小端半径）でネック内径に直結していて、
+# 旧値は 3 サイズとも過大だった（テナー 15.4 → 実測 13.1mm）。目標が縮んだので
+# 残差が flat 側へ寄り、テナーは sharp から flat へ符号ごと反転した。
 #
-# 目標側の疑いも残る: テナーのネック小端内径 15.4mm はテノン外径からの推定値で、
-# 公表実測が無い（アルトは 217.5mm の実測があり、導出値より 11% 短かった）。
-# ユーザーが自分のネックをノギスで測れば（Phase 4-A）解消しうる。
-TIER1_RESIDUAL_CENTS = {"soprano": -1.0, "alto": -0.5, "tenor": 53.9}
+# **形状の疑いは晴れている。** テナーは実物 WindyCity の実測形状 ＋ 実物ネックの
+# 実測寸法で、入力に推定値が 1 つも残っていない。実際に演奏で成立している組に
+# 対して -81 セントと言う以上、外しているのは Tier1 のモデルの側。
+#
+# **ネックのテーパも原因ではない**（Stage B.4 で掃引して除外した）。テナー大端内径
+# 26.0mm の実測から θ = atan(6.45/L) を振ると、実在するネック長 200〜280mm で
+# 半頂角は 1.32〜1.85° に収まり文献値 1.52° を挟む。残差は -152〜-38 セントで
+# 動くが 0 を跨がない（跨ぐには L = 322mm が要る）。
+#
+# **同じ形状で Tier2 は -23.2 セント（TIER2_RESIDUAL_CENTS）。4 倍食い違う。**
+# Tier2 はインピーダンス計算、Tier1 は一行の経験則なので、残る容疑は Tier1 の
+# 校正定数 `CENTS_PER_VOLUME_RATIO = 250` と `REED_EQUIVALENT_CC = 1.0`。
+# どちらも出所の無い経験値で、検証されたことがない。
+#
+# **係数は逆算しない。** 250 → 約 69 にすればテナーは Tier2 に一致するが、それは
+# 検証したいモデルから定数を引き出す作業で、descriptor 自身が禁じている
+# （「無い箇所を実測に合わせて逆算すると、どの量が間違っていたのか分からなくなる」）。
+# 合わせに行かず、食い違いを数字として残す。
+#
+# ソプラノの -320 は別問題。B.1 前でも実効 5.61cc / 目標 3.69cc（≒ -130 セント）で、
+# B.1 のリード規格長比スケール（体積 ×1.39）がそこから広げた。Tier2 でも -61.2 と
+# 3 サイズで最悪。寸法そのものの作り直しは次ステージ。
+TIER1_RESIDUAL_CENTS = {"soprano": -320.4, "alto": -73.8, "tenor": -81.2}
 
 
 def test_tier1_matches_recorded_residual():
@@ -74,13 +94,11 @@ def test_tier1_matches_recorded_residual():
         rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
         assert rep["deviation_cents"] == pytest.approx(
             TIER1_RESIDUAL_CENTS[tid], abs=2.0), (tid, rep)
-    # ソプラノとアルトは実際に良好。テナーは正直に sharp を出す。
+    # 3 サイズとも正直に flat を出す（以前はテナーだけ sharp だった）。
     def status(tid):
         p = _template_params("mouthpiece", tid)
         return ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))["status"]
-    assert status("soprano") == "ok"
-    assert status("alto") == "ok"
-    assert status("tenor") == "sharp"
+    assert [status(t) for t in SIZES] == ["flat", "flat", "flat"]
 
 
 def test_tier1_advice_admits_saturation():
@@ -1279,17 +1297,25 @@ def test_impedance_param_sensitivity(alto):
     # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
     base = ob.impedance(p, si)["peaks"]
     narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
-    # 単一ピークで見ない: 周波数グリッドが約2.4Hz刻みなので、実際の移動量が
-    # グリッド境界のどちら側に落ちるかで 2.5Hz と 4.9Hz を行き来する。
-    # 上位共鳴の総移動量で見れば量子化に左右されない。
+    # 単一ピークで見ない: 個々の移動量は 0.5〜0.8Hz と小さく、上位共鳴の総和で
+    # 見るほうが「ノブが効いているか」の判定として安定する。
     #
-    # しきい値 3.0Hz は**実測形状で実際に出る量**（4.9Hz）から取っている。以前の
-    # 12.0Hz は旧形状の値で、当時はボア長がアルトで 26mm しかなく、チェンバー〜
-    # スロートの区間が 3 倍長かった。実測の WindyCity はボアが全長の半分以上を
-    # 占めるので、スロートは短い局所的な絞りにしかならない。合格させに行くのではなく
-    # 「ノブが死んでいない」ことだけを見る。
+    # しきい値 1.5Hz は**実測形状で実際に出る量**（3.01Hz）の半分から取っている。
+    #
+    # 直前の 3.0Hz は 4.9Hz という観測から取ったものだったが、あの 4.9 は周波数
+    # 格子の量子化産物だった。当時の `impedance()` は線形格子 2.44Hz 刻みでピークを
+    # 格子点のまま読んでいて、ピーク別の移動量が 0.00 / 0.00 / 2.40 / 2.40 / 0.00 /
+    # 2.50 / 0.00 / 0.00 と**全部 0 か 1 格子ちょうど**に張り付いていた。対数格子＋
+    # ピーク補間（`openwind_bridge._interp_peak`）に直すと 0.08 / 0.26 / 0.53 / 0.70 /
+    # 0.62 / 0.53 / 0.78 / 0.39 と揃い、総和が 4.90 → 3.01Hz になる。
+    # 導出手順（実測値から取る）は変えずに、直った実測値でやり直した値がこれ。
+    #
+    # さらに以前の 12.0Hz は旧形状の値で、当時はボア長がアルトで 26mm しかなく、
+    # チェンバー〜スロートの区間が 3 倍長かった。実測の WindyCity はボアが全長の
+    # 半分以上を占めるので、スロートは短い局所的な絞りにしかならない。合格させに
+    # 行くのではなく「ノブが死んでいない」ことだけを見る。
     shift = sum(abs(narrow[i]["freq"] - base[i]["freq"]) for i in range(3, 8))
-    assert shift > 3.0, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
+    assert shift > 1.5, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
     assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 
@@ -1314,6 +1340,25 @@ def test_openwind_first_peak_reasonable(alto):
     res = ob.impedance(p, comp.goal_seek_size_info())
     assert res["engine"] == "openwind"
     assert 40.0 < res["peaks"][0]["freq"] < 400.0
+
+
+# Tier2（インピーダンス）で実測した第1共鳴の残差 [cent]。
+#
+# **±20 セント以内という判定はやめた。** 以前の記録値 -53.6 / -40.1 / -43.5 は
+# 周波数格子に張り付いた数字で、形状の測定値ではなかった。`impedance()` が
+# `linspace(50, 2000, 800)` を張り（ΔF = 2.441Hz）、ピークを格子点のまま読んで
+# いたため、低音の 1 目盛りが soprano 20.9 / alto 30.9 / tenor 41.2 セント。
+# **3 サイズとも「±20 セント」が 1 目盛りより細かく**、格子がたまたま乗ったときしか
+# 通らなかった。ずれの向きがサイズごとにバラバラだったのも量子化の証拠。
+#
+# 対数格子＋ピーク補間（`_interp_peak`）に直したうえで取り直した値が下。細格子
+# 0.02Hz で確かめた真値 -61.5 / -26.3 / -22.3 との差は 0.3 / 1.2 / 0.9 セント。
+#
+# 主張を「20 セント以内に収まる」から「この値である」へ変えてある。閾値の緩和では
+# なく、TIER1_RESIDUAL_CENTS と同じ「変化の検知」に揃えた。3 サイズとも実物より
+# flat なのは事実として残り、Tier1 との 4 倍の食い違いも TIER1_RESIDUAL_CENTS の
+# コメントに書いてある。
+TIER2_RESIDUAL_CENTS = {"soprano": -61.2, "alto": -27.5, "tenor": -23.2}
 
 
 def test_resonator_extension_replaces_missing_cone():
@@ -1342,7 +1387,8 @@ def test_resonator_extension_replaces_missing_cone():
         assert r_neck < profiles.bore_radius(p) / 1000.0, tid
 
         res = ob.impedance(p, si)
-        assert abs(res["first_cents_vs_target"]) < 20.0, (tid, res["first_note"])
+        assert res["first_cents_vs_target"] == pytest.approx(
+            TIER2_RESIDUAL_CENTS[tid], abs=3.0), (tid, res["first_note"])
 
 
 # ------------------------------------------------------------------ 音響 Tier3（音合成）

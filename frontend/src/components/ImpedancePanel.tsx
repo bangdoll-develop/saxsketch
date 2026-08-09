@@ -110,7 +110,7 @@ export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
           <div className="peaklist" style={{ fontSize: 12, marginTop: 4 }}>
             {imp.peaks.slice(0, 6).map((pk, i) => (
               <span key={i} style={{ marginRight: 10, color: "#9fb0c4" }}>
-                f{i + 1}: {pk.freq}Hz <b>{pk.note.split(" ")[0]}</b>
+                f{i + 1}: {pk.freq.toFixed(1)}Hz <b>{pk.note.split(" ")[0]}</b>
               </span>
             ))}
           </div>
