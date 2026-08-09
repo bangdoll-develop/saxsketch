@@ -15,10 +15,9 @@ from . import profiles
 from . import reed_profiles as rp
 from . import reference_check
 
-# 踵がリガチャー座の後端に届いているかの許容差 [mm]。
-# 校正後のテンプレートは踵位置＝座の後端で設計してあり（リード規格長が全長を決めている）、
-# 丸め誤差で警告が出ないよう遊びを持たせる。座はバンド幅より広いので 1mm ずれても締まる。
-SEAT_REACH_TOL = 1.0
+# 踵がリガチャー座の後端に届いているかの許容差 [mm]。**規格照合カードと同じ 1 個の値**
+# を使う（同じ幾何を判定しているので、しきい値が 2 つあると片方だけ厳しくなる）。
+SEAT_REACH_TOL = reference_check.SEAT_REACH_TOL
 
 
 def _specs(t: dict) -> list[ParamSpec]:

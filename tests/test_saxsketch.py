@@ -69,8 +69,7 @@ def test_tier1_matches_recorded_residual():
     from saxsketch.acoustics import volume as ac_volume
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
-        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid),
-                                     saturated=profiles.chamber_saturated(p))
+        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
         assert rep["deviation_cents"] == pytest.approx(
             TIER1_RESIDUAL_CENTS[tid], abs=2.0), (tid, rep)
     # ソプラノとアルトは実際に良好。テナーは正直に sharp を出す。
@@ -85,15 +84,35 @@ def test_tier1_matches_recorded_residual():
 def test_tier1_advice_admits_saturation():
     """届かないのに「チェンバーを広げろ」とだけ言わないこと。
 
-    肉厚制限で頭打ちならスライダを上げても形は変わらない。効かない操作を勧めるのは
+    肉厚制限で頭打ちならスライダを上げても目標に届かない。効かない操作を勧めるのは
     ユーザーの時間を捨てさせる。
+
+    判定条件を差し替えてある。以前は「チェンバー断面が**全部**外殻に接しているか」
+    (`chamber_saturated`) だったが、実測から起こした形状では窓寄りの断面が先に当たる
+    ことが無く、スライダ可動域の全域（比 3.0 × 最小肉厚 4.0）で永久に False
+    ＝ この助言は到達不能コードだった。見るべきは幾何の接触ではなく
+    **上限まで上げて目標に届くか**（`chamber_headroom_cc`）。
     """
     from saxsketch.acoustics import volume as ac_volume
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "tenor")
+    cr_max = next(s.max for s in comp.param_specs() if s.key == "chamber_ratio")
     p = _template_params("mouthpiece", "tenor")
-    assert profiles.chamber_saturated(p)
-    rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info("tenor"),
-                                 saturated=True)
-    assert "頭打ち" in rep["advice"]
+
+    # (a) 幾何の事実: 上限まで上げても実効容積は 1cc も増えない（外殻の肉厚が効く）
+    head = profiles.chamber_headroom_cc(p, cr_max)
+    assert 0.0 < head < 1.0, head
+
+    # (b) 助言のロジック: 足りないときだけ「届かない」と言う。テンプレートの残差に
+    #     依存しないよう、目標に対して足りない容積をその場で作って渡す。
+    si = _size_info("tenor")
+    target = ac_volume.missing_cone(si)["cc"]
+    short = {"total_cc": target,
+             "effective_cc": 0.7 * target - ac_volume.REED_EQUIVALENT_CC}
+    rep = ac_volume.tier1_report(short, si, headroom_cc=head)
+    assert rep["status"] == "sharp"
+    assert "届かない" in rep["advice"]
+    assert "届かない" not in ac_volume.tier1_report(short, si, headroom_cc=99.0)["advice"]
+    assert "届かない" not in ac_volume.tier1_report(short, si)["advice"]
 
 
 # ------------------------------------------------------- 外殻への封じ込め（Phase 3.6）
@@ -136,18 +155,28 @@ def test_cavity_inside_shell():
 
 
 def test_beak_taper_spans_body():
-    """ビークがティップからショルダーまで本体を切り続けること。
+    """ビークがティップからブレンド終端まで本体を切り続けること。
 
     ビーク面を直線にしていたときは、`beak_height` が胴の全高に近い既定値だったため
     全長の 1/4 で外形を追い越し、テーパが消えてただの円筒になっていた。
     同時に空洞天井の clamp（`beak_y - min_wall`）まで無効化されていた。
+
+    実測のビークは胴へ**溶けて終わる**（`beak_blend_end_z` ≒ 0.386·L、実測 34.2→41.5mm）。
+    そこから後ろは定義上 `beak_y == outer_radius` になるので、旧アサートの
+    「0.5·L まで切り続けろ」は直線ビーク時代の前提。バイトポイント（0.25·L）より
+    十分後ろまで切っていることを、ブレンド終端そのもので見る。
     """
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
         L = p["overall_length"]
-        for t in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5):
-            z = t * L
+        z_end = profiles.beak_blend_end_z(p)
+        assert z_end > 0.30 * L, (tid, z_end / L)     # バイトポイント(0.25L)より後ろ
+        for t in (0.0, 0.2, 0.4, 0.6, 0.8, 0.95):
+            z = t * z_end
             assert profiles.beak_y(p, z) < profiles.outer_radius(p, z), (tid, t)
+        # 終端では胴と一致する（そこから後ろは切らない）
+        assert profiles.beak_y(p, z_end) == pytest.approx(
+            profiles.outer_radius(p, z_end), abs=1e-6), tid
         # 単調に立ち上がる（くさび→バイトポイント→ショルダー）
         ys = [profiles.beak_y(p, t * L) for t in (0.0, 0.15, 0.3, 0.45)]
         assert all(a < b for a, b in zip(ys, ys[1:])), (tid, ys)
@@ -163,8 +192,11 @@ def test_table_reaches_reed_heel():
         p = _template_params("mouthpiece", tid)
         heel = _size_info(tid)["reed_std_length_mm"]
         assert profiles.table_cut_end_z(p) > heel, tid
-        # 踵の直前ではまだ平面（ランプが始まっていない）
-        assert profiles.cut_top_y(p, heel - 1.0) == pytest.approx(profiles.table_y(p))
+        # 踵の直前はフェイシングの持ち上がりがゼロ＝素のテーブル平面そのもの。
+        # 比較先は `table_y`（座中央の 1 点）ではなく **その z のテーブル平面**。
+        # テーブルは軸に 4.18° 傾いているので単一の Y では表せない。
+        assert profiles.cut_top_y(p, heel - 1.0) == pytest.approx(
+            profiles.table_plane_y(p, heel - 1.0)), tid
 
 
 def test_bore_clears_corked_tenon():
@@ -469,12 +501,19 @@ def test_reed_sections_uniform_vertex_count():
 
 
 def test_reed_heel_reaches_seat_end(alto_reed):
-    """踵がリガチャー座の後端に届かない設定を警告すること。"""
+    """踵がリガチャー座の後端に届かない設定を警告すること。
+
+    許容差は判定側と**同じ 1 個の値**（`reference_check.SEAT_REACH_TOL`）で見る。
+    実測の踵位置は規格リード長より 0.8〜1.0mm 後ろに来るのが正しい姿なので、
+    ここで許容ゼロの厳密比較をすると、既定テンプレートが必ず落ちる。
+    """
     comp, p = alto_reed
     m = comp.ref_params()
     from saxsketch.instruments.saxophone.components import profiles
+    from saxsketch.instruments.saxophone.components import reference_check
     _, seat1 = profiles.ligature_seat_range(m)
-    assert p["reed_length"] >= seat1                  # 既定は届いている
+    # 既定は届いている（判定と同じ許容差の内側）
+    assert p["reed_length"] >= seat1 - reference_check.SEAT_REACH_TOL
 
     def fit(**over):
         sim = comp.simulate({**p, **over})
@@ -561,20 +600,28 @@ def alto_ligature():
 
 
 def test_ligature_inner_follows_mouthpiece(alto_ligature):
-    """内周が参照マウスピースのボディ径 + はめあい隙間に一致し、追従すること。"""
+    """内周が参照マウスピースの**座での外形**＋はめあい隙間に一致し、追従すること。
+
+    座は最大径の位置ではない。実測の胴は踵（＝最大径）へ向かって単調に太るので、
+    座の中央では外形が `body_dia/2` より 2.6% 細い（`r_seat/r_max` = 0.974）。
+    以前はここで `body_dia/2` との等号を要求していたが、それは「座に r=r_max の
+    平坦区間がある」という旧プロファイルの前提。追従を検証するという意図は変えず、
+    **比例**で見る。
+    """
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     from saxsketch.instruments.saxophone.components import profiles
     comp, p = alto_ligature
     m = comp.ref_params()
     z0, z1 = lp.seat_range(m, p)
-    expect = profiles.outer_radius(m, (z0 + z1) / 2.0) + p["clearance"]
+    zm = (z0 + z1) / 2.0
+    expect = profiles.outer_radius(m, zm) + p["clearance"]
     assert lp.inner_radius(m, p) == pytest.approx(expect, abs=1e-9)
-    assert lp.inner_radius(m, p) == pytest.approx(m["body_dia"] / 2.0 + p["clearance"],
-                                                  abs=0.05)
-    # ボディ径を変えると内周が追従する（＝自動整合）
+    ratio = profiles.outer_radius(m, zm) / (m["body_dia"] / 2.0)
+    assert 0.95 < ratio < 1.0, ratio        # 座は最大径より細いが、極端には細くない
+    # ボディ径を変えると内周が同じ比で追従する（＝自動整合）
     comp.set_refs({"mouthpiece": {"params": {**m, "body_dia": m["body_dia"] + 2.0}}})
     assert lp.inner_radius(comp.ref_params(), p) == pytest.approx(
-        lp.inner_radius(m, p) + 1.0, abs=0.02)
+        lp.inner_radius(m, p) + ratio * 1.0, abs=0.02)
     comp.set_refs({"mouthpiece": {"params": m}})   # 後続テストのため戻す
 
 
@@ -636,14 +683,82 @@ def test_ligature_tab_matches_plate(alto_ligature):
 
     try:
         assert fit(m)["status"] == "ok"
-        # ボディ径を絞ると棚が狭くなりリードが入らない → 黙って切り詰めず警告する
-        narrow = {**m, "body_dia": 20.0}
+        # ボディ径を外形径 < リード幅まで絞るとタブが張り出しきれずリードが入らない
+        # → 黙って切り詰めず警告する。タブは円の外へ出られるので、しきい値は
+        # 「テーブル面の弦」ではなく**外形径そのもの**（アルトのリード 13.4mm に対し
+        # 座の外形は 0.974·body_dia なので body_dia < 14.2mm で入らなくなる）。
+        narrow = {**m, "body_dia": 13.0}
         assert lp.flat_half_width(narrow, p, rt) \
             < lp.requested_tab_half_width(narrow, p)
         card = fit(narrow)
         assert card["status"] == "warn" and "収納幅" in card["advice"]
     finally:
         comp.set_refs({"mouthpiece": {"params": m}})
+
+
+def test_ligature_sections_never_self_intersect():
+    """帯の断面がどのパラメータ組合せでも自己交差しないこと。
+
+    タブがテーブル面の弦より広いとき、以前は幅を切り詰めて回避していた（そのせいで
+    実物どおり「リード幅＝弦幅」のテンプレートが必ず警告になっていた）。いまはタブを
+    円の外へ張り出させるので、**順序を間違えると多角形が自分と交差してロフトが破綻する**。
+    切り詰めをやめた根拠がこの不変条件なので、ここで固定する。棚が出る側
+    （タブ<弦）と出ない側の両方を踏む組合せになっている。
+    """
+    import itertools
+
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+
+    def crosses(a, b, c, d):
+        def cr(o, p, q):
+            return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+        d1, d2, d3, d4 = cr(c, d, a), cr(c, d, b), cr(a, b, c), cr(a, b, d)
+        return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+    def self_intersection(pts):
+        n = len(pts)
+        for i in range(n):
+            for j in range(i + 2, n):
+                if i == 0 and j == n - 1:
+                    continue
+                if crosses(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]):
+                    return i, j
+        return None
+
+    def signed_area(pts):
+        n = len(pts)
+        return 0.5 * sum(pts[i][0] * pts[(i + 1) % n][1]
+                         - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
+
+    reg = get_registry().get("saxophone")
+    shelf_cases = 0
+    for tid in SIZES:
+        lig = reg.make_component("ligature", tid)
+        m0 = _template_params("mouthpiece", tid)
+        specs = {s.key: s for s in lig.param_specs()}
+        base = dict(ParamSet(lig.param_specs(), lig.template["ligature"]).values)
+        rt0 = float(lig.template["reed"]["heel_thickness"])
+        for bd, cl, rc, rt in itertools.product(
+                (m0["body_dia"] * 0.6, m0["body_dia"], m0["body_dia"] * 1.4),
+                (specs["clearance"].min, specs["clearance"].max),
+                (specs["reed_clearance"].min, specs["reed_clearance"].max),
+                (rt0 * 0.6, rt0, rt0 * 1.5)):
+            m = dict(m0, body_dia=bd)
+            p = dict(base, clearance=cl, reed_clearance=rc)
+            z0, z1 = lp.seat_range(m, p)
+            zm = (z0 + z1) / 2.0
+            r_in = profiles.outer_radius(m, zm) + cl
+            if lp.requested_tab_half_width(m, p) < lp._shelf_half_width(
+                    r_in, profiles.table_plane_y(m, zm)):
+                shelf_cases += 1
+            for sections in (lp.inner_sections(m, p, rt),
+                             lp.outer_sections(m, p, rt)):
+                for s in sections:
+                    hit = self_intersection(s["pts"])
+                    assert hit is None, (tid, bd, cl, rt, hit)
+                    assert signed_area(s["pts"]) > 0, (tid, bd, cl, rt)  # 反時計回り
+    assert shelf_cases > 0, "棚が出る側（タブ<弦）を1つも踏んでいない"
 
 
 def test_ligature_screw_length_is_stock(alto_ligature):
@@ -1156,8 +1271,14 @@ def test_impedance_param_sensitivity(alto):
     # 単一ピークで見ない: 周波数グリッドが約2.4Hz刻みなので、実際の移動量が
     # グリッド境界のどちら側に落ちるかで 2.5Hz と 4.9Hz を行き来する。
     # 上位共鳴の総移動量で見れば量子化に左右されない。
+    #
+    # しきい値 3.0Hz は**実測形状で実際に出る量**（4.9Hz）から取っている。以前の
+    # 12.0Hz は旧形状の値で、当時はボア長がアルトで 26mm しかなく、チェンバー〜
+    # スロートの区間が 3 倍長かった。実測の WindyCity はボアが全長の半分以上を
+    # 占めるので、スロートは短い局所的な絞りにしかならない。合格させに行くのではなく
+    # 「ノブが死んでいない」ことだけを見る。
     shift = sum(abs(narrow[i]["freq"] - base[i]["freq"]) for i in range(3, 8))
-    assert shift > 12.0, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
+    assert shift > 3.0, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
     assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 
@@ -1313,8 +1434,13 @@ def test_reference_endpoint(tmp_path):
     assert r.status_code == 200
     assert r.json()["reference"]["source"] == str(src)
     after = lp.inner_radius(STATE.component.ref_params(), p)
-    base_dia = _template_params("mouthpiece", "alto")["body_dia"]
-    assert after == pytest.approx(before + (30.0 - base_dia) / 2.0, abs=0.02)
+    base_m = _template_params("mouthpiece", "alto")
+    base_dia = base_m["body_dia"]
+    # 座は最大径の位置ではないので、内周は `body_dia` の差そのものではなく
+    # **座での外形比**（0.974）を掛けた分だけ動く。伝播したことの検証が目的。
+    s0, s1 = profiles.ligature_seat_range(base_m)
+    ratio = profiles.outer_radius(base_m, (s0 + s1) / 2.0) / (base_dia / 2.0)
+    assert after == pytest.approx(before + ratio * (30.0 - base_dia) / 2.0, abs=0.02)
 
     # 既定へ戻す
     assert c.post("/api/project/reference",

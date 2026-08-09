@@ -18,6 +18,16 @@ from __future__ import annotations
 from . import profiles
 
 
+#: 「リード踵がリガチャー座の後端に届いているか」の許容差 [mm]。
+#: 実測のテナーは座の後端 79.0mm に対し規格リード 78.0mm で、**1.0mm 後ろに出る**のが
+#: 正しい姿（座はバンド幅より広いので締まる）。ここが 2 箇所に別々の数字で書いてあり、
+#: リード側だけ 1.0mm だったため、テナー既定が **0.02mm 差**で警告を出していた。
+#: 判定するのは同じ幾何なので、しきい値も 1 箇所から配る。
+SEAT_REACH_TOL = 1.5
+#: 同上、「軽微」までの許容差 [mm]。
+SEAT_REACH_TOL_MINOR = 4.0
+
+
 def _verdict(delta: float, tol_ok: float, tol_minor: float) -> str:
     a = abs(delta)
     if a <= tol_ok:
@@ -61,7 +71,8 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
              size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8),
         _row("リガチャー座の後端 / 規格リード全長",
              profiles.ligature_seat_range(p)[1],
-             size_info["reed_std_length_mm"], "mm", 1.5, 4.0),
+             size_info["reed_std_length_mm"], "mm",
+             SEAT_REACH_TOL, SEAT_REACH_TOL_MINOR),
     ):
         rows.append(r)
         verdicts.append(v)
