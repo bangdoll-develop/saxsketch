@@ -1031,17 +1031,12 @@ def baffle_roof_y(p: dict, z: float) -> float:
     return cavity_roof_y(p, z)
 
 
-def baffle_sensitivity(p: dict, z: float) -> float:
-    """`baffle_height` を 1mm 上げたとき天井が z で下がる量 [mm/mm]。
-
-    天井は `y0(σ) + (bore_r − y0)·v(σ)` で、`baffle_height` は y0 のうち
-    バッフル基準の分だけを 1:1 で下げるので、感度は `w(σ)·(1 − v(σ))`。
-    逆算（`measure.py`）が実測の天井高さから `baffle_height` を戻すのに使う。
-    ティップ側（w→0、レール基準）とボア側（v→1）はどちらも 0 に落ちる＝そこでは測れない。
-    """
-    sig = _cav_sigma(p, z)
-    w = _smoothstep(sig / _TIP_ROOF_SPAN)
-    return w * (1.0 - _baffle_progress(p, sig))
+# `baffle_sensitivity()` はここにあったが削除した。`w(σ)·(1−v(σ))` という手書きの
+# 重みで「`baffle_height` を 1mm 上げたとき天井が下がる量」を表すつもりだったが、
+# 既定形状では 1.0 を返す一方で**真の割線は 1.33**（ティップ側の soft-min と、天井が
+# 床に届いてからの頭打ちで非線形になる）。これを割り算に使っていた逆算は 1.2mm の
+# 変化に対して 0.4mm ずれていた。いまは `measure._baffle_from_ceiling` が
+# `cavity_roof_y` そのものを二分法で逆に解くので、重み関数は要らない。
 
 
 def cavity_half_width(p: dict, z: float) -> float:
@@ -1288,11 +1283,11 @@ def throat_radius(p: dict) -> float:
     return bore_radius(p) * math.sqrt(p["throat_ratio"] * math.pi / (4.0 * k))
 
 
-def throat_ratio_from_radius(p: dict, r_t: float) -> float:
-    """実測したスロート等価半径から `throat_ratio` を逆算（`throat_radius` の逆関数）。"""
-    k = _superellipse_shape_factor(_throat_n(p))
-    rb = bore_radius(p)
-    return (r_t / rb) ** 2 * 4.0 * k / math.pi if rb > 0 else 1.0
+# `throat_ratio_from_radius` / `chamber_ratio_from_width` はここにあったが削除した。
+# 断面積比の逆算をスーパー楕円の閉じた式で持つと、実測から起こした断面（`_CAVITY_W`
+# と `_section_exponents` の族）とは別物を仮定することになり、**未編集のメッシュでも
+# 比 0.90〜0.94 と出ていた**。逆算は `measure._ratio_from_half_width` が
+# `cavity_stations` そのものを二分探索する形に一本化してある。
 
 
 def chamber_size(p: dict) -> tuple[float, float]:
@@ -1318,26 +1313,28 @@ _CHAMBER_W = 1.02
 _CHAMBER_H = 0.98
 
 
-def chamber_saturated(p: dict) -> bool:
-    """チェンバーが肉厚制限で頭打ちになっているか。"""
-    step = 1.05
-    now = _chamber_areas(p)
-    more = _chamber_areas(dict(p, chamber_ratio=p.get("chamber_ratio", 1.0) * step))
-    return all(b - a < 1e-6 for a, b in zip(now, more))
+def chamber_headroom_cc(p: dict, ratio_max: float) -> float:
+    """`chamber_ratio` を上限まで上げたときに**まだ増やせる実効容積** [cc]。
+
+    ここにあった `chamber_saturated()` は「チェンバー断面が**全部**外殻に当たって
+    いるか」を見ていたが、実測から起こした形状では窓寄りの断面が先に当たることが無く、
+    **スライダの可動域全域（比 3.0 × 最小肉厚 4.0）で永久に False** だった。
+    それを根拠にしていた「頭打ち」助言は到達不能コードになっていた。
+
+    一方で**ユーザーが困る事実の方は実在する**: テナーは比を上限 3.0 まで上げても
+    実効容積が +0.86cc しか増えず、欠損円錐の目標 18.02cc に届かない。判定すべきは
+    「断面が外殻に接しているか」という幾何ではなく「**上限まで上げて目標に届くか**」
+    という到達可能量。助言の側がその数字を持てるよう、真偽値ではなく cc を返す。
+    """
+    now = cavity_volume_cc(p)["effective_cc"]
+    top = cavity_volume_cc(dict(p, chamber_ratio=ratio_max))["effective_cc"]
+    return max(top - now, 0.0)
 
 
-def _chamber_areas(p: dict) -> list[float]:
-    return [section_area(s)
-            for s in stations_by_role(cavity_stations(p), "chamber")]
-
-
-def chamber_ratio_from_width(p: dict, w_meas: float, r_t_meas: float) -> float:
-    """実測したチェンバー幅とスロート半径から `chamber_ratio` を逆算。"""
-    h_meas = w_meas * _CHAMBER_H / _CHAMBER_W
-    a_ch = section_area({"yc": 0.0, "h": h_meas, "w": w_meas, "n": _chamber_n(p),
-                         "shape": p.get("chamber_shape", "round")})
-    a_th = superellipse_area(2.0 * r_t_meas, 2.0 * r_t_meas, _throat_n(p))
-    return a_ch / a_th if a_th > 0 else 1.0
+def chamber_clamped_at(p: dict, z: float) -> bool:
+    """その z の断面幅が外殻で頭打ちになっているか（逆算可否の判定に使う）。"""
+    s = min(cavity_stations(p), key=lambda q: abs(q["z"] - z))
+    return s["w"] >= 2.0 * shell_limit(p, s["z"])["half_width"] - 1e-6
 
 
 #: 断面をサンプルする z の刻み [mm]。ルールドロフトの弦誤差は κ·dz²/8 で、
@@ -1474,13 +1471,20 @@ def _ratio_scale(p: dict, z: float) -> float:
     比 1.0 では実測どおり「単調にボアへ開く」形（実物にはチェンバーの膨らみも
     スロートの狭窄も無い）。比を上げるとその区間だけ相似に太る。ボア端では
     必ず 1.0 に戻る（ボア径はボア径のまま）。
+
+    スロートの重み `w_th` は**窓の終端から**立ち上げる。以前は窓終端とスロートの
+    中点から立ち上げていて、効く区間がアルトで 4.6mm しかなかった（実測形状は
+    ボアが全長の半分以上を占めるので、チェンバー〜スロートの区間自体が短い）。
+    「スロートを 0.7 に絞る」で上位共鳴が 2.5Hz しか動かず、設計ノブとして死んでいた。
+    窓終端まで広げると 7.4mm・4.9Hz になる。**比 1.0 では `√1.0−1 = 0` なので
+    既定形状は 1 ビットも動かない**（`verify_base` の数値が不変であることで確認）。
     """
     zb = bore_start_z(p)
     if zb <= 1e-9:
         return 1.0
     s_we = window_end_z(p) / zb
     s_th = (window_end_z(p) + _THROAT_T * (zb - window_end_z(p))) / zb
-    w_th = _pchip([(0.0, 0.0), (0.5 * (s_we + s_th), 0.0), (s_th, 1.0), (1.0, 0.0)],
+    w_th = _pchip([(0.0, 0.0), (s_we, 0.0), (s_th, 1.0), (1.0, 0.0)],
                   _cav_sigma(p, z))
     ch = math.sqrt(max(p.get("chamber_ratio", 1.0), 0.05)) - 1.0
     th = math.sqrt(max(p.get("throat_ratio", 1.0), 0.05)) - 1.0
@@ -1826,8 +1830,10 @@ def side_profile_polylines(p: dict, samples: int = 120) -> dict:
         "outer_bot": outer_bot,
         "cavity_top": cavity_top,
         "cavity_bot": cavity_bot,
-        "table_y": table_y(p),
-        "table_plane": [(0.0, table_plane_y(p, 0.0)), (heel, table_plane_y(p, heel))],
+        # テーブルは傾斜平面。スカラーの `table_y` は返さない（図で水平線を引くと
+        # 実物と 4.18° 違う嘘の断面になる）。カットが胴から外れる z まで引く。
+        "table_plane": [(0.0, table_plane_y(p, 0.0)),
+                        (table_cut_end_z(p), table_plane_y(p, table_cut_end_z(p)))],
         "bore_start": bore_start_z(p),
     }
 
@@ -2022,7 +2028,7 @@ _PARAM_ONLY = (
     "baffle_plateau", "baffle_plateau_end_z", "baffle_step_end_z",
     "baffle_flat_end_z", "tip_roof_y", "baffle_plateau_y",
     "_throat_n", "_chamber_n", "throat_radius", "chamber_size",
-    "chamber_saturated", "_section_breaks",
+    "_section_breaks",
 )
 
 #: `(p, z)` で決まるもの。同じ z を複数の呼び出し元が引き直すので効く

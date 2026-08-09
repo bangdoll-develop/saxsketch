@@ -233,6 +233,33 @@ def _cents(f: float, f_ref: float) -> float:
     return 1200.0 * math.log2(f / f_ref)
 
 
+def _interp_peak(freqs: np.ndarray, y_db: np.ndarray, i: int) -> float:
+    """ピーク位置を格子の間へ補間する（log-f 上の 3 点パラボラ）。
+
+    格子点をそのまま読むと、共鳴周波数の分解能が ΔF/f で決まってしまう。
+    `impedance()` の対数格子（比が一定）なら log-f 上で等間隔なので、
+    そこで放物線を当てて頂点を取る。
+
+    以前は線形格子 `linspace(50, 2000, 800)` を格子点のまま読んでいて、
+    低音の 1 目盛りが soprano 20.9 / alto 30.9 / tenor **41.2 セント**あった。
+    「±20 セント以内」の判定が 1 目盛りより細かく、格子がたまたま乗ったときしか
+    通らない状態だった。線形格子のままで補間だけ足しても直らない（格子幅が
+    ピーク幅 ≒ 2.5Hz と同程度で、放物線近似の前提が崩れる）ので、
+    対数格子と対で使う。
+    """
+    if i <= 0 or i >= len(freqs) - 1:
+        return float(freqs[i])
+    den = y_db[i - 1] - 2.0 * y_db[i] + y_db[i + 1]
+    if den == 0:
+        return float(freqs[i])
+    delta = 0.5 * (y_db[i - 1] - y_db[i + 1]) / den
+    if not (-1.0 < delta < 1.0):  # 放物線が外れた（肩が単調など）
+        return float(freqs[i])
+    lg = math.log(float(freqs[i]))
+    step = math.log(float(freqs[i + 1])) - lg
+    return math.exp(lg + delta * step)
+
+
 def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> dict:
     mag = np.abs(z)
     mag_db = 20.0 * np.log10(mag / np.max(mag) + 1e-12)
@@ -251,9 +278,11 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
     f_target = float(size_info["low_note_sounding_hz"])
     peaks = []
     for i in list(idx)[:MAX_PEAKS]:
-        fp = float(freqs[i])
+        # 0.1Hz へ丸めない。テナーの第1共鳴 102Hz では 0.1Hz = 1.7 セントあり、
+        # 補間で稼いだ分解能を丸めで捨てることになる。表示は _hz_to_note が行う。
+        fp = _interp_peak(freqs, mag_db, int(i))
         peaks.append({
-            "freq": round(fp, 1),
+            "freq": round(fp, 3),
             "note": _hz_to_note(fp),
             "cents_vs_target": round(_cents(fp, f_target), 1),
         })
@@ -300,8 +329,14 @@ def _openwind_impedance(geometry, freqs, size_info):  # pragma: no cover - 環�
 
 def impedance(params: dict, size_info: dict,
               fmin: float = 50.0, fmax: float = 2000.0, n: int = 800) -> dict:
-    """入力インピーダンス Z(f) とピーク解析を返す。"""
-    freqs = np.linspace(fmin, fmax, n)
+    """入力インピーダンス Z(f) とピーク解析を返す。
+
+    格子は**対数等間隔**。線形等間隔だと 1 目盛りの音程幅が ΔF/f で効き、
+    50–2000Hz を 800 点で張ると低音側が 41 セント刻み・高音側が 4 セント刻みという
+    2 桁の偏りが出る。対数なら全域 7.99 セント/格子で揃い、点数が同じなので
+    計算時間も変わらない。`_interp_peak` の放物線補間もここが等間隔である前提。
+    """
+    freqs = np.geomspace(fmin, fmax, n)
     geometry = build_resonator(params, size_info)
     if HAS_OPENWIND:
         try:  # pragma: no cover

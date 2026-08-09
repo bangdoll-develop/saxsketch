@@ -36,6 +36,15 @@ from saxsketch.analysis import align, meshdiff  # noqa: E402
 SRC_DEFAULT = "/mnt/c/Users/<user>/Downloads/WindyCity-Tenor-72-100-LS.3mf"
 OUT_DEFAULT = _HERE / "reference_aligned.stl"
 
+#: 表面サンプリングの固定シード。
+#:
+#: `table_plane` などのランドマークは面積重み付きのランダムサンプルから求めるので、
+#: シードを渡さないと実行ごとに値が揺れる。これを使う `verify_base.py` のレポートは
+#: **形状を一切変えずに 2 回走らせるだけで 40 行以上の差分**を出していて、
+#: 「本当に形が変わったのか」がレビューで判別できなかった。揺れ幅は判定しきい値より
+#: 十分小さい（テーブル傾斜で 0.003° / tol 0.10）ので、固定しても合否は変わらない。
+SAMPLE_SEED = 20260809
+
 
 def _first_hits(mesh, origins, dirs):
     o = np.asarray(origins, float)
@@ -51,7 +60,7 @@ def _first_hits(mesh, origins, dirs):
 
 def _shank_to_positive_z(mesh, report):
     """太い端（シャンク）を +Z 側へ。端面近傍の半径で判定する。"""
-    pts, _ = trimesh.sample.sample_surface(mesh, 60_000)
+    pts, _ = trimesh.sample.sample_surface(mesh, 60_000, seed=SAMPLE_SEED)
     pts = np.asarray(pts)
     zmin, zmax = float(pts[:, 2].min()), float(pts[:, 2].max())
 
@@ -118,7 +127,7 @@ def _align_bore_axis(mesh, report, iters=14):
 
 def _solve_roll(mesh, report):
     """テーブル側（ウィンドウの開く側）を −Y へ回す。"""
-    pts, _ = trimesh.sample.sample_surface(mesh, 120_000)
+    pts, _ = trimesh.sample.sample_surface(mesh, 120_000, seed=SAMPLE_SEED)
     pts = np.asarray(pts)
     zmax = float(pts[:, 2].max())
     tip = pts[pts[:, 2] < 2.0]
@@ -156,7 +165,7 @@ def table_plane(mesh, z_lo=15.0, z_hi_ratio=0.72):
     リード側の下向き平坦点の下側包絡を直線フィットする。0.72L 以降はシャンクの
     丸い底がテーブル平面より上に入り込むので除く。
     """
-    pts, fidx = trimesh.sample.sample_surface(mesh, 300_000)
+    pts, fidx = trimesh.sample.sample_surface(mesh, 300_000, seed=SAMPLE_SEED)
     pts = np.asarray(pts)
     nrm = mesh.face_normals[np.asarray(fidx)]
     L = float(pts[:, 2].max())

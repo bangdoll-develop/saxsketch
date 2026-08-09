@@ -269,8 +269,12 @@ class MouthpieceComponent(Component):
         # `sensitivity` は各 ParamSpec を摂動した `{**params, k: v}` で回すが、
         # そちらは別 dict なので上のスコープのキャッシュには当たらない（当たったら
         # 摂動が効かず壊れる）。スコープが効くのは tier1/tier2 と本体側だけ。
-        tier1 = ac_volume.tier1_report(profiles.cavity_volume_cc(params), self.size_info,
-                                       saturated=profiles.chamber_saturated(params))
+        # 「容積を増やせ」という助言を出す前に、スライダ上限まで上げて本当に届くのかを
+        # 数えておく。上限は ParamSpec が唯一の出所（profiles は spec を知らない）。
+        cr_max = next(s.max for s in self.param_specs() if s.key == "chamber_ratio")
+        tier1 = ac_volume.tier1_report(
+            profiles.cavity_volume_cc(params), self.size_info,
+            headroom_cc=profiles.chamber_headroom_cc(params, cr_max))
         tier2 = ac_brightness.tone_metrics(params)
         sens = ac_brightness.sensitivity(params, self.param_specs())
         harm = ac_harmonics.harmonic_series(tier2)
@@ -467,19 +471,22 @@ class MouthpieceComponent(Component):
 
     def _section_svg(self, params: dict) -> str:
         """側面断面図（外形・内部空洞・テーブル面）。"""
+        import math
+
         from saxsketch.export.svg import polyline_svg
         pr = profiles.side_profile_polylines(params)
-        ty = pr["table_y"]
-        zs = [z for z, _ in pr["outer_top"]]
+        deg = math.degrees(profiles.table_angle(params))
+        # テーブルは傾斜平面。以前はここだけ水平の破線を引いていて、仕様書の断面図が
+        # 唯一 4.18° を無視した図になっていた。
         return polyline_svg([
             {"pts": pr["outer_top"], "stroke": "#222", "width": 1.5},
             {"pts": pr["outer_bot"], "stroke": "#222", "width": 1.5},
             {"pts": pr["cavity_top"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["cavity_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
-            {"pts": [(min(zs), ty), (profiles.table_cut_end_z(params), ty)],
-             "stroke": "#cc3300",
+            {"pts": pr["table_plane"], "stroke": "#cc3300",
              "width": 0.8, "dash": "2 2"},
-        ], "側面断面図（実線=外形 / 青破線=内部空洞 / 赤破線=テーブル面） 単位:mm")
+        ], f"側面断面図（実線=外形 / 青破線=内部空洞 / "
+           f"赤破線=テーブル平面 傾斜{deg:.2f}°） 単位:mm")
 
     def spec_extras(self, params: dict) -> dict:
         p = params

@@ -1,6 +1,6 @@
 """リガチャーの断面プロファイル（純数学・OCCT非依存）。
 
-マウスピース外形（`profiles.outer_radius` / `profiles.table_y` /
+マウスピース外形（`profiles.outer_radius` / `profiles.table_plane_y` /
 `profiles.ligature_seat_range`）を**そのまま参照**して内周を生成する。これが
 「マウスピース外形との自動整合」の実体で、参照マウスピースのボディ径を変えれば
 リガチャー内周が追従する。
@@ -11,9 +11,19 @@
 断面の形:
   上側（ビーク側）はマウスピース外形の円弧。テーブル面の高さから下は、
   **リードを収めるタブ**（幅=リード幅、深さ=リード厚）が円の外へ張り出す。
-  アルト標準ではテーブル面 y=-11.0 に対し外形半径が 13.75mm なので、厚さ 2.8mm の
-  リードの裏面（y=-13.8）は円の下端より外に出る。円を切り落とす D 形にすると
+  アルト標準ではテーブル面 y=-11.8 に対し外形半径が 13.8mm なので、厚さ 2.8mm の
+  リードの裏面（y=-14.6）は円の下端より外に出る。円を切り落とす D 形にすると
   リードが入らない。締め代のスリットとネジ座はビーク側（+Y）に置く。
+
+**タブは弦幅で切り詰めない。** 実物ではリード幅＝テーブルの弦幅（テナー実測で
+7.328 / 7.400mm ＝ 比 0.99）なので、「タブをテーブル面の弦に収める」規則にすると
+3サイズとも必ず 0.02mm 足りずに「リードが入りません」を出す。タブは箱として
+**円の外へ張り出してよい**（側面が円と交わる y でそのまま円弧へ繋げば自己交差しない）。
+唯一の上限は外形半径そのもの。
+
+**テーブルはボア軸に対し 4.18° 傾いている**（`profiles.table_plane_y`）。帯幅
+18mm では前後で 1.3mm 落ちるので、断面ごとにその z のテーブル平面を引く。
+単一の `table_y` を全長に使うと、後端でリードの裏面がタブの底を突き抜ける。
 
 逆締め（ネジがリード側にくる方式）は、スリットがリード接触面を横切るため
 圧力プレートで橋渡しする別機構になる。Phase 3 では扱わない。
@@ -36,9 +46,13 @@ def seat_range(ref_p: dict, lig_p: dict) -> tuple[float, float]:
     return z0, z1
 
 
-def reed_face_y(ref_p: dict, lig_p: dict, reed_thickness: float) -> float:
-    """リードを挟む面の Y 座標（テーブル面からリード厚 + 逃げだけ離れた位置）。"""
-    return profiles.table_y(ref_p) - reed_thickness - lig_p["reed_clearance"]
+def reed_face_y(ref_p: dict, lig_p: dict, reed_thickness: float, z: float) -> float:
+    """z でリードを挟む面の Y 座標（テーブル平面からリード厚 + 逃げだけ離れた位置）。
+
+    テーブルが傾いている以上この面も傾く。呼び出し側は必ず z を渡すこと。
+    """
+    return (profiles.table_plane_y(ref_p, z)
+            - reed_thickness - lig_p["reed_clearance"])
 
 
 def _shelf_y(radius: float, table_y: float) -> float:
@@ -47,35 +61,53 @@ def _shelf_y(radius: float, table_y: float) -> float:
 
 
 def _shelf_half_width(radius: float, table_y: float) -> float:
-    """棚の半幅（円と y=棚 の交点の x）。タブ幅の上限を決める。"""
+    """テーブル面での弦の半幅（円と y=テーブル の交点の x）。"""
     yt = _shelf_y(radius, table_y)
     return math.sqrt(max(radius * radius - yt * yt, 0.0))
 
 
-def _clamp_tab_hw(radius: float, table_y: float, tab_hw: float) -> float:
-    """要求タブ半幅を棚に収まる範囲へ制限する。断面生成と適合判定の唯一の出所。"""
-    return min(tab_hw, _shelf_half_width(radius, table_y) - 0.2)
+#: タブ側面と外形の間に残す肉 [mm]。タブ半幅の唯一の上限。
+_TAB_EDGE_MARGIN = 0.2
+
+
+def _clamp_tab_hw(radius: float, tab_hw: float) -> float:
+    """要求タブ半幅を**外形半径**に収まる範囲へ制限する。
+
+    以前はテーブル面の弦半幅で切り詰めていたが、タブは円の外へ張り出す箱なので
+    弦は上限ではない（上限は外形半径そのもの）。断面生成と適合判定の唯一の出所。
+    """
+    return min(tab_hw, radius - _TAB_EDGE_MARGIN)
 
 
 def _wrap_section(radius: float, table_y: float, tab_hw: float, tab_bottom: float,
                   samples: int = 72) -> list[tuple[float, float]]:
-    """円弧（テーブル面より上）＋リードのタブ（下）の断面。反時計回り。
+    """円弧（上側）＋リードのタブ（下側）の断面。反時計回り。
 
     順序を誤ると自己交差してロフトが破綻するため、向きを固定する:
-    タブ底辺を +x 方向 → 右の立ち上がり → テーブル面の棚 → 上側の円弧 →
-    左の棚と立ち下がり。
+    タブ底辺を +x 方向 → 右の立ち上がり → （棚）→ 上側の円弧 → 左の（棚と）立ち下がり。
+
+    タブがテーブル面の弦より狭ければ棚（テーブル面の水平部）が出る。広ければ棚は
+    無く、タブ側面 `x = ±hw` が円と交わる `y = -√(r²-hw²)`（テーブル面より上）で
+    そのまま円弧へ繋ぐ。どちらも同じ式で書ける。
     """
     yt = _shelf_y(radius, table_y)
     x_c = _shelf_half_width(radius, table_y)
-    hw = _clamp_tab_hw(radius, table_y, tab_hw)
-    pts = [(-hw, tab_bottom), (hw, tab_bottom), (hw, yt), (x_c, yt)]
-    th0 = math.atan2(yt, x_c)           # 負の角度
-    span = math.pi - 2.0 * th0          # 上側を回って (-x_c, yt) まで
+    hw = _clamp_tab_hw(radius, tab_hw)
+    x_a = max(hw, x_c)                          # 円弧の開始 x
+    y_a = -math.sqrt(max(radius * radius - x_a * x_a, 0.0))   # その x で円に乗る y
+    shelf = x_a > hw + 1e-9                     # 棚が出るのはタブが弦より狭いときだけ
+    pts = [(-hw, tab_bottom), (hw, tab_bottom), (hw, y_a)]
+    if shelf:
+        pts.append((x_a, y_a))
+    th0 = math.atan2(y_a, x_a)          # 負の角度
+    span = math.pi - 2.0 * th0          # 上側を回って (-x_a, y_a) まで
     n = max(samples - 6, 12)
     for i in range(1, n):
         th = th0 + span * i / n
         pts.append((radius * math.cos(th), radius * math.sin(th)))
-    pts += [(-x_c, yt), (-hw, yt)]
+    if shelf:
+        pts.append((-x_a, y_a))
+    pts.append((-hw, y_a))
     return pts
 
 
@@ -83,17 +115,18 @@ def _sections(ref_p: dict, lig_p: dict, reed_thickness: float,
               offset: float) -> list[dict]:
     """内周（offset=clearance）／外周（offset=clearance+band_thickness）の断面列。
 
-    テーブル面の基準はマウスピース モデルの `table_y`。モデルではシャンク側で
-    テーブルがランプで消えるが、リードとリガチャーはテーブル平面そのものを
-    基準にするため、帯の全長で同じ高さを使う（＝角柱状で堅牢）。
+    テーブル面の基準はマウスピース モデルの `table_plane_y(z)`。**断面ごとに引く**。
+    傾斜 4.18° は帯幅 18mm で 1.3mm 落ちるので、1点で代表するとリードの裏面が
+    後端でタブの底を突き抜ける。3断面のルールドロフトなので、傾いた平面は
+    そのまま平面として出る（近似誤差なし）。
     """
     z0, z1 = seat_range(ref_p, lig_p)
-    yt = profiles.table_y(ref_p)
     tab_hw = ref_p["reed_width"] / 2.0 + offset
-    tab_bottom = reed_face_y(ref_p, lig_p, reed_thickness) - offset
     return [{"z": z,
-             "pts": _wrap_section(profiles.outer_radius(ref_p, z) + offset,
-                                  yt, tab_hw, tab_bottom)}
+             "pts": _wrap_section(
+                 profiles.outer_radius(ref_p, z) + offset,
+                 profiles.table_plane_y(ref_p, z), tab_hw,
+                 reed_face_y(ref_p, lig_p, reed_thickness, z) - offset)}
             for z in (z0, (z0 + z1) / 2.0, z1)]
 
 
@@ -120,13 +153,12 @@ def requested_tab_half_width(ref_p: dict, lig_p: dict) -> float:
 def flat_half_width(ref_p: dict, lig_p: dict, reed_thickness: float) -> float:
     """リード接触面（タブ底面）の**実際の**半幅。圧力プレートの寸法根拠。
 
-    棚に収まらない要求幅は断面生成側で切り詰められる。ここで同じクランプを
+    外形半径に収まらない要求幅は断面生成側で切り詰められる。ここで同じクランプを
     通しておかないと、プレートがタブの外に置かれて側壁を突き抜ける。
     """
     z0, z1 = seat_range(ref_p, lig_p)
     radius = profiles.outer_radius(ref_p, (z0 + z1) / 2.0) + lig_p["clearance"]
-    return _clamp_tab_hw(radius, profiles.table_y(ref_p),
-                         requested_tab_half_width(ref_p, lig_p))
+    return _clamp_tab_hw(radius, requested_tab_half_width(ref_p, lig_p))
 
 
 # ---------------------------------------------------------------- ネジ・スリット
@@ -224,12 +256,18 @@ def param_regions(ref_p: dict, lig_p: dict) -> dict:
 
 
 def section_polylines(ref_p: dict, lig_p: dict, reed_thickness: float) -> dict:
-    """帯断面図（SVG描画用、単位mm）。軸方向ではなく XY 断面を描く。"""
+    """帯断面図（SVG描画用、単位mm）。軸方向ではなく XY 断面を描く。
+
+    帯の**中央**の断面を描く。テーブルが傾いているので前後端では図の高さが変わる
+    （中央を代表に採るのは、帯の内周径・ネジ座もそこを基準にしているのと同じ理由）。
+    """
+    z0, z1 = seat_range(ref_p, lig_p)
+    zm = (z0 + z1) / 2.0
     inner = inner_sections(ref_p, lig_p, reed_thickness)[1]["pts"]
     outer = outer_sections(ref_p, lig_p, reed_thickness)[1]["pts"]
     return {
         "inner": inner + [inner[0]],
         "outer": outer + [outer[0]],
-        "reed_face_y": reed_face_y(ref_p, lig_p, reed_thickness),
-        "table_y": profiles.table_y(ref_p),
+        "reed_face_y": reed_face_y(ref_p, lig_p, reed_thickness, zm),
+        "table_y": profiles.table_plane_y(ref_p, zm),
     }

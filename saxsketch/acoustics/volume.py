@@ -51,11 +51,17 @@ def missing_cone(size_info: dict) -> dict:
     }
 
 
-def tier1_report(cavity_vol: dict, size_info: dict, saturated: bool = False) -> dict:
+def tier1_report(cavity_vol: dict, size_info: dict,
+                 headroom_cc: float | None = None) -> dict:
     """cavity_vol: {"total_cc": float, "effective_cc": float}
 
-    saturated: チェンバーが肉厚制限で頭打ちなら True。届かない理由を助言に出すために使う。
-    容積を増やす助言を出しておいて実はスライダが効かない、という状態を避ける。
+    headroom_cc: `chamber_ratio` をスライダ上限まで上げたときに**まだ増やせる**実効
+    容積 [cc]（`profiles.chamber_headroom_cc`）。容積を増やす助言を出しておいて、実は
+    上限まで上げても届かない、という状態を避けるために使う。None なら助言しない。
+
+    以前はここに真偽値 `saturated`（＝チェンバー断面が全部外殻に接している）を
+    渡していたが、実測から起こした形状ではそれが永久に False で、分岐ごと到達不能
+    だった。判定すべきは幾何の接触ではなく「上限まで上げて目標に届くか」。
     """
     cone = missing_cone(size_info)
     target = cone["cc"]
@@ -69,9 +75,11 @@ def tier1_report(cavity_vol: dict, size_info: dict, saturated: bool = False) -> 
         status = "sharp"
         advice = (f"実効容積が欠損円錐より約{-ratio * 100:.0f}%小さく高め傾向。"
                   f"コークを浅め（抜き気味）にするか、スロート断面積比/ウィンドウ長の拡大を検討。")
-        if saturated:
-            advice += ("なおチェンバーは既に肉厚制限で頭打ちで、断面積比を上げても形は変わらない。"
-                       "これ以上増やすにはボディ径を上げるか最小肉厚を下げる必要がある。")
+        if headroom_cc is not None and effective + headroom_cc < target:
+            advice += (f"ただしチェンバー断面積比を上限まで上げても増えるのは "
+                       f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
+                       f"目標 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の肉厚で、"
+                       f"これ以上増やすにはボディ径を上げるか最小肉厚を下げる必要がある。")
     else:
         status = "flat"
         advice = (f"実効容積が欠損円錐より約{ratio * 100:.0f}%大きく低め傾向。"
