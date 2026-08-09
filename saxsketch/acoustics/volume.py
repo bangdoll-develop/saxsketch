@@ -1,20 +1,32 @@
-"""Tier1: 内容積 vs 欠損円錐（missing cone）による音程チェック。
+"""Tier1: 欠損円錐（missing cone）の導出と、第1共鳴による音程チェック。
 
 サクソフォンは円錐管の頂点側が切り落とされており、マウスピース内容積が
-その「欠損円錐」の体積を代替する（Benade）。実効容積が欠損円錐より
-小さい→高め傾向、大きい→低め傾向になる。ここでは一次近似として
-容積偏差率からセント偏差を推定する（係数は経験的目安）。
+その「欠損円錐」を代替する（Benade）。`missing_cone()` はその円錐を半頂角と
+ネック小端内径から導出する。
+
+**音程の判定は容積からは作らない。** 以前はここに
+`cents = -250 × (実効容積 - 欠損円錐容積) / 欠損円錐容積` という一行の経験則を
+置いていたが、実測で外れることが確かめられた:
+
+- テナー実測形状の実効容積は欠損円錐より **+23%**（13.69cc vs 11.09cc）。この規則は
+  -81 セントと言う。同じ形状を共鳴管として解くと **+0.3 セント**（TMM）／
+  **+1.3 セント**（OpenWind）。
+- 理由は、マウスピースが**代替する欠損円錐より 161mm 短い**（実効 85.5mm vs
+  246.8mm）こと。「太い」ぶんと「短い」ぶんが相殺する。容積 1 個から音程を作る
+  規則は、この相殺を構造的に表せない。
+- 係数を引き直しても直らない。等価円錐 `x0·(V/Vc)^(1/3)` を代入する案は 1.7 倍
+  過小、集中コンプライアンス（切り詰め円錐の厳密アドミタンス）は 8 倍過小で、
+  どれも 1 個の数字からは出せなかった。
+
+いまは `openwind_bridge.first_resonance_cents()`（TMM、実測 31〜52ms）が解いた
+第1共鳴を受け取る。Tier2 との違いはエンジンだけで、モデルは同じ。
+容積の比較（`effective_cc` / `target_cc`）は**理由の説明**として残す。
 
 楽器非依存: 体積計算はコンポーネント側（profiles）が行い、結果 dict を受け取る。
 """
 from __future__ import annotations
 
 import math
-
-# 容積 10% 偏差 ≒ 25 セントの目安（低音域・一次近似）
-CENTS_PER_VOLUME_RATIO = 250.0
-# リード・唇の等価コンプライアンス分（cc換算の目安）
-REED_EQUIVALENT_CC = 1.0
 
 
 def missing_cone(size_info: dict) -> dict:
@@ -51,9 +63,14 @@ def missing_cone(size_info: dict) -> dict:
     }
 
 
-def tier1_report(cavity_vol: dict, size_info: dict,
+def tier1_report(cavity_vol: dict, size_info: dict, cents: float,
                  headroom_cc: float | None = None) -> dict:
     """cavity_vol: {"total_cc": float, "effective_cc": float}
+
+    cents: 組み立て共鳴管の第1共鳴が目標低音から外れているセント数
+    （`openwind_bridge.first_resonance_cents`）。**呼び出し側が渡す。**
+    `openwind_bridge` がこのモジュールの `missing_cone` を使っているので、
+    ここから import すると循環になる。
 
     headroom_cc: `chamber_ratio` をスライダ上限まで上げたときに**まだ増やせる**実効
     容積 [cc]（`profiles.chamber_headroom_cc`）。容積を増やす助言を出しておいて、実は
@@ -65,25 +82,32 @@ def tier1_report(cavity_vol: dict, size_info: dict,
     """
     cone = missing_cone(size_info)
     target = cone["cc"]
-    effective = cavity_vol["effective_cc"] + REED_EQUIVALENT_CC
+    effective = cavity_vol["effective_cc"]
     ratio = (effective - target) / target
-    cents = -CENTS_PER_VOLUME_RATIO * ratio  # 容積過多 → ピッチ低下
 
     if abs(cents) < 10:
         status, advice = "ok", "音程バランス良好。コーク標準位置で使用できます。"
     elif cents > 0:
         status = "sharp"
-        advice = (f"実効容積が欠損円錐より約{-ratio * 100:.0f}%小さく高め傾向。"
-                  f"コークを浅め（抜き気味）にするか、スロート断面積比/ウィンドウ長の拡大を検討。")
+        advice = ("第1共鳴が目標より高い。コークを浅め（抜き気味）にするか、"
+                  "スロート断面積比/ウィンドウ長の拡大を検討。")
         if headroom_cc is not None and effective + headroom_cc < target:
             advice += (f"ただしチェンバー断面積比を上限まで上げても増えるのは "
                        f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
-                       f"目標 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の肉厚で、"
-                       f"これ以上増やすにはボディ径を上げるか最小肉厚を下げる必要がある。")
+                       f"欠損円錐 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の"
+                       f"肉厚で、これ以上増やすにはボディ径を上げるか最小肉厚を"
+                       f"下げる必要がある。")
     else:
         status = "flat"
-        advice = (f"実効容積が欠損円錐より約{ratio * 100:.0f}%大きく低め傾向。"
-                  f"コークを深めに挿すか、スロート断面積比の縮小を検討。")
+        advice = ("第1共鳴が目標より低い。コークを深めに挿すか、"
+                  "スロート断面積比の縮小を検討。")
+
+    # 容積の比較は**判定ではなく理由**として出す。両者は一対一で動かない:
+    # マウスピースは代替する欠損円錐より短いので、容積が数十%多くても音程が
+    # 合うことがある（テナー実測形状は +23% で +0.3 セント）。
+    advice += (f"（実効容積 {effective:.2f}cc は欠損円錐 {target:.2f}cc の "
+               f"{ratio * 100:+.0f}%。マウスピースは代替する円錐より短いので、"
+               f"容積差はそのまま音程差にはならない。）")
 
     if cone["source"] == "measured":
         origin = (f"欠損円錐長は公表実測 {cone['apex_distance_mm']:.1f}mm を採用"
@@ -103,6 +127,7 @@ def tier1_report(cavity_vol: dict, size_info: dict,
         "deviation_cents": round(cents, 1),
         "status": status,
         "advice": advice,
-        "note": (origin + "ネック内径はテノン外径からの推定値なので、自分のネック小端を"
-                 "ノギスで測って置き換えるのが最も確実（±は目安）。"),
+        "note": (origin + "ネック小端内径は3サイズとも実測値（descriptor の "
+                 "neck_dimensions_source に測った個体がある）。セントは容積からの"
+                 "換算ではなく、この形状の共鳴管を伝達行列法で解いた第1共鳴。"),
     }

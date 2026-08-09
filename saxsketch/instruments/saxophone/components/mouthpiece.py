@@ -272,8 +272,12 @@ class MouthpieceComponent(Component):
         # 「容積を増やせ」という助言を出す前に、スライダ上限まで上げて本当に届くのかを
         # 数えておく。上限は ParamSpec が唯一の出所（profiles は spec を知らない）。
         cr_max = next(s.max for s in self.param_specs() if s.key == "chamber_ratio")
+        # 音程は容積からの換算ではなく、この形状の共鳴管を解いた第1共鳴。
+        # TMM 固定で 31〜52ms（`cavity_volume_cc` が既に 10.7ms 払っている）。
+        from saxsketch.acoustics import openwind_bridge as ob
         tier1 = ac_volume.tier1_report(
             profiles.cavity_volume_cc(params), self.size_info,
+            ob.first_resonance_cents(params, self.size_info),
             headroom_cc=profiles.chamber_headroom_cc(params, cr_max))
         tier2 = ac_brightness.tone_metrics(params)
         sens = ac_brightness.sensitivity(params, self.param_specs())

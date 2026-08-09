@@ -37,13 +37,21 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
             q[k] = float(xv)
         return q
 
+    target_cc = vol.missing_cone(size_info)["cc"]
+
     def objective(x):
         q = apply_x(x)
         m = br.tone_metrics(q)
         err = sum((m[k] - t) ** 2 for k, t in metric_targets.items())
         if pitch_neutral:
-            t1 = vol.tier1_report(volume_fn(q), size_info)
-            err += (t1["deviation_cents"] / 25.0) ** 2  # 25セントで指標1相当
+            # ここは**容積比**で測る。音程そのもの（第1共鳴）は伝達行列法を解くので
+            # 1 回 31〜52ms あり、Nelder-Mead が 400 回まわると 20 秒近くかかる。
+            # 最適化に要るのは向きと大小だけで、セントの絶対値ではない。
+            # 容積比 0.1（＝10%）で指標 1 相当。以前の「25セントで指標1相当」を、
+            # 同じ重みになる容積側の量へ読み替えたもの（旧係数 250 セント/比 で
+            # 25 セント = 比 0.1）。
+            ratio = (volume_fn(q)["effective_cc"] - target_cc) / target_cc
+            err += (ratio / 0.1) ** 2
         # 現在値からの逸脱ペナルティ（最小変更で目標を達成する）
         err += 0.01 * float(np.sum(((x - x0) / (np.array([b[1] - b[0] for b in bounds]))) ** 2))
         return err
@@ -61,7 +69,10 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
     q.update(proposal)
 
     predicted = br.tone_metrics(q)
-    t1 = vol.tier1_report(volume_fn(q), size_info)
+    # 提案 1 件だけは実際の第1共鳴で報告する（最適化ループの外なので 1 回で済む）
+    from . import openwind_bridge as ob
+    t1 = vol.tier1_report(volume_fn(q), size_info,
+                          ob.first_resonance_cents(q, size_info))
     return {
         "proposal": proposal,
         "current": {k: params[k] for k in keys},

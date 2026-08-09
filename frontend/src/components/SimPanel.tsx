@@ -42,7 +42,9 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
   return (
     <div>
       <div className="simcard">
-        <h3>音程チェック（内容積 vs 欠損円錐）</h3>
+        {/* セントは容積からの換算ではなく、この形状の共鳴管を解いた第1共鳴。
+            容積の行は判定の理由として並べてある（両者は一対一で動かない）。 */}
+        <h3>音程チェック（第1共鳴）</h3>
         <div className={`big ${t1.status}`}>
           {t1.deviation_cents > 0 ? "+" : ""}{t1.deviation_cents} セント
           <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>

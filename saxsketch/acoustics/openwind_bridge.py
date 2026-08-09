@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import functools
 import io
 import math
 import wave
@@ -30,14 +31,60 @@ from saxsketch.acoustics import volume as ac_volume
 # 実測 f0 をピーク集合と照合するには 8 本では足りない。
 MAX_PEAKS = 12
 
+#: 管内の空気温度 [℃]。**音速の唯一の出所**。
+#:
+#: ここを 1 箇所にしてある理由: 共鳴管の全長は `build_resonator` が
+#: `c/(2·f1)` で作る（＝音速に直結する）。ソルバと違う音速でジオメトリを組むと、
+#: 管の長さがそのぶん狂って**全体が音速比のぶん平行移動する**。
+#: 実際そうなっていた —— 定数は 343.0（20℃相当）なのに OpenWind へは
+#: `temperature=25.0`（音速 347.13）を渡しており、同じジオメトリを
+#: 2 エンジンで解くと soprano +23.9 / alto +24.7 / tenor +26.0 セント違った。
+#: うち 20.7 セントが音速比 347.13/343 そのもの。揃えると差は 2.9/4.1/5.6 セント
+#: （＝損失と放射モデルの違いだけ）に落ちる。
+TEMPERATURE_C = 25.0
+#: OpenWind の `Physics` 既定値。音速の式が湿度と CO2 を含むので、同じ値を使う。
+HUMIDITY = 0.5
+CARBON_DIOXIDE = 4e-4
+
+
+def sound_speed(temp_c: float = TEMPERATURE_C,
+                humidity: float = HUMIDITY,
+                carbon: float = CARBON_DIOXIDE) -> float:
+    """空気中の音速 [m/s]。OpenWind の `Physics`（既定 `ref_phy_coef='RR'`）と同じ式。
+
+    式を写してあるのは、OpenWind 未導入の環境（TMM だけが走る）でも同じ音速を
+    使うため。「20.05·√T」のような教科書式では OpenWind の値を再現できない
+    （20℃ 343.9878 / 25℃ 347.1324 で、係数が一定にならない）ので推測しない。
+    OpenWind があるときは `Physics(TEMPERATURE_C).c(0)` と一致することを
+    テストで確かめている。
+    """
+    t0 = 273.15
+    t20 = t0 + 20.0
+    t_k = temp_c + t0
+    # 水蒸気のモル分率（Zuckerwar Handbook 16.3.3 の展開式）
+    h = humidity * 10.0 ** (5.21899 - 5.8294 * t20 / t_k - 1.0252 * (t20 / t_k) ** 2)
+    dh = h - 1.1571e-2          # 20℃・湿度 50% を基準に取る
+    dco2 = carbon - 4.2e-4      # 420ppm を基準に取る
+    dt = t_k / t20 - 1.0
+    return 343.986 * math.sqrt(
+        t_k / t20 * (1.0 + 0.314 * dh - 0.520 * dco2
+                     + 0.25 * dco2 ** 2 - 0.16 * dco2 * dt))
+
+
+#: 音速 [m/s]。import 時に 1 回だけ評価する（`TEMPERATURE_C` から導出）。
+C_SOUND = sound_speed()
+
+# 以下は 20℃ 公称のまま。共鳴の**位置**ではなく損失（ピークの幅と高さ）と放射に
+# しか入らないので、温度に追従させていない。追従させるなら OpenWind の
+# `Physics` から rho/mu も取ること。
 RHO = 1.2          # 密度 kg/m^3
-C_SOUND = 343.0    # 音速 m/s
-#: マウスピースのボアからネック小端へ絞る区間の長さ [m]。実物は段差だが、
-#: x 単調増加のジオメトリ表現では段差を書けないので短いテーパで代用する。
-NECK_STEP = 0.0005
 MU = 1.85e-5       # 粘性係数 Pa·s
 GAMMA = 1.4        # 比熱比
 PR = 0.71          # プラントル数
+
+#: マウスピースのボアからネック小端へ絞る区間の長さ [m]。実物は段差だが、
+#: x 単調増加のジオメトリ表現では段差を書けないので短いテーパで代用する。
+NECK_STEP = 0.0005
 
 # ------------------------------------------------------------------ 時間領域シミュの調律点
 # dt は CFL で決まり、最小セグメント長が律速する。既定メッシュだと 234倍実時間
@@ -55,17 +102,118 @@ except Exception:  # pragma: no cover
     HAS_OPENWIND = False
 
 
+# ================================================================== 基準管の校正
+
+#: 校正用の理想円錐を頂点で切る半径 [m]。頂点そのものは断面積 0 で扱えない。
+#: 切り詰めた分は一次では効かない（切り詰め円錐の共鳴条件 k·l + arctan(k·x_start) = π
+#: で、l が x_start だけ短くなる分と arctan 項がちょうど打ち消す）ので、この値の
+#: 選び方に結果は鈍い。
+_CAL_TRUNC_R = 3e-4
+
+
+def ideal_cone_geometry(size_info: dict,
+                        use_openwind: bool | None = None) -> list[list[float]]:
+    """マウスピースを**理想の欠損円錐に戻した**基準管 [[x_m, r_m], ...]。
+
+    「この楽器のマウスピースが完璧だったら」の管。`build_resonator` が返す管と
+    同じ延長円錐を持ち、頂点〜ネック小端の区間だけが実マウスピースではなく
+    欠損円錐そのものになっている。差を取ればマウスピース由来の音程だけが残る。
+    """
+    cone = ac_volume.missing_cone(size_info)
+    tan_theta = cone["tan_theta"]
+    x0 = cone["apex_distance_mm"] / 1000.0
+    l_ext = _calibrate_extension(
+        float(size_info["low_note_sounding_hz"]), x0, tan_theta, C_SOUND,
+        HAS_OPENWIND if use_openwind is None else use_openwind)
+    return _cone_pts(x0, tan_theta, l_ext)
+
+
+def _cone_pts(x0_m: float, tan_theta: float, l_ext_m: float) -> list[list[float]]:
+    x_start = _CAL_TRUNC_R / tan_theta
+    span = (x0_m + l_ext_m) - x_start
+    return [[0.0, _CAL_TRUNC_R], [span, _CAL_TRUNC_R + tan_theta * span]]
+
+
+def _first_peak_hz(geometry: list[list[float]], f_lo: float, f_hi: float,
+                   n: int = 200, use_openwind: bool | None = None) -> float:
+    """帯域 [f_lo, f_hi] の**最も低い**共鳴を補間して返す（校正用の軽い版）。
+
+    `_analyze` を使わないのは、ここでは第1共鳴 1 本だけが要るため。格子も 200 点で
+    足りる（対数格子 + 放物線補間）。
+
+    帯域内の `argmax` ではなく**局所極大の最低周波数**を採る。頂点近傍で駆動した
+    円錐は入口断面積が極小なので |Z| の包絡が周波数とともに上がり、argmax は
+    共鳴ではなく**帯域の上端**を拾う（実測: alto で共鳴 134.6Hz に対し argmax が
+    235.6Hz ＝ 上端。校正の反復がそのまま発散した）。
+    """
+    freqs = np.geomspace(f_lo, f_hi, n)
+    want_ow = HAS_OPENWIND if use_openwind is None else use_openwind
+    z = None
+    if want_ow:
+        try:  # pragma: no cover - 環境依存
+            from openwind import ImpedanceComputation
+            z = np.asarray(ImpedanceComputation(
+                freqs, geometry, temperature=TEMPERATURE_C,
+                source_location='entrance').impedance)
+        except Exception:
+            z = None
+    if z is None:
+        z = _tmm_impedance(geometry, freqs)
+    mag = np.abs(z)
+    y_db = 20.0 * np.log10(mag / np.max(mag) + 1e-12)
+    inner = np.arange(1, len(y_db) - 1)
+    local = inner[(y_db[1:-1] > y_db[:-2]) & (y_db[1:-1] > y_db[2:])]
+    i = int(local[0]) if len(local) else int(np.argmax(y_db))
+    return _interp_peak(freqs, y_db, i)
+
+
+@functools.lru_cache(maxsize=None)
+def _calibrate_extension(f1: float, x0_m: float, tan_theta: float,
+                         c_sound: float, use_openwind: bool) -> float:
+    """延長円錐の長さ [m] を、**理想円錐が実際に f1 で鳴る**ように決める。
+
+    以前は `l_ext = c/(2·f1) − x0` と置いていた。これは**開口端の放射補正がゼロの
+    理想円錐**の式で、ソルバ（OpenWind も自作 TMM も）は開口端の放射を含むので、
+    この長さでは管が常に長すぎた。マウスピースを外して理想円錐だけを鳴らすと
+    soprano −52.3 / alto −48.2 / tenor −44.5 セント低く、**マウスピースが 1 本も
+    刺さっていないのに 50 セント近く外れている**状態だった。報告していた残差は
+    ほとんどこれで、形状の話ではなかった。
+
+    これは「検証したいモデルからの逆算」ではない。延長円錐はトーンホールもベルも
+    無い**作り物の胴**で、実在の寸法を持たない。作り物が目的の音を鳴らすように
+    合わせて初めて、残差が「マウスピースのせい」だけになる。合わせているのは
+    検証対象（マウスピース）ではなく物差しの側。
+
+    解き方: 円錐の共鳴は実効長に反比例するので、測った f から必要な長さの差を
+    `c/2·(1/f1 − 1/f)` で直接出す。2〜3 回で 0.05 セントに入る。サイズ・音速・
+    エンジンごとに 1 回だけ走ればよいのでキャッシュする。
+    """
+    l_ext = max(c_sound / (2.0 * f1) - x0_m, 0.05)
+    for _ in range(8):
+        f = _first_peak_hz(_cone_pts(x0_m, tan_theta, l_ext), 0.6 * f1, 1.7 * f1,
+                           use_openwind=use_openwind)
+        if abs(1200.0 * math.log2(f / f1)) < 0.05:
+            break
+        l_ext = max(l_ext + c_sound / 2.0 * (1.0 / f1 - 1.0 / f), 0.05)
+    return l_ext
+
+
 # ================================================================== ジオメトリ
 
-def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
+def build_resonator(params: dict, size_info: dict,
+                    use_openwind: bool | None = None) -> list[list[float]]:
     """組み立て共鳴管ジオメトリ [[x_m, r_m], ...]（ティップ→ベル）。
 
     構成:
       (a) マウスピース内部空洞: cavity_stations の各断面積 → 等価半径 sqrt(A/pi)
       (b) 円筒ボア: シャンク端まで
       (c) 欠損円錐延長: スロート断面から本体側へ広がる円錐。
-          taper は descriptor の半頂角そのもの、全長は記譜最低音の実音で決める
-          （組み立て管の第1共鳴が実低音付近に来るように）。
+          taper は descriptor の半頂角そのもの、全長は `_calibrate_extension` が
+          「マウスピースを理想の欠損円錐に戻したら f1 で鳴る」長さとして決める。
+
+    `use_openwind` は延長円錐の校正に使うエンジンを指定する（既定は実際に走る方）。
+    Tier1 は速い方（TMM）で一貫させたいので False を渡す。ここを固定しないと、
+    OpenWind が入っている環境と入っていない環境で Tier1 の値が変わる。
     """
     p = params
     xs: list[float] = []
@@ -100,14 +248,19 @@ def build_resonator(params: dict, size_info: dict) -> list[list[float]]:
     # 欠損円錐（頂点〜ネック小端）なので、差し引くのはマウスピースの物理長ではなく
     # 欠損円錐長。物理長を引くと管が欠損円錐長との差だけ長くなり、アルトで
     # 161mm 過長 ≒ 270 セント低く出る（3サイズとも同じ量ずれるので系統誤差と分かる）。
+    #
+    # 長さは `c/(2·f1) − x0` という理想円錐の式ではなく、**同じソルバで理想円錐が
+    # f1 に鳴る長さ**を採る（`_calibrate_extension`）。理想式は開口端の放射補正を
+    # 持たないので、マウスピースを外した基準管だけで 45〜52 セント低く出ていた。
     cone = ac_volume.missing_cone(size_info)
     f1 = float(size_info["low_note_sounding_hz"])
-    l_total = C_SOUND / (2.0 * f1)                     # 頂点からベルまでの音響長
-    l_ext = max(l_total - cone["apex_distance_mm"] / 1000.0, 0.05)
 
     # 円錐の半頂角は descriptor の実測文献値をそのまま使う
     # （体積定数から逆算していたのをやめた。出所が一本化される）
     tan_theta = cone["tan_theta"]
+    l_ext = _calibrate_extension(
+        f1, cone["apex_distance_mm"] / 1000.0, tan_theta, C_SOUND,
+        HAS_OPENWIND if use_openwind is None else use_openwind)
 
     # 延長円錐はコーク線の**ネック小端内径**から始まる。マウスピースのボア径は
     # コルクを逃がすぶん太いので、そこから広げ始めると管全体が太くなる。
@@ -319,13 +472,30 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
 def _openwind_impedance(geometry, freqs, size_info):  # pragma: no cover - 環境依存
     from openwind import ImpedanceComputation
     # geometry: [[x, r], ...]（m）。OpenWind は [x, r] のリストを受け付ける。
-    result = ImpedanceComputation(freqs, geometry, temperature=25.0,
+    result = ImpedanceComputation(freqs, geometry, temperature=TEMPERATURE_C,
                                   source_location='entrance')
     z = np.asarray(result.impedance)
     return _analyze(np.asarray(freqs, dtype=float), z, size_info, "openwind")
 
 
 # ================================================================== 公開: インピーダンス
+
+def first_resonance_cents(params: dict, size_info: dict) -> float:
+    """組み立て共鳴管の第1共鳴が目標低音から何セント外れているか（**TMM 固定**）。
+
+    Tier1（`acoustics.volume.tier1_report`）が使う速い経路。Tier2 の
+    `impedance()` と同じジオメトリ・同じ物理で、エンジンだけが違う。
+    実測 31〜52ms（`profiles.cavity_volume_cc` が既に 10.7ms 払っている）。
+
+    TMM に固定する理由は 2 つ。OpenWind は 0.5〜0.8s かかりスライダ操作の裏では
+    重すぎること、そして**環境によって Tier1 の値が変わらないようにする**こと
+    （OpenWind の有無で数字が動くと記録値テストが環境依存になる）。
+    """
+    geo = build_resonator(params, size_info, use_openwind=False)
+    f1 = float(size_info["low_note_sounding_hz"])
+    f = _first_peak_hz(geo, 0.6 * f1, 1.7 * f1, use_openwind=False)
+    return _cents(f, f1)
+
 
 def impedance(params: dict, size_info: dict,
               fmin: float = 50.0, fmax: float = 2000.0, n: int = 800) -> dict:
@@ -431,10 +601,17 @@ def _measure_f0(sig: np.ndarray, sr: int = SIM_SR) -> float:
     return float(i * df)
 
 
-# レジスタを決めるのは吹圧ではなく**リード共振**（実測: f_reed 1800/2700/3700Hz が
-# それぞれ第2/第3/第4共鳴を持続発振させる）。吹圧だけを動かしてもレジスタはほぼ
-# 変わらず、上げ過ぎると発振が止まる。よってアンブシュア（＝リードの締め具合＝
+# レジスタを決めるのは吹圧ではなく**リード共振**。吹圧だけを動かしてもレジスタは
+# ほぼ変わらず、上げ過ぎると発振が止まる。よってアンブシュア（＝リードの締め具合＝
 # リード共振）を選ばせ、各プリセットに持続を確認済みの吹圧を組で与える。
+#
+# **プリセット名と実際に鳴る高さは対応していない**（alto 既定形状での実測 f0:
+# loose 1220 / normal 951 / tight 133Hz）。以前ここに「緩め→低いレジスタ、
+# 締め→高いレジスタ」と書いていたが、測ると逆で、しかもどの設定も単一の
+# レジスタに落ち着かない（定常部の上位成分が 5 本、共鳴からの距離 0.2〜17.6%、
+# duration を延ばすと支配成分が移る）。名前は UI の見た目として残してあるだけで、
+# 1自由度リードモデルがレジスタを掴めていないことの方が本体の課題。
+# 詳細な実測は `tests/test_saxsketch.py::test_synthesize_returns_playable_wav`。
 EMBOUCHURES: dict[str, tuple[float, float]] = {
     "loose":  (1800.0, 1800.0),   # 緩め → 低いレジスタ
     "normal": (2700.0, 2500.0),   # 標準
@@ -490,7 +667,7 @@ def _simulate_reed(geometry, params, embouchure, duration,
         player=player,
         losses='diffrepr',   # 時間領域は False / 'diffrepr' のみ（True は不可）
         order=SIM_ORDER,
-        temperature=25.0,
+        temperature=TEMPERATURE_C,
         record_energy=False,
         verbosity=0,
     )

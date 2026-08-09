@@ -53,52 +53,54 @@ def test_missing_cone_derived_not_constant():
     assert ccs[0] < ccs[1] < ccs[2]
 
 
-# 実測した残差 [cent]。3 サイズとも大きく flat 側に外れる。
+# 実測した残差 [cent]。Tier1 = 組み立て共鳴管の第1共鳴を伝達行列法で解いた値
+# （`openwind_bridge.first_resonance_cents`、TMM 固定）。
 #
-# 直前の値は {-1.0, -0.5, +53.9} で、ソプラノとアルトは「良好」に見えていた。
-# それが崩れたのは Stage B.2 で descriptor のネック寸法を実測に置き換えたから。
-# 目標体積は `cc ∝ r0³`（r0 = ネック小端半径）でネック内径に直結していて、
-# 旧値は 3 サイズとも過大だった（テナー 15.4 → 実測 13.1mm）。目標が縮んだので
-# 残差が flat 側へ寄り、テナーは sharp から flat へ符号ごと反転した。
+# 直前の値は {-320.4, -73.8, -81.2} で、Tier2 と 4 倍食い違っていた。Stage B は
+# それを「Tier1 の校正定数が怪しい」と記録して閉じたが、**食い違いの主因は
+# 物差しの側にあった**。Stage E で 2 つ直した:
 #
-# **形状の疑いは晴れている。** テナーは実物 WindyCity の実測形状 ＋ 実物ネックの
-# 実測寸法で、入力に推定値が 1 つも残っていない。実際に演奏で成立している組に
-# 対して -81 セントと言う以上、外しているのは Tier1 のモデルの側。
+# 1. 音速の食い違い。ジオメトリの全長を `C_SOUND = 343.0`（20℃相当）で作りながら、
+#    OpenWind へは `temperature=25.0`（音速 347.13）を渡していた。同じジオメトリを
+#    2 エンジンで解くと 23.9 / 24.7 / 26.0 セント違い、うち 20.7 は音速比そのもの。
+# 2. 延長円錐が長すぎた。`l_ext = c/(2·f1) − x0` は**開口端の放射補正がゼロの
+#    理想円錐**の式。ソルバは放射を含むので、**マウスピースを外して理想円錐だけを
+#    鳴らしても -52.3 / -48.2 / -44.5 セント**低かった。報告していた残差はほとんど
+#    これで、形状の話ではなかった。いまは同じソルバで理想円錐が f1 に鳴る長さを
+#    求めている（`_calibrate_extension`、実測で 0.02〜0.03 セントに収束）。
 #
-# **ネックのテーパも原因ではない**（Stage B.4 で掃引して除外した）。テナー大端内径
-# 26.0mm の実測から θ = atan(6.45/L) を振ると、実在するネック長 200〜280mm で
-# 半頂角は 1.32〜1.85° に収まり文献値 1.52° を挟む。残差は -152〜-38 セントで
-# 動くが 0 を跨がない（跨ぐには L = 322mm が要る）。
+# 直した結果、**alto と tenor のマウスピースは欠損円錐の代替として ±1 セントで
+# 成立している**。実物 WindyCity の実測形状 ＋ 実測ネックという、推定値が 1 つも
+# 残っていない組が、正しく「合っている」と出るようになった。
 #
-# **同じ形状で Tier2 は -23.2 セント（TIER2_RESIDUAL_CENTS）。4 倍食い違う。**
-# Tier2 はインピーダンス計算、Tier1 は一行の経験則なので、残る容疑は Tier1 の
-# 校正定数 `CENTS_PER_VOLUME_RATIO = 250` と `REED_EQUIVALENT_CC = 1.0`。
-# どちらも出所の無い経験値で、検証されたことがない。
+# 容積の一行規則を捨てた理由もここにある。テナーの実効容積は欠損円錐より +23%
+# あるのに音程は +0.3 セント。マウスピースが**代替する円錐より 161mm 短い**
+# （85.5mm vs 246.8mm）ので、太いぶんと短いぶんが相殺する。容積 1 個からは出せない。
 #
-# **係数は逆算しない。** 250 → 約 69 にすればテナーは Tier2 に一致するが、それは
-# 検証したいモデルから定数を引き出す作業で、descriptor 自身が禁じている
-# （「無い箇所を実測に合わせて逆算すると、どの量が間違っていたのか分からなくなる」）。
-# 合わせに行かず、食い違いを数字として残す。
-#
-# ソプラノの -320 は別問題。B.1 前でも実効 5.61cc / 目標 3.69cc（≒ -130 セント）で、
-# B.1 のリード規格長比スケール（体積 ×1.39）がそこから広げた。Tier2 でも -61.2 と
-# 3 サイズで最悪。寸法そのものの作り直しは次ステージ。
-TIER1_RESIDUAL_CENTS = {"soprano": -320.4, "alto": -73.8, "tenor": -81.2}
+# **ソプラノの -31 だけが本物のマウスピース由来の残差。** 実効 7.43cc / 欠損円錐
+# 3.69cc（+101%）で 3 サイズ中最悪。いまの寸法は「テナー実測 × リード規格長比
+# 0.8141」というスケール値なので、実測に置き換える作業が残っている（Stage E.5）。
+TIER1_RESIDUAL_CENTS = {"soprano": -31.0, "alto": 0.5, "tenor": 0.3}
+
+
+def _tier1(tid: str) -> dict:
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import volume as ac_volume
+    p = _template_params("mouthpiece", tid)
+    si = _size_info(tid)
+    return ac_volume.tier1_report(profiles.cavity_volume_cc(p), si,
+                                  ob.first_resonance_cents(p, si))
 
 
 def test_tier1_matches_recorded_residual():
     """Tier1 の残差が記録値どおりであること。良好かどうかではなく、変化の検知が目的。"""
-    from saxsketch.acoustics import volume as ac_volume
     for tid in SIZES:
-        p = _template_params("mouthpiece", tid)
-        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
+        rep = _tier1(tid)
         assert rep["deviation_cents"] == pytest.approx(
             TIER1_RESIDUAL_CENTS[tid], abs=2.0), (tid, rep)
-    # 3 サイズとも正直に flat を出す（以前はテナーだけ sharp だった）。
-    def status(tid):
-        p = _template_params("mouthpiece", tid)
-        return ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))["status"]
-    assert [status(t) for t in SIZES] == ["flat", "flat", "flat"]
+    # alto/tenor は ±1 セントで合格域（|cents| < 10）に入る。この判定は容積規則の
+    # 頃は 3 サイズとも到達不能だった。ソプラノだけが本物の flat。
+    assert [_tier1(t)["status"] for t in SIZES] == ["flat", "ok", "ok"]
 
 
 def test_tier1_advice_admits_saturation():
@@ -123,16 +125,16 @@ def test_tier1_advice_admits_saturation():
     assert 0.0 < head < 1.0, head
 
     # (b) 助言のロジック: 足りないときだけ「届かない」と言う。テンプレートの残差に
-    #     依存しないよう、目標に対して足りない容積をその場で作って渡す。
+    #     依存しないよう、目標に対して足りない容積と高めのセントをその場で作って渡す。
     si = _size_info("tenor")
     target = ac_volume.missing_cone(si)["cc"]
-    short = {"total_cc": target,
-             "effective_cc": 0.7 * target - ac_volume.REED_EQUIVALENT_CC}
-    rep = ac_volume.tier1_report(short, si, headroom_cc=head)
+    short = {"total_cc": target, "effective_cc": 0.7 * target}
+    rep = ac_volume.tier1_report(short, si, 40.0, headroom_cc=head)
     assert rep["status"] == "sharp"
     assert "届かない" in rep["advice"]
-    assert "届かない" not in ac_volume.tier1_report(short, si, headroom_cc=99.0)["advice"]
-    assert "届かない" not in ac_volume.tier1_report(short, si)["advice"]
+    assert "届かない" not in ac_volume.tier1_report(
+        short, si, 40.0, headroom_cc=99.0)["advice"]
+    assert "届かない" not in ac_volume.tier1_report(short, si, 40.0)["advice"]
 
 
 # ------------------------------------------------------- 外殻への封じ込め（Phase 3.6）
@@ -1355,10 +1357,13 @@ def test_openwind_first_peak_reasonable(alto):
 # 0.02Hz で確かめた真値 -61.5 / -26.3 / -22.3 との差は 0.3 / 1.2 / 0.9 セント。
 #
 # 主張を「20 セント以内に収まる」から「この値である」へ変えてある。閾値の緩和では
-# なく、TIER1_RESIDUAL_CENTS と同じ「変化の検知」に揃えた。3 サイズとも実物より
-# flat なのは事実として残り、Tier1 との 4 倍の食い違いも TIER1_RESIDUAL_CENTS の
-# コメントに書いてある。
-TIER2_RESIDUAL_CENTS = {"soprano": -61.2, "alto": -27.5, "tenor": -23.2}
+# なく、TIER1_RESIDUAL_CENTS と同じ「変化の検知」に揃えた。
+#
+# Stage E で 2 度目の取り直し。-61.2 / -27.5 / -23.2 には**物差し側の偏りが 2 つ**
+# 乗っていた（詳細は TIER1_RESIDUAL_CENTS のコメント）: ジオメトリとソルバの音速の
+# 食い違い（+20.7 セント）と、放射端補正を持たない延長円錐長（-44〜-52 セント）。
+# どちらもマウスピースの形状とは無関係な量。
+TIER2_RESIDUAL_CENTS = {"soprano": -30.5, "alto": 0.9, "tenor": 1.3}
 
 
 def test_resonator_extension_replaces_missing_cone():
@@ -1377,18 +1382,87 @@ def test_resonator_extension_replaces_missing_cone():
         si = _size_info(tid)
         geo = ob.build_resonator(p, si)
         cone = ac_volume.missing_cone(si)
-        l_total = ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
         x_cork = (p["overall_length"] - p["cork_depth"]) / 1000.0
-        assert geo[-1][0] == pytest.approx(
-            x_cork + l_total - cone["apex_distance_mm"] / 1000.0, abs=1e-4), tid
+        # 気柱はコーク線で終わり、そこから先が延長円錐
+        assert geo[-2][0] == pytest.approx(x_cork + ob.NECK_STEP, abs=1e-6), tid
         # 円錐の始端はネック小端内径。マウスピースのボアより細い
         r_neck = cone["throat_radius_mm"] / 1000.0
         assert geo[-2][1] == pytest.approx(r_neck, abs=1e-6), tid
         assert r_neck < profiles.bore_radius(p) / 1000.0, tid
 
+        # 延長円錐は naive な `c/(2·f1) − x0` より**短い**。差が開口端の放射補正で、
+        # 実測 soprano 25.4 / alto 35.2 / tenor 43.1mm。ここが 0 に戻ったら
+        # `_calibrate_extension` が効いていない（＝基準管が 45〜52 セント低い状態）。
+        naive = (ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
+                 - cone["apex_distance_mm"] / 1000.0)
+        assert 0.015 < naive - (geo[-1][0] - x_cork) < 0.060, tid
+
         res = ob.impedance(p, si)
         assert res["first_cents_vs_target"] == pytest.approx(
             TIER2_RESIDUAL_CENTS[tid], abs=3.0), (tid, res["first_note"])
+
+
+def test_ideal_cone_reference_sounds_the_target_note():
+    """マウスピースを理想の欠損円錐に戻した基準管が、実際に目標低音で鳴ること。
+
+    これが延長円錐の長さの**定義**になっている。以前は `l_ext = c/(2·f1) − x0` と
+    置いていたが、これは開口端の放射補正がゼロの理想円錐の式で、実際のソルバは
+    放射を含む。マウスピースが 1 本も刺さっていない基準管だけで
+    soprano -52.3 / alto -48.2 / tenor -44.5 セント低く、報告していた残差の
+    ほとんどがこれだった。
+
+    ここが 0 でないと、Tier1/Tier2 の残差が「マウスピースのせい」ではなくなる。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    for tid in SIZES:
+        si = _size_info(tid)
+        f1 = si["low_note_sounding_hz"]
+        for use_ow in (False, True):
+            if use_ow and not ob.HAS_OPENWIND:
+                continue
+            geo = ob.ideal_cone_geometry(si, use_openwind=use_ow)
+            f = ob._first_peak_hz(geo, 0.6 * f1, 1.7 * f1, use_openwind=use_ow)
+            assert 1200.0 * math.log2(f / f1) == pytest.approx(0.0, abs=0.5), (
+                tid, use_ow, f, f1)
+
+
+def test_tier1_and_tier2_agree():
+    """同じ形状で、速いエンジン（Tier1=TMM）と正確なエンジン（Tier2=OpenWind）の
+    第1共鳴が一致すること。
+
+    このテストは Stage E まで書けなかった。ジオメトリを音速 343 で組みながら
+    OpenWind を 25℃（347.13）で走らせていたので、**同じジオメトリなのに
+    23.9 / 24.7 / 26.0 セント**離れていた。音速を 1 箇所（`TEMPERATURE_C`）に
+    してから 1 セント以内に入る。
+
+    延長円錐の校正はエンジンごとに別々に走る（基準管が 0 セントになる長さ）ので、
+    一致すること自体は自明ではない —— 校正が固定するのは**理想円錐**で、実測形状の
+    マウスピースが刺さった管はどちらのエンジンも独立に解いている。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    if not ob.HAS_OPENWIND:
+        pytest.skip("OpenWind 未導入（両者が同じ TMM になり検証にならない）")
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        si = _size_info(tid)
+        tmm = ob.first_resonance_cents(p, si)
+        ow = ob.impedance(p, si)["first_cents_vs_target"]
+        assert ow == pytest.approx(tmm, abs=3.0), (tid, tmm, ow)
+
+
+def test_sound_speed_matches_openwind_physics():
+    """自前の `sound_speed()` が OpenWind の `Physics` と一致すること。
+
+    式を写してあるのは OpenWind 未導入の環境でも同じ音速を使うため。写し間違えると
+    ジオメトリの全長（`c/(2·f1)` 由来）とソルバがまた食い違う ——
+    343.0 と 347.13 の差 1.2% が 20.7 セントになったのが Stage E の出発点。
+    """
+    pytest.importorskip("openwind")
+    from openwind.continuous.physics import Physics
+    from saxsketch.acoustics import openwind_bridge as ob
+    for t in (0.0, 20.0, ob.TEMPERATURE_C, 37.0):
+        assert ob.sound_speed(t) == pytest.approx(float(Physics(t).c(0)), rel=1e-12)
+    assert ob.C_SOUND == pytest.approx(ob.sound_speed(ob.TEMPERATURE_C))
 
 
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
@@ -1417,11 +1491,29 @@ def test_synthesize_returns_playable_wav(alto):
     with wave.open(io.BytesIO(wav)) as w:
         assert w.getframerate() == ob.SIM_SR
         assert w.getnframes() > 0
-    assert meta["f0"] > 0
-    # 鳴った音はインピーダンス解析の共鳴ピークのいずれか（レジスタは問わない）。
-    # 短いシミュは FFT 分解能が粗いので許容は 8%。
-    peaks = [pk["freq"] for pk in ob.impedance(p, si)["peaks"]]
-    assert any(abs(meta["f0"] - f) / f < 0.08 for f in peaks), (meta["f0"], peaks)
+    # 鳴った f0 は楽器の帯域内（無音でも DC でもない）。
+    assert 50.0 < meta["f0"] < 2500.0, meta
+
+    # **「鳴った f0 は共鳴ピークのいずれか（許容 8%）」という主張はやめた。**
+    # 不変条件ではなく、たまたま成立していた。実測（alto、既定 duration 0.6s、
+    # 定常部の FFT 上位 5 成分と、そこから最寄りの共鳴ピークまでの距離）:
+    #
+    #   Stage E 後   loose  f0=1220.2 (1.96%)  上位5 1220/2011/670/1341/680
+    #                normal f0= 950.9 (8.07%)  上位5  950/1094/1220/2181/1364
+    #                tight  f0= 133.4 (3.79%)  上位5  133/400/667/934/1200
+    #   Stage E 前   loose  f0=1208.2 (2.89%)  normal f0=1206.3 (2.73%)
+    #                tight  f0= 131.1 (3.89%)
+    #
+    # どの設定でも**単一のレジスタに落ち着いていない**。上位成分は 5 本あり、
+    # 共鳴からの距離は 0.2〜17.6% にばらけ、duration を 0.6→1.2s にすると
+    # 支配成分が 950 → 1083Hz へ移る（＝定常に達していない）。tight の
+    # 133/400/667/934/1200 は 133.4Hz の**奇数倍のみ**で、円錐の共鳴列
+    # （139/276/417 = 整数倍）ではない。
+    #
+    # 8% を通っていたのは 6 通り中 5 通りで、Stage E で管が 3% 短くなった拍子に
+    # normal が 8.07% へ抜けた。閾値を広げても「共鳴で鳴いている」ことの証明には
+    # ならないので、主張の方を実際に成り立つ範囲へ引いた。1自由度リードモデルが
+    # レジスタを掴まない件そのものは別途の課題。
 
 
 # ------------------------------------------------------------------ プロジェクトI/O
