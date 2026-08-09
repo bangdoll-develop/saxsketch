@@ -158,23 +158,25 @@ class NeckComponent(Component):
         return {"kind": "neck", "cards": cards}
 
     def _fit_card(self, params: dict) -> dict:
-        """マウスピース適合（自動整合の可視化）。テノン外径＋コルクが必要ボアを決める。"""
+        """マウスピース適合（自動整合の可視化）。テノン外径＋コルクが合うボア径を決める。"""
         p = params
+        fit = reference_check.INTERFERENCE_FIT_MM
         need = p["tenon_od"] + 2.0 * p["cork_thickness"]
-        std = reference_check.required_bore_dia(self.size_info)
         rows = [
             ["テノン外径", f"{p['tenon_od']:.1f} mm"],
             ["コルク厚（片側）", f"{p['cork_thickness']:.2f} mm"],
-            ["要求マウスピースボア（テノン＋2×コルク）", f"{need:.1f} mm"],
+            ["コルク込み外径（自由状態）", f"{need:.2f} mm"],
+            ["合うマウスピースのボア径", f"{need - fit:.2f} mm（締め代 {fit:.1f}mm）"],
             ["規格テノン外径（descriptor）", f"{self.size_info['neck_tenon_od_mm']:.1f} mm"],
         ]
         # ボアは非対称: 小さいと物理的に挿さらない、大きい分はコルクで吸収できる。
         dv = p["tenon_od"] - self.size_info["neck_tenon_od_mm"]
         if abs(dv) <= 0.4:
             status, big = "ok", "規格テノン径に整合"
-            advice = ("マウスピース側のボアが {0:.1f}mm 以上あれば挿さります。"
-                      "規格テノン径に一致しているので市販マウスピースと勘合します。"
-                      ).format(need)
+            advice = ("マウスピース側のボアが {0:.1f}mm 前後なら勘合します"
+                      "（自由状態のコルク込み {1:.1f}mm を {2:.1f}mm 潰して食いつかせる）。"
+                      "規格テノン径に一致しているので市販マウスピースが使えます。"
+                      ).format(need - fit, need, fit)
         elif dv > 0:
             status, big = "warn", "テノンが規格より太い"
             advice = (f"規格より {dv:.1f}mm 太く、市販マウスピースが入らない恐れがあります。"

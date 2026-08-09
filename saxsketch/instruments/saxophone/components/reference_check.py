@@ -27,6 +27,17 @@ SEAT_REACH_TOL = 1.5
 #: 同上、「軽微」までの許容差 [mm]。
 SEAT_REACH_TOL_MINOR = 4.0
 
+#: コルクの締め代 [mm]。マウスピースのボアは「テノン外径＋2×コルク厚」**より細い**。
+#: コルクは圧縮して食いつくので、自由状態のコルク込み外径ぴったりだと抜ける。
+#: 出所は実測。3サイズでネックとマウスピースの両方を実測してあるのはテナーだけで、
+#: WindyCity の実測ボア 17.0mm に対し Selmer SA80 II のネックは
+#: テノン 15.0 ＋ コルク 1.10×2 ＝ 17.2mm（descriptor の neck_dimensions_source）。
+INTERFERENCE_FIT_MM = 0.2
+#: ボア径の許容差 [mm]。締め代を引いた狙い値からのずれで測る。
+BORE_TOL = 0.3
+#: 同上、「軽微」までの許容差 [mm]。
+BORE_TOL_MINOR = 1.0
+
 
 def _verdict(delta: float, tol_ok: float, tol_minor: float) -> str:
     a = abs(delta)
@@ -42,28 +53,37 @@ def _row(label: str, value: float, ref: float, unit: str,
 
 
 def required_bore_dia(size_info: dict) -> float:
-    """ネックに挿さるために必要なボア径 [mm]。
+    """自由状態のコルクを巻いたテノンの外径 [mm]。
 
-    テノンにはコルクが巻かれているので、テノン外径そのものでは挿さらない。
-    コルク厚は descriptor が持つ一つの値を使う（neck_bore_id_mm の導出も
-    同じ値を使っており、ここで別の数字を置くと二つの前提がずれる）。
+    テノン外径そのものではマウスピースは挿さらない。コルクを巻いた分だけ太い。
     """
     return size_info["neck_tenon_od_mm"] + 2.0 * size_info["neck_cork_thickness_mm"]
+
+
+def nominal_bore_dia(size_info: dict) -> float:
+    """コルクを巻いたテノンに嵌まるマウスピースのボア径 [mm]。
+
+    `required_bore_dia` から締め代を引く。ここが「ボアはコルク込み外径以上でなければ
+    挿さらない」という以前の考え方との違いで、実物はむしろ **少し細い**（コルクを
+    潰して食いつかせる）。テナー実測 17.0 に対しコルク込み外径 17.2 でその差 0.2mm。
+    """
+    return required_bore_dia(size_info) - INTERFERENCE_FIT_MM
 
 
 def mouthpiece_card(p: dict, size_info: dict) -> dict:
     """マウスピースの規格照合。設計値 / 規格値 と判定を並べる。"""
     rows, verdicts = [], []
 
-    # ボアだけは判定が非対称。大きすぎればコルクが潰れて収まるが、小さいと
-    # 物理的に挿さらない。他の項目と同じ対称公差で「軽微」と言ってはいけない。
-    need = required_bore_dia(size_info)
+    # ボアだけは判定が非対称。太い側はコルクを厚く巻けば埋まるが、細い側は
+    # コルクの圧縮しろを超えると物理的に挿さらない。対称公差で「軽微」と言ってはいけない。
+    aim = nominal_bore_dia(size_info)
     bore = p["bore_dia"]
-    if bore < need - 0.3:
+    if bore < aim - BORE_TOL:
         v = "乖離"
     else:
-        v = _verdict(bore - need, 0.3, 1.0)
-    rows.append(["ボア径 / テノン外径＋コルク", f"{bore:.1f} / {need:.1f} mm  {v}"])
+        v = _verdict(bore - aim, BORE_TOL, BORE_TOL_MINOR)
+    rows.append(["ボア径 / テノン＋コルク−締め代",
+                 f"{bore:.2f} / {aim:.2f} mm  {v}"])
     verdicts.append(v)
 
     for r, v in (

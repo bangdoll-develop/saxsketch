@@ -35,13 +35,15 @@ def test_missing_cone_derived_not_constant():
         assert "missing_cone_volume_cc" not in si     # 定数は廃止
         cone = ac_volume.missing_cone(si)
         assert cone["cc"] > 0 and cone["apex_distance_mm"] > 0
-    # アルトだけ公表実測（SBA 217.5mm）があるのでそれを採る。導出すると 242mm で
-    # 11% 長い（ネック内径をテノン外径からの一律規則で推定しているため）。
-    # 実測がある箇所だけ差し替え、無い箇所は導出のまま残す方針。
+    # アルトだけ公表実測（SBA 217.5mm）があるのでそれを採る。実測ネック内径 12.7mm から
+    # 導出すると 227.3mm で 4.5% 長い。内径をテノン外径からの一律規則で推定していた頃は
+    # 241.7mm ＝ 11% だったので、ネックを実測したぶんだけ食い違いが縮んだ。
+    # 実測がある箇所だけ差し替え、無い箇所は導出のまま残す方針は変えない。導出値を
+    # 217.5 へ合わせに行かない（合わせると半頂角が実測の顔をした逆算値になる）。
     alto_cone = ac_volume.missing_cone(_size_info("alto"))
     assert alto_cone["source"] == "measured"
     assert alto_cone["apex_distance_mm"] == pytest.approx(217.5)
-    assert alto_cone["derived_apex_mm"] == pytest.approx(241.7, abs=1.0)
+    assert alto_cone["derived_apex_mm"] == pytest.approx(227.3, abs=1.0)
     # 採用した頂点距離と広がりが自己矛盾しないこと（共鳴管の生成が同じ値を使う）
     assert alto_cone["throat_radius_mm"] / alto_cone["tan_theta"] == pytest.approx(217.5)
     assert ac_volume.missing_cone(_size_info("tenor"))["source"] == "derived"
@@ -200,23 +202,32 @@ def test_table_reaches_reed_heel():
 
 
 def test_bore_clears_corked_tenon():
-    """ボアがコルクを巻いたテノンに挿さること。
+    """ボアがコルクを巻いたテノンに嵌まること。
 
     以前は bore_dia がテノン外径そのものだった。コルク分の隙間が無く、実物の
     ネックには物理的に入らないマウスピースが出ていた。照合カードもテノン外径と
     直接比べて「一致」と言っていたので誤りが固定されていた。
+
+    それを直した後も、しきい値は「コルク込み外径以上」（`need - 0.05`）のままだった。
+    実物は逆に**少し細い** — コルクは圧縮して食いつくので、隙間があると抜ける。
+    ネックとマウスピースの両方を実測してある唯一のサイズがテナーで、その差 0.2mm が
+    `INTERFERENCE_FIT_MM`（自由状態のコルク込み 17.2 に対し実測ボア 17.0）。
     """
     from saxsketch.instruments.saxophone.components import reference_check
     for tid in SIZES:
         si = _size_info(tid)
         p = _template_params("mouthpiece", tid)
-        need = reference_check.required_bore_dia(si)
-        assert need == pytest.approx(si["neck_tenon_od_mm"]
-                                     + 2.0 * si["neck_cork_thickness_mm"])
-        assert p["bore_dia"] >= need - 0.05, (tid, p["bore_dia"], need)
-        # コルク厚は neck_bore_id_mm の導出とも整合していること（前提が二つに割れない）
-        assert si["neck_bore_id_mm"] == pytest.approx(
-            si["neck_tenon_od_mm"] - 2.0 * (si["neck_cork_thickness_mm"] + 0.4))
+        aim = reference_check.nominal_bore_dia(si)
+        assert aim == pytest.approx(si["neck_tenon_od_mm"]
+                                    + 2.0 * si["neck_cork_thickness_mm"]
+                                    - reference_check.INTERFERENCE_FIT_MM)
+        assert p["bore_dia"] == pytest.approx(
+            aim, abs=reference_check.BORE_TOL), (tid, p["bore_dia"], aim)
+        # ネックの 3 値は実測で、導出規則で埋めていないこと。以前は「管肉厚 0.4mm」を
+        # 仮定して内径をテノン外径から引いていたが、実測の肉厚は 0.90〜1.25mm だった。
+        assert "neck_dimensions_source" in si, tid
+        wall = (si["neck_tenon_od_mm"] - si["neck_bore_id_mm"]) / 2.0
+        assert 0.5 < wall < 1.5, (tid, wall)
         # 外壁の肉厚が残ること
         assert p["body_dia"] / 2.0 - p["bore_dia"] / 2.0 > p["min_wall"], tid
 
