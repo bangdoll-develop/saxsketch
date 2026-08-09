@@ -23,6 +23,11 @@ MATERIAL_LABELS = {
 MIN_BAND_THICKNESS = {"petg": 2.0, "pla": 2.4, "nylon_sls": 1.8, "resin": 2.6}
 
 
+def _rect_pts(x0: float, w: float, y0: float, h: float) -> list[tuple[float, float]]:
+    """XY 平面の矩形（反時計回り）。ロフト断面用。"""
+    return [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
+
+
 def _specs(t: dict) -> list[ParamSpec]:
     def f(key, label, cat, unit, lo, hi, step, effect, advanced=False):
         return ParamSpec(key=key, label=label, category=cat, type="float", unit=unit,
@@ -97,12 +102,19 @@ class LigatureComponent(Component):
         m = self.ref_params()
         if not m:
             return []
+        import math
+
         from . import profiles
         seat0, seat1 = profiles.ligature_seat_range(m)
         return [
             ("ボディ径（リガチャー座）", f"φ{m['body_dia']:.1f} mm"),
+            ("座での外形径", f"φ{profiles.outer_radius(m, (seat0 + seat1) / 2.0) * 2.0:.2f} mm"),
             ("リガチャー座の範囲", f"{seat0:.1f}〜{seat1:.1f} mm"),
-            ("テーブル面 Y", f"{profiles.table_y(m):.1f} mm"),
+            # テーブルは傾斜平面なので 1 点では表せない。座の前端〜後端で示す。
+            ("テーブル面 Y（座の前端→後端）",
+             f"{profiles.table_plane_y(m, seat0):.1f} → "
+             f"{profiles.table_plane_y(m, seat1):.1f} mm"),
+            ("テーブル傾斜", f"{math.degrees(profiles.table_angle(m)):.2f}°"),
             ("想定リード踵厚", f"{self.reed_thickness():.2f} mm"),
         ]
 
@@ -151,23 +163,26 @@ class LigatureComponent(Component):
 
     def _add_plate(self, part, m: dict, p: dict, rt: float,
                    z0: float, z1: float):
-        from build123d import Pos, Solid
-
         kind = p.get("plate_type", "rail")
         if kind == "none":
             return part
         gap = p["clearance"]                     # 平坦部とリード面の隙間
         if gap <= 1e-6:
             return part
-        y0 = lp.reed_face_y(m, p, rt) - gap      # 内周の平坦部
         hw = lp.flat_half_width(m, p, rt)
         if kind == "plain":
             spans = [(-hw * 0.92, hw * 1.84)]
         else:                                    # rail: 両脇2本のリブ
             rib = min(2.0, hw * 0.4)
             spans = [(-hw * 0.80, rib), (hw * 0.80 - rib, rib)]
+        # プレートはタブ底面とリード面の間を埋める。どちらもテーブルと同じ 4.18° で
+        # 傾いているので、角柱ではなく前後端の矩形をロフトした**平行四辺形の柱**になる。
+        # 角柱のままだと後端で 1.3mm ぶんリード面へ食い込む。
         for x0, w in spans:
-            part = part + (Pos(x0, y0, z0) * Solid.make_box(w, gap, z1 - z0))
+            part = part + loft_sections([
+                {"z": z, "pts": _rect_pts(
+                    x0, w, lp.reed_face_y(m, p, rt, z) - gap, gap)}
+                for z in (z0, z1)])
         return part
 
     # ------------------------------------------------------------ シミュレーション
@@ -199,11 +214,12 @@ class LigatureComponent(Component):
         if lp.flat_half_width(m, p, rt) < lp.requested_tab_half_width(m, p) - 0.01:
             return {"title": "マウスピース適合", "big": None, "status": "warn",
                     "rows": rows,
-                    "advice": f"マウスピース外形に対してリードが幅広く、収納幅が "
+                    "advice": f"マウスピースの外形径に対してリードが幅広く、収納幅が "
                               f"{lp.flat_half_width(m, p, rt) * 2.0:.1f}mm に切り詰め"
-                              f"られています。リードが入りません。ボディ径の大きい"
-                              f"マウスピースを参照するか、はめあい隙間を減らして"
-                              f"ください。"}
+                              f"られています。リードが入りません。タブは外形の外へ"
+                              f"張り出せますが、外形径そのものは超えられません。"
+                              f"ボディ径の大きいマウスピースを参照するか、はめあい"
+                              f"隙間を減らしてください。"}
         if z1 - z0 < p["band_width"] - 0.05:
             return {"title": "マウスピース適合", "big": None, "status": "warn",
                     "rows": rows,
