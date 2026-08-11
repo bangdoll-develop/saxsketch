@@ -3,6 +3,7 @@ import {
   api, type ExportResult, type GoalSeekResult, type InstrumentSummary,
   type ParamSpec, type Tier2,
 } from "../api";
+import { useCapabilities, usePathPicker } from "../pathPicker";
 
 export function Backdrop({ children, onClose }: {
   children: React.ReactNode; onClose?: () => void;
@@ -26,6 +27,7 @@ export function NewProjectDialog({ onCreated, onClose, allowClose }: {
   const [componentId, setComponentId] = useState("mouthpiece");
   const [recent, setRecent] = useState<string[]>([]);
   const [err, setErr] = useState("");
+  const pickPath = usePathPicker();
 
   useEffect(() => {
     api.instruments().then(setInstruments).catch(() => setErr("サーバに接続できません"));
@@ -48,7 +50,7 @@ export function NewProjectDialog({ onCreated, onClose, allowClose }: {
   };
 
   const browseOpen = async () => {
-    const { path } = await api.dialog("open");
+    const path = await pickPath("open");
     if (path) await openPath(path);
   };
 
@@ -196,9 +198,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ExportResult | null>(null);
   const [err, setErr] = useState("");
+  const pickPath = usePathPicker();
+  const caps = useCapabilities();
 
   const browse = async () => {
-    const { path } = await api.dialog("dir");
+    const path = await pickPath("dir", outDir);
     if (path) setOutDir(path);
   };
 
@@ -229,7 +233,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       <div className="drow">
         <label>出力先</label>
         <input type="text" style={{ flex: 1 }} value={outDir}
-               placeholder="（既定: ドキュメント\SaxSketch）"
+               placeholder={caps ? `（既定: ${caps.export_root}）` : "（既定の場所）"}
                onChange={(e) => setOutDir(e.target.value)} />
         <button onClick={browse}>参照…</button>
       </div>
@@ -286,6 +290,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [tools, setTools] = useState<Record<string, string>>({ freecad: "", slicer: "" });
   const [exportRoot, setExportRoot] = useState("");
+  const pickPath = usePathPicker();
+  const caps = useCapabilities();
 
   useEffect(() => {
     api.settings().then((s) => {
@@ -318,9 +324,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       <div className="drow">
         <label>既定の出力先</label>
         <input type="text" style={{ flex: 1 }} value={exportRoot}
+               placeholder={caps ? `（自動: ${caps.export_root}）` : "（自動）"}
                onChange={(e) => setExportRoot(e.target.value)} />
+        <button onClick={async () => {
+          const p = await pickPath("dir", exportRoot || caps?.export_root || "");
+          if (p) setExportRoot(p);
+        }}>参照…</button>
       </div>
       <div className="note">
+        既定の出力先は空にしておくと環境から自動で決まります
+        （WSL で動かしている場合は Windows 側のドキュメントフォルダ）。
         PrusaSlicer / OrcaSlicer / Bambu Studio 等、STLを開けるスライサーを登録できます。
         音響シミュレーション（OpenWind）統合は Phase 2 で追加予定です。
       </div>

@@ -5,6 +5,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -13,19 +14,75 @@ from saxsketch.core.project import Project
 from saxsketch.core.registry import get_registry
 from saxsketch.core.schema import ParamSet
 
-SETTINGS_DIR = Path.home() / ".saxsketch"
-SETTINGS_FILE = SETTINGS_DIR / "settings.json"
-DEFAULT_EXPORT_ROOT = Path.home() / "Documents" / "SaxSketch"
+from .hostenv import IS_WSL, windows_documents
+
+#: 設定ファイルの版。**上げるのは移行が要るときだけ。**
+#: 2 = 出力先を「環境から導く」に変えた版（下の `_migrate_export_root`）。
+SETTINGS_VERSION = 2
+
+#: 旧バージョンが既定として書き込んでいた出力先。移行判定にだけ使う。
+_LEGACY_EXPORT_ROOT = Path.home() / "Documents" / "SaxSketch"
 
 DEFAULT_SETTINGS = {
+    "settings_version": SETTINGS_VERSION,
     "external_tools": {
         "freecad": "",
         "slicer": "",
         "openwind_note": "Phase 2 で統合予定",
     },
     "recent_projects": [],
-    "export_root": str(DEFAULT_EXPORT_ROOT),
+    # 空 = 未設定。既定は `default_export_root()` がその都度導く。ここに値を
+    # 焼き付けると、環境（WSL / ネイティブ）が変わっても古い場所を指し続ける。
+    "export_root": "",
 }
+
+
+def settings_dir() -> Path:
+    """設定の置き場所。`SAXSKETCH_HOME` で差し替えられる。
+
+    差し替え口が要るのは**テストのため**。以前は実ユーザーの
+    `~/.saxsketch/settings.json` を直接書き換えていて、「最近使ったプロジェクト」が
+    pytest の一時ディレクトリ 10 件で埋まっていた（実際に起きた）。
+    """
+    override = os.environ.get("SAXSKETCH_HOME")
+    return Path(override) if override else Path.home() / ".saxsketch"
+
+
+def settings_file() -> Path:
+    return settings_dir() / "settings.json"
+
+
+def default_export_root() -> Path:
+    """エクスポートの既定の出力先。
+
+    WSL では **Windows 側の**ドキュメントを使う。サーバは Linux で動いているが、
+    出来上がった STL や入稿 ZIP を掴むのは Windows のエクスプローラだから、
+    `~/Documents` に置くと利用者からはほぼ辿れない場所に消える。
+    """
+    docs = windows_documents() if IS_WSL else None
+    return (docs or Path.home() / "Documents") / "SaxSketch"
+
+
+def _migrate_export_root(value: str) -> str:
+    """旧版が既定として書き込んだ出力先を「未設定」に戻す（版 1 → 2 で一度だけ）。
+
+    旧既定は Linux 側の `~/Documents/SaxSketch`。WSL で動かすと Windows の
+    エクスプローラからほぼ辿れない場所で、しかも**利用者が選んだのではなく
+    `DEFAULT_SETTINGS` が勝手に書いた値**なので捨てて構わない。
+
+    判定を「実在しないこと」にしてはいけない —— そのフォルダは書き出した結果
+    実在するのが普通で、条件がほぼ成立しない。かといって値の一致だけで毎回
+    消すと、**同じ場所を自分で選び直した人の設定が二度と保存できない**。
+    だから一致で判定し、**版で一度きり**にする。保存時に版が刻まれる。
+    """
+    if IS_WSL and value and Path(value) == _LEGACY_EXPORT_ROOT:
+        return ""
+    return value
+
+
+def _existing(paths) -> list[str]:
+    """実在するパスだけ残す。"""
+    return [p for p in paths if p and Path(p).exists()]
 
 
 class AppState:
@@ -47,23 +104,35 @@ class AppState:
     # ---------------------------------------------------------- 設定
 
     def _load_settings(self) -> dict:
-        if SETTINGS_FILE.exists():
-            try:
-                loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-                merged = dict(DEFAULT_SETTINGS)
-                merged.update(loaded)
-                return merged
-            except Exception:
-                pass
-        return dict(DEFAULT_SETTINGS)
+        loaded: dict = {}
+        path = settings_file()
+        if path.exists():
+            with contextlib.suppress(Exception):
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+        merged = dict(DEFAULT_SETTINGS)
+        merged.update(loaded)
+        # 消えたプロジェクトは読み込みの時点で落とす。`/api/recent` も同じ条件で
+        # 濾しているが、保存側が素通しだと一度混ざったゴミが永久に残る。
+        merged["recent_projects"] = _existing(merged.get("recent_projects", []))
+        # 版は **loaded** で見る。merged は既定で埋まっているので判定できない。
+        if int(loaded.get("settings_version", 1)) < SETTINGS_VERSION:
+            merged["export_root"] = _migrate_export_root(merged.get("export_root", ""))
+        merged["settings_version"] = SETTINGS_VERSION
+        return merged
 
     def save_settings(self) -> None:
-        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(
+        settings_dir().mkdir(parents=True, exist_ok=True)
+        settings_file().write_text(
             json.dumps(self.settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def export_root(self) -> Path:
+        """エクスポートの出力先。設定が空なら環境から導く。"""
+        value = str(self.settings.get("export_root") or "").strip()
+        return Path(value) if value else default_export_root()
+
     def push_recent(self, path: str) -> None:
-        recent = [p for p in self.settings.get("recent_projects", []) if p != path]
+        recent = [p for p in _existing(self.settings.get("recent_projects", []))
+                  if p != path]
         recent.insert(0, path)
         self.settings["recent_projects"] = recent[:10]
         self.save_settings()

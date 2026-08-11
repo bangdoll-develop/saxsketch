@@ -3,6 +3,7 @@ import {
   api, type ExternalLoad, type ImportAnalysis, type ManualEdit, type ParamEstimate,
 } from "../api";
 import { Backdrop } from "./Dialogs";
+import { usePathPicker } from "../pathPicker";
 
 const CONF_LABEL: Record<string, string> = { high: "高", med: "中", low: "低" };
 
@@ -120,6 +121,7 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
   const [freezeDir, setFreezeDir] = useState<string | null>(null);
   const [ext, setExt] = useState<ExternalLoad | null>(null);
   const [extPath, setExtPath] = useState<string | null>(null);
+  const pickPath = usePathPicker();
 
   const me = manualEdit;
   // 出力先が POSIX（WSL: /home/...）か Windows（C:\...）かで区切りを選ぶ。
@@ -158,7 +160,7 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
 
   const importModel = async () => {
     setErr(""); setReport(null);
-    const { path } = await api.dialog("open_model", freezeDir ?? me.frozen?.export_dir ?? "");
+    const path = await pickPath("open_model", freezeDir ?? me.frozen?.export_dir ?? "");
     if (!path) return;
     setBusy("解析中…（形状比較とパラメータ逆算。十数秒かかります）");
     try { setReport(await api.manualImport(path)); }
@@ -174,7 +176,7 @@ export function ManualEditDialog({ manualEdit, onChanged, onClose }: {
   // 外部（市販完成品など）モデルの読み込み。凍結不要・差分/逆算なし。
   const loadExternal = async () => {
     setErr(""); setExt(null); setExtPath(null);
-    const { path } = await api.dialog("open_model", "");
+    const path = await pickPath("open_model", "");
     if (!path) return;
     setBusy("外部モデルを読み込み中…（整列と外形採寸。十数秒かかります）");
     try {

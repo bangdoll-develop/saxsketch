@@ -4,6 +4,7 @@ import {
   type SurveyState,
 } from "../api";
 import { Backdrop } from "./Dialogs";
+import { usePathPicker } from "../pathPicker";
 
 const CONF_LABEL: Record<string, string> = { high: "高", med: "中", low: "低" };
 
@@ -74,6 +75,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
   const [note, setNote] = useState(survey.note);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const pickPath = usePathPicker();
   const [measure, setMeasure] = useState<SurveyMeasure | null>(null);
 
   const setInput = (k: string, v: string) =>
@@ -93,7 +95,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
 
   const measureFromModel = async () => {
     setErr("");
-    const { path } = await api.dialog("open_model", "");
+    const path = await pickPath("open_model", "");
     if (!path) return;
     setBusy("3Dモデルを測定中…（整列とレイキャスト。十数秒かかります）");
     try {
