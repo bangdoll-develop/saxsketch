@@ -91,9 +91,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .simcard h3 { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
 .simcard .big { font-size: 20px; font-weight: 700; }
 .simcard .ok { color: var(--accent2); }
-.simcard .sharp, .simcard .flat, .simcard .warn { color: var(--warn); }
-.simcard .bad { color: #f2708a; }
+/* tight = 合う挿し込み量が実用域の端から 2mm 以内 */
+.simcard .tight, .simcard .warn { color: var(--warn); }
+/* unreachable = 実用域の外。チューニングでは埋められない */
+.simcard .unreachable, .simcard .bad { color: #f2708a; }
 .simcard .advice { color: var(--muted); font-size: 11.5px; line-height: 1.6; margin-top: 6px; }
+/* 大きい数字がどの条件での値かの但し書き。数字のすぐ下に置く。 */
+.simcard .hint { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 2px 0 6px; }
 .simcard table { width: 100%; font-size: 12px; border-collapse: collapse; }
 .simcard td { padding: 2px 4px; }
 .simcard td.num { text-align: right; font-variant-numeric: tabular-nums; }

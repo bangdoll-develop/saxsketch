@@ -192,7 +192,12 @@ class ParamUpdate(BaseModel):
 @app.put("/api/project/params")
 def project_params(req: ParamUpdate):
     _require_project()
-    applied = STATE.apply_params(req.params)
+    try:
+        applied = STATE.apply_params(req.params)
+    except ValueError as e:
+        # 値の組が形状として成立しない。前の値のまま据え置かれているので、
+        # フロントは理由を出してスライダーを戻すだけでよい。
+        raise HTTPException(status_code=400, detail=str(e))
     return {"params": applied, "simulation": STATE.simulate(),
             "stale": STATE.is_stale()}
 

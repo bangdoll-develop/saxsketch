@@ -211,13 +211,24 @@ def _pchip(pts: list[tuple[float, float]], x: float) -> float:
 
 # ---------------------------------------------------------------- 軸方向のランドマーク
 
-#: シャンク肩（最大径→シャンク径）の長さ。実測 11mm / heel_z 79mm。
+#: シャンク肩（最大径→シャンク径）の長さの既定比。テナー実測 11mm / heel_z 79mm。
+#:
+#: サイズ間で移る保証は無い。ソプラノ実測（全長 71.4 / 最大径がシャンク端から
+#: 14.3mm）はこの比と `shank_length` の組でしか表せず、比が 0.139 なら
+#: `shank_length` は 6.4mm、段差が 11mm なら比は 0.058 になる。どちらでも
+#: `heel_z` は 57.1mm で同じなので音程には効かない（実測 0.00 セント）が、
+#: 胴の外形と `table_cut_end_z` は変わる。テンプレートの `shoulder_ratio` で
+#: サイズごとに持てるようにしてある。
 _SHOULDER_RATIO = 0.139
 
 
 def shank_length(p: dict) -> float:
     """シャンク平行部の長さ。ロングシャンク/標準シャンクの作り分けに使う。"""
     return p.get("shank_length", 17.5)
+
+
+def shoulder_ratio(p: dict) -> float:
+    return p.get("shoulder_ratio", _SHOULDER_RATIO)
 
 
 def shank_radius(p: dict) -> float:
@@ -232,12 +243,12 @@ def heel_z(p: dict) -> float:
     """
     length = p["overall_length"]
     sh = shank_length(p)
-    heel = (length - sh) / (1.0 + _SHOULDER_RATIO)
+    heel = (length - sh) / (1.0 + shoulder_ratio(p))
     return max(heel, 0.30 * length)
 
 
 def shoulder_length(p: dict) -> float:
-    return _SHOULDER_RATIO * heel_z(p)
+    return shoulder_ratio(p) * heel_z(p)
 
 
 def shank_start_z(p: dict) -> float:
@@ -1343,6 +1354,51 @@ def chamber_clamped_at(p: dict, z: float) -> bool:
 _STATION_DZ = 1.6
 
 
+#: 窓が窓として成立する最小の長さ [mm]。
+#:
+#: `window_end_z` は既に `bore_start_z − 4.0` で頭打ちにしてあるので、
+#: 「窓がボアに飲まれる」側は防いである。防いでいないのは**その頭打ちが
+#: 窓の始まりを追い越す**場合で、窓の長さが 0 以下になる。ステーションの
+#: 最小間隔 0.40mm を数枚は置ける値として 2.0mm を採る。既定の窓長は
+#: soprano 27.6 / alto 37.6 / tenor 41.5mm で、下限まで一桁ある。
+_MIN_WINDOW_SPAN_MM = 2.0
+
+
+def cavity_layout_error(p: dict) -> str | None:
+    """空洞の z 配置が成立しないときに理由を返す。成立していれば `None`。
+
+    空洞は **窓 → チェンバー → スロート → ボア** の順に並ぶ。この並びは
+    `overall_length` / `bore_length` / `window_length` の 3 つが決めていて、
+    **どれか 1 つのレンジでは表せない**。`ParamSpec` はパラメータを 1 本ずつしか
+    見ないので、3 つとも各自のレンジ内なのに配置が潰れる組合せが作れる ——
+    実際 `overall_length` を下限 60.0、`bore_length` を上限 60.0 にすると
+    `bore_start_z = 0` で、窓が始まる前にボアが始まる。**UI の 2 本のスライダから
+    到達できる。**
+
+    潰れたまま進むと 2 段階で壊れる:
+
+    - `window_end_z <= window_start_z`: `window_end_z` の `zb − 4.0` 側の頭打ちが
+      窓の始まりを追い越し、**窓の無い空洞**ができる。ステーションは生成できて
+      しまうので異常が出ない（テナーで `bore_start_z` を 1.0mm まで詰めると
+      ステーション 2 枚・実効容積 19.18cc という数字を平然と返す）。
+    - `bore_start_z < window_start_z`: 刻む区間そのものが空になり、
+      `_station_zs` が `IndexError: list index out of range` で落ちる。
+
+    後者だけ直すと前者が残るので、**成立条件のほうを 1 箇所に書いて弾く**。
+    """
+    z0, z_we, zb = window_start_z(p), window_end_z(p), bore_start_z(p)
+    if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
+        return None
+    return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
+            f"窓が z {z0:.2f}→{z_we:.2f}mm ＝ 長さ {z_we - z0:+.2f}mm しか残らず、"
+            f"最低 {_MIN_WINDOW_SPAN_MM:.1f}mm 要ります。"
+            f"ボアの始まり（全長 {p['overall_length']:.1f} − ボア長 "
+            f"{p['bore_length']:.1f} ＝ {zb:.2f}mm）が手前すぎるためで、"
+            f"ボア長を短く / 全長を長く すれば直ります"
+            f"（ウィンドウ長 {p['window_length']:.1f}mm はこの場合効きません —— "
+            f"窓の後端は {zb:.2f} − 4.0 で頭打ちになっています）。")
+
+
 def _station_zs(p: dict) -> list[float]:
     """空洞ステーションの z 列（ティップ→ボア）。
 
@@ -1351,6 +1407,11 @@ def _station_zs(p: dict) -> list[float]:
       - 窓の後端付近: 実物は床がほぼ垂直に立ち上がる（窓のバックウォール）
     ここが疎だとルールドロフトが直線の楔になり、実物には無い折れ面が出る。
     """
+    # 刻む前に配置そのものを確かめる。潰れていると下の `out[0]` が IndexError に
+    # なるが、その手前に「落ちないが嘘の分解を返す」帯があるので理由ごと弾く。
+    bad = cavity_layout_error(p)
+    if bad:
+        raise ValueError(bad)
     z0 = window_start_z(p)
     zb = bore_start_z(p)
     z_we = window_end_z(p)
@@ -1770,6 +1831,7 @@ def param_regions(p: dict) -> dict:
         "body_dia":        r(*ligature_seat_range(p), "all", "ボディ（リガチャー座）"),
         "shank_dia":       r(heel, length, "all", "シャンク"),
         "shank_length":    r(length - shank_length(p), length, "all", "シャンク平行部"),
+        "shoulder_ratio":  r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
         "overall_length":  r(0.0, length, "all", "全体"),
         "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
     }
@@ -2017,7 +2079,8 @@ def baffle_warnings(p: dict) -> list[str]:
 
 #: `p` だけで決まるスカラ／タプル。断面 1 枚で数千回ずつ呼ばれる。
 _PARAM_ONLY = (
-    "shank_length", "shank_radius", "heel_z", "shoulder_length", "shank_start_z",
+    "shank_length", "shoulder_ratio", "shank_radius", "heel_z", "shoulder_length",
+    "shank_start_z",
     "bore_radius", "bore_start_z", "ligature_seat_range",
     "tip_chamfer_depth", "tip_chamfer_len",
     "table_angle", "table_y", "table_cut_end_z", "facing_cut_z_range",

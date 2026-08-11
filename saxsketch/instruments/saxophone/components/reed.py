@@ -256,8 +256,9 @@ class ReedComponent(Component):
 
     def bom(self, params: dict) -> list[dict]:
         size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]
-        std_len = self.size_info.get("reed_std_length_mm")
-        note = f"口に触れる部品。食品接触適合材料を使用のこと（規格長 {std_len}mm）"
+        # 規格長は 1 点ではない（同じソプラノ用でケーン 59.1 / 樹脂 62.0 の実測差）。
+        span = reference_check.reed_length_span(self.size_info)
+        note = f"口に触れる部品。食品接触適合材料を使用のこと（規格長 {span}mm）"
         return [
             {"type": "3Dプリント", "name": f"リード（{size_label}）", "qty": 1,
              "material": reed_model.material_label(params["material"]),

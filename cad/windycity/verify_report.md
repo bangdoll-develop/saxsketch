@@ -85,7 +85,7 @@ STEP 出力のときだけ使う（`build()` は対話用に多角形のまま�
 |---|---|---|---|---|
 | tenor | 29024 | 1 | True | True |
 | alto | 21909 | 1 | True | True |
-| soprano | 15588 | 1 | True | True |
+| soprano | 12970 | 1 | True | True |
 
 ## 断面法則の連続性（診断・合否なし）
 

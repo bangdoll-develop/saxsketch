@@ -53,52 +53,174 @@ def test_missing_cone_derived_not_constant():
     assert ccs[0] < ccs[1] < ccs[2]
 
 
-# 実測した残差 [cent]。3 サイズとも大きく flat 側に外れる。
+# 実測した残差 [cent]。Tier1 = 組み立て共鳴管の第1共鳴を伝達行列法で解いた値
+# （`openwind_bridge.first_resonance_cents`、TMM 固定）。
 #
-# 直前の値は {-1.0, -0.5, +53.9} で、ソプラノとアルトは「良好」に見えていた。
-# それが崩れたのは Stage B.2 で descriptor のネック寸法を実測に置き換えたから。
-# 目標体積は `cc ∝ r0³`（r0 = ネック小端半径）でネック内径に直結していて、
-# 旧値は 3 サイズとも過大だった（テナー 15.4 → 実測 13.1mm）。目標が縮んだので
-# 残差が flat 側へ寄り、テナーは sharp から flat へ符号ごと反転した。
+# 直前の値は {-320.4, -73.8, -81.2} で、Tier2 と 4 倍食い違っていた。Stage B は
+# それを「Tier1 の校正定数が怪しい」と記録して閉じたが、**食い違いの主因は
+# 物差しの側にあった**。Stage E で 2 つ直した:
 #
-# **形状の疑いは晴れている。** テナーは実物 WindyCity の実測形状 ＋ 実物ネックの
-# 実測寸法で、入力に推定値が 1 つも残っていない。実際に演奏で成立している組に
-# 対して -81 セントと言う以上、外しているのは Tier1 のモデルの側。
+# 1. 音速の食い違い。ジオメトリの全長を `C_SOUND = 343.0`（20℃相当）で作りながら、
+#    OpenWind へは `temperature=25.0`（音速 347.13）を渡していた。同じジオメトリを
+#    2 エンジンで解くと 23.9 / 24.7 / 26.0 セント違い、うち 20.7 は音速比そのもの。
+# 2. 延長円錐が長すぎた。`l_ext = c/(2·f1) − x0` は**開口端の放射補正がゼロの
+#    理想円錐**の式。ソルバは放射を含むので、**マウスピースを外して理想円錐だけを
+#    鳴らしても -52.3 / -48.2 / -44.5 セント**低かった。報告していた残差はほとんど
+#    これで、形状の話ではなかった。いまは同じソルバで理想円錐が f1 に鳴る長さを
+#    求めている（`_calibrate_extension`、実測で 0.02〜0.03 セントに収束）。
 #
-# **ネックのテーパも原因ではない**（Stage B.4 で掃引して除外した）。テナー大端内径
-# 26.0mm の実測から θ = atan(6.45/L) を振ると、実在するネック長 200〜280mm で
-# 半頂角は 1.32〜1.85° に収まり文献値 1.52° を挟む。残差は -152〜-38 セントで
-# 動くが 0 を跨がない（跨ぐには L = 322mm が要る）。
+# 直した結果、**alto と tenor のマウスピースは欠損円錐の代替として ±1 セントで
+# 成立している**。実物 WindyCity の実測形状 ＋ 実測ネックという、推定値が 1 つも
+# 残っていない組が、正しく「合っている」と出るようになった。
 #
-# **同じ形状で Tier2 は -23.2 セント（TIER2_RESIDUAL_CENTS）。4 倍食い違う。**
-# Tier2 はインピーダンス計算、Tier1 は一行の経験則なので、残る容疑は Tier1 の
-# 校正定数 `CENTS_PER_VOLUME_RATIO = 250` と `REED_EQUIVALENT_CC = 1.0`。
-# どちらも出所の無い経験値で、検証されたことがない。
+# 容積の一行規則を捨てた理由もここにある。テナーの実効容積は欠損円錐より +23%
+# あるのに音程は +0.3 セント。マウスピースが**代替する円錐より 161mm 短い**
+# （85.5mm vs 246.8mm）ので、太いぶんと短いぶんが相殺する。容積 1 個からは出せない。
 #
-# **係数は逆算しない。** 250 → 約 69 にすればテナーは Tier2 に一致するが、それは
-# 検証したいモデルから定数を引き出す作業で、descriptor 自身が禁じている
-# （「無い箇所を実測に合わせて逆算すると、どの量が間違っていたのか分からなくなる」）。
-# 合わせに行かず、食い違いを数字として残す。
+# Stage E はここに「ソプラノの -31 だけが本物のマウスピース由来の残差」と書いた。
+# **それも違った。** ソプラノの実物（ヤナギサワ、刻印 4）を measure すると全長は
+# 71.4mm で、テンプレートの 87.52mm（テナー実測 × リード規格長比 0.8141）より
+# 16.1mm 短かった。**その 0.8141 は 63.5/78.0 で、分子の 63.5 自体が違っていた**
+# （Stage G の実測でソプラノのリードは 59.1〜62.0）。正しい 59.1 で引き直しても
+# 0.7577 で実比 0.6642 には届かないので、「全長はリード規格長から決まる」という
+# 立て方そのものが成立しない。そして本質はもっと手前にあった:
 #
-# ソプラノの -320 は別問題。B.1 前でも実効 5.61cc / 目標 3.69cc（≒ -130 セント）で、
-# B.1 のリード規格長比スケール（体積 ×1.39）がそこから広げた。Tier2 でも -61.2 と
-# 3 サイズで最悪。寸法そのものの作り直しは次ステージ。
-TIER1_RESIDUAL_CENTS = {"soprano": -320.4, "alto": -73.8, "tenor": -81.2}
+# **`cork_depth` はマウスピースの寸法ではない。** 気温・リード・合わせる音程で
+# 演奏者が抜き差しするチューニングそのものである。それを固定した状態のセントを
+# 記録すると、寸法の誤差とチューニングの自由度が混ざる。-31 セントの正体は
+# 「全長 71.4mm の胴に 17.91mm という当て推量の挿し込みを固定していた」ことだった。
+#
+# なので Stage F からは**合う挿し込み量**を記録する（`IN_TUNE_INSERTION_MM`）。
+# セントは「テンプレートの `cork_depth` での値」として残すが、判定には使わない。
+TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.5, "tenor": 0.3}
+
+# 目標低音が鳴る挿し込み量 [mm]（`openwind_bridge.tuning_position`、TMM 固定）。
+# 3 サイズとも実用域（浅い側はコルクが噛む下限 3mm、深い側はネックのコルク帯長
+# 26/30/32mm）の内側に入る。チューニングで動かせる幅は
+# soprano −32.4〜+3.1 / alto −10.5〜+6.2 / tenor −7.5〜+3.2 セント。
+IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 19.2, "tenor": 20.9}
+
+# **その挿し込み量での**実効容積 / 欠損円錐（soprano +25 / alto +21 / tenor +26%）。
+# 0 ではないのがこの模型の要点で、マウスピースは代替する円錐より短いぶん太くて
+# 釣り合う。挿し込み量と容積比という独立な 2 つの指標が同じことを言っている。
+IN_TUNE_VOLUME_RATIO = (0.15, 0.30)
+
+
+def _tier1(tid: str) -> dict:
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import volume as ac_volume
+    p = _template_params("mouthpiece", tid)
+    si = _size_info(tid)
+    return ac_volume.tier1_report(profiles.cavity_volume_cc(p), si,
+                                  ob.tuning_position(p, si))
 
 
 def test_tier1_matches_recorded_residual():
-    """Tier1 の残差が記録値どおりであること。良好かどうかではなく、変化の検知が目的。"""
-    from saxsketch.acoustics import volume as ac_volume
+    """Tier1 の記録値どおりであること。良好かどうかではなく、変化の検知が目的。"""
     for tid in SIZES:
-        p = _template_params("mouthpiece", tid)
-        rep = ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))
+        rep = _tier1(tid)
+        assert rep["in_tune_mm"] == pytest.approx(
+            IN_TUNE_INSERTION_MM[tid], abs=0.5), (tid, rep)
         assert rep["deviation_cents"] == pytest.approx(
             TIER1_RESIDUAL_CENTS[tid], abs=2.0), (tid, rep)
-    # 3 サイズとも正直に flat を出す（以前はテナーだけ sharp だった）。
-    def status(tid):
+    # 3 サイズとも実用域の内側。容積の一行規則だった頃はどれも到達不能で、
+    # Stage E では soprano だけ flat だった。
+    assert [_tier1(t)["status"] for t in SIZES] == ["ok", "ok", "ok"]
+
+
+def test_in_tune_insertion_is_inside_the_usable_range():
+    """合う挿し込み量が実用域に入り、そこで容積比が 3 サイズとも同じ帯に入ること。
+
+    判定の主指標がセントから挿し込み量へ移ったことの不変条件。深い側の上限は
+    ボアではなく**ネックのコルク帯**で決まる（ソプラノはボア 38.3mm に対し
+    コルク 26.0mm）ので、`neck_cork_length_mm` を縮めると先に効くのはこちら。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    from saxsketch.acoustics import volume as ac_volume
+    lo_r, hi_r = IN_TUNE_VOLUME_RATIO
+    for tid in SIZES:
         p = _template_params("mouthpiece", tid)
-        return ac_volume.tier1_report(profiles.cavity_volume_cc(p), _size_info(tid))["status"]
-    assert [status(t) for t in SIZES] == ["flat", "flat", "flat"]
+        si = _size_info(tid)
+        t = ob.tuning_position(p, si)
+        lo, hi = t["range_mm"]
+        assert lo < t["in_tune_mm"] < hi, (tid, t)
+        assert t["reachable"], (tid, t)
+        # 感度は 3 サイズとも「押し込むと高くなる」。符号が反転したらモデルが壊れている。
+        assert t["cents_per_mm"] > 0.1, (tid, t)
+        target = ac_volume.missing_cone(si)["cc"]
+        eff = profiles.cavity_volume_cc({**p, "cork_depth": t["in_tune_mm"]})["effective_cc"]
+        assert lo_r < (eff - target) / target < hi_r, (tid, eff, target)
+
+
+def test_in_tune_insertion_is_a_reference_not_a_prediction():
+    """合う挿し込み量が「どの条件での値か」を必ず添えて出すこと。
+
+    ユーザーの指摘: 実演奏の挿し込み量に**典型値は存在しない**。マウスピース・
+    リード・リガチャー・気温・アンブシュアすべてに影響される。モデルが持って
+    いるのはこのうち気温（`TEMPERATURE_C`）と合わせる音程（`low_note_sounding_hz`）
+    の 2 つだけで、残り 3 つは入っていない。
+
+    条件を書かずに mm だけ出すと「あなたはここに挿すことになる」という主張に
+    読める。それは主張できないので、条件を消したらここで落ちる。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    for tid in SIZES:
+        si = _size_info(tid)
+        note = _tier1(tid)["note"]
+        assert f"{ob.TEMPERATURE_C:.0f}°C" in note, (tid, note)
+        assert si["low_note_label"] in note, (tid, note)
+        assert "予測ではない" in note, (tid, note)
+        # モデルに入っていない 3 つを名指しすること（入っている 2 つと区別が付く）
+        for absent in ("リード", "リガチャー", "アンブシュア"):
+            assert absent in note, (tid, absent)
+
+
+def test_fast_tuning_estimate_tracks_the_bracketed_solve():
+    """速い線形推定が厳密解と 0.2mm 以内で一致すること。
+
+    `simulate` の予算は 50ms（`cad/perf/bench_ui_latency.BUDGET`）で、`simulate`
+    自体が既に 20〜31ms 使っている。零点を包んで詰める厳密解は共鳴を 10 回前後
+    解き、テナーで 335ms かかって入らない。代わりに現在位置とその 1mm 奥から
+    局所の傾きを取って線形に推している。テンプレートの `cork_depth` は零点の
+    0.1〜1.1mm 手前にあるので常用状態では効く、というのがこのテストの主張。
+
+    **実用域の両端を結ぶ線形近似では代用できない。** そちらは零点を
+    テナーで 2.68mm 外す（帯域内の非線形が 1.20 セントある）。効くのは
+    「解の近くで測った局所の傾き」であって「線形だから」ではない。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        si = _size_info(tid)
+        fast = ob.tuning_position(p, si)
+        exact = ob.tuning_position(p, si, exact=True)
+        assert fast["method"] == "linear" and exact["method"] == "solved", tid
+        assert fast["in_tune_mm"] == pytest.approx(
+            exact["in_tune_mm"], abs=0.2), (tid, fast, exact)
+        # 厳密解のときだけ実用域の両端のセントが付く（速い経路は 2 回しか解かない）
+        assert fast["cents_at_range"] is None, tid
+        assert exact["cents_at_range"][0] < 0.0 < exact["cents_at_range"][1], tid
+
+
+def test_fast_tuning_never_cries_unreachable_on_its_own():
+    """速い推定が「実用域の外」と言いかけたら、必ず解き直してから答えること。
+
+    「この形状はチューニングでは合わせられない」は形状側を直せという強い主張で、
+    線形推定の粗さで言ってはいけない。実測で誤警報が出た組合せを固定してある:
+    テナーのボアを 46mm（既定 57.5）にして `cork_depth` を上限 32mm へ持っていくと、
+    推定は 1.61mm（実用域 3〜32 の外）だが厳密解は 5.05mm で**域内**。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    p = dict(_template_params("mouthpiece", "tenor"), bore_length=46.0, cork_depth=32.0)
+    si = _size_info("tenor")
+    t = ob.tuning_position(p, si)
+    assert t["method"] == "solved", t          # 域外に出かけたので解き直している
+    assert t["reachable"], t
+    assert t["in_tune_mm"] == pytest.approx(5.05, abs=0.5), t
+    # 本当に域外の形状は域外のまま返す（解き直しても救われない）
+    far = dict(p, bore_length=40.25)
+    tf = ob.tuning_position(far, si)
+    assert not tf["reachable"], tf
 
 
 def test_tier1_advice_admits_saturation():
@@ -122,17 +244,22 @@ def test_tier1_advice_admits_saturation():
     head = profiles.chamber_headroom_cc(p, cr_max)
     assert 0.0 < head < 1.0, head
 
-    # (b) 助言のロジック: 足りないときだけ「届かない」と言う。テンプレートの残差に
-    #     依存しないよう、目標に対して足りない容積をその場で作って渡す。
+    # (b) 助言のロジック: 足りないときだけ「届かない」と言う。テンプレートの数字に
+    #     依存しないよう、目標に足りない容積と「実用域の外」のチューニング結果を
+    #     その場で作って渡す。この助言が出るのは形状側を直すしかない状態のときだけで、
+    #     チューニングで埋まるなら容積を増やせと言う理由が無い。
     si = _size_info("tenor")
     target = ac_volume.missing_cone(si)["cc"]
-    short = {"total_cc": target,
-             "effective_cc": 0.7 * target - ac_volume.REED_EQUIVALENT_CC}
-    rep = ac_volume.tier1_report(short, si, headroom_cc=head)
-    assert rep["status"] == "sharp"
+    short = {"total_cc": target, "effective_cc": 0.7 * target}
+    far = {"in_tune_mm": 45.0, "method": "linear", "range_mm": [3.0, 32.0],
+           "cents_at_range": None, "cents_per_mm": 0.3, "current_mm": 22.0,
+           "cents_at_current": 40.0, "reachable": False, "headroom_mm": [42.0, -13.0]}
+    rep = ac_volume.tier1_report(short, si, far, headroom_cc=head)
+    assert rep["status"] == "unreachable"
     assert "届かない" in rep["advice"]
-    assert "届かない" not in ac_volume.tier1_report(short, si, headroom_cc=99.0)["advice"]
-    assert "届かない" not in ac_volume.tier1_report(short, si)["advice"]
+    assert "届かない" not in ac_volume.tier1_report(
+        short, si, far, headroom_cc=99.0)["advice"]
+    assert "届かない" not in ac_volume.tier1_report(short, si, far)["advice"]
 
 
 # ------------------------------------------------------- 外殻への封じ込め（Phase 3.6）
@@ -174,6 +301,115 @@ def test_cavity_inside_shell():
                 assert _breaches(p) == [], (tid, k, v, _breaches(p))
 
 
+def test_every_slider_end_still_builds_stations():
+    """どのスライダーを片端まで振ってもステーション生成が落ちないこと。
+
+    `_station_zs` は最後に `keep = [out[0]]` を書く。刻む区間が空だと
+    `IndexError: list index out of range` になり、理由がどこにも出ない。
+    上の `test_cavity_inside_shell` は 8 個のキーだけを見ているので、
+    ここは **`param_specs()` にある全部の数値パラメータ × min/max** を舐める。
+    """
+    for tid in SIZES:
+        comp = get_registry().get("saxophone").make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        for spec in comp.param_specs():
+            if spec.min is None or spec.max is None:
+                continue
+            for end, v in (("min", spec.min), ("max", spec.max)):
+                p = dict(base, **{spec.key: v})
+                assert profiles.cavity_layout_error(p) is None, (tid, spec.key, end)
+                assert profiles.cavity_stations(p), (tid, spec.key, end)
+
+
+def test_impossible_layout_says_why_instead_of_crashing():
+    """成立しないパラメータの**組**を、理由付きで弾くこと。
+
+    `ParamSpec` はパラメータを 1 本ずつしか見ないので、各自のレンジ内なのに
+    組み合わせると潰れる値の組が作れる。`overall_length` を下限 60.0、
+    `bore_length` を上限 60.0 にすると `bore_start_z = 0` で窓が残らず、
+    以前はここが `IndexError: list index out of range` だった。**UI の
+    2 本のスライダから到達できる**ので、理由の無い例外にしてはいけない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        # ボアが全長をほぼ食い切る＝窓の残らない組。`ParamSpec.validate` は
+        # 範囲外を黙ってクランプするだけなので、幾何の側で弾けないといけない。
+        bad = dict(base, bore_length=base["overall_length"] - 1.0)
+        why = profiles.cavity_layout_error(bad)
+        assert why and "窓" in why and "ボア長" in why, (tid, why)
+        # 部品からも同じ理由が取れる（サーバはこれを見て値を保存せずに弾く）
+        assert comp.params_error(bad) == why, tid
+        with pytest.raises(ValueError, match="成立しません"):
+            profiles.cavity_stations(bad)
+        # 既定は当然成立する。成立するのに弾いていたら誤検出。
+        assert comp.params_error(base) is None, tid
+
+
+def test_slider_ranges_alone_cannot_close_the_hole():
+    """レンジを実測基準にしても、2 本の組合せまでは塞がらないこと。
+
+    `overall_length` / `bore_length` のレンジをテンプレート比（±25% / −50〜+25%）に
+    したことで**単独のスライダーでは潰せなくなった**（以前はテナーの全長を下限
+    60.0 にするだけで潰れた）。それでもソプラノは下限の全長 × 上限のボア長で
+    まだ届く —— レンジは 1 本ずつしか効かないので、**組の検査は別に要る**。
+    このテストが落ちるようになったら `cavity_layout_error` の呼び出しを外して
+    よいか判断できる。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "soprano")
+    specs = {s.key: s for s in comp.param_specs()}
+    bad = dict(_template_params("mouthpiece", "soprano"),
+               overall_length=specs["overall_length"].min,
+               bore_length=specs["bore_length"].max)
+    assert profiles.cavity_layout_error(bad) is not None
+
+
+def test_impossible_params_are_not_saved():
+    """成立しない値は保存しないこと。保存するとセッションが戻せなくなる。
+
+    `simulate` も `build` も同じ空洞から作るので、潰れた値を保存すると以後の
+    描画が全部同じ理由で落ちる —— スライダーを戻すための画面ごと出せなくなる。
+    """
+    from saxsketch.server.state import STATE
+    # ソプラノを使うのは、レンジを実測基準にした後も**スライダーだけで**到達
+    # できる唯一のサイズだから（`test_slider_ranges_alone_cannot_close_the_hole`）。
+    STATE.new_project("saxophone", "soprano", "mouthpiece")
+    before = dict(STATE.paramset.values)
+    specs = {s.key: s for s in STATE.component.param_specs()}
+    with pytest.raises(ValueError, match="成立しません"):
+        STATE.apply_params({"overall_length": specs["overall_length"].min,
+                            "bore_length": specs["bore_length"].max})
+    assert dict(STATE.paramset.values) == before      # 1 つも動いていない
+    assert STATE.project.params == before             # 保存側も動いていない
+    STATE.simulate()                                   # まだ描ける
+
+
+def test_template_values_survive_the_schema_unclamped():
+    """テンプレートに書いた数値がスキーマ範囲で黙って書き換えられないこと。
+
+    `ParamSpec.validate` は範囲外を**例外にせずクランプする**（`core/schema.py`）。
+    つまりレンジの下限が実物より上にあると、テンプレートに実測値を書いても
+    モデルは別の形を作り、どこにも警告が出ない。Stage F でソプラノを実測へ
+    差し替えたとき、`shank_dia` 18.67（下限 16.0 は満たす）は通ったが、
+    軸を実測比で縮めた最初の版の 15.28 は 16.0 へ化けていた。数字が黙って
+    変わる経路は、実測を入れる作業そのものを無効にする。
+    """
+    from saxsketch.core.schema import ParamSet
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        for cid in ("mouthpiece", "reed", "ligature", "neck"):
+            comp = reg.make_component(cid, tid)
+            specs = {s.key: s for s in comp.param_specs()}
+            applied = ParamSet(comp.param_specs(), comp.template.get(cid, {})).values
+            for k, raw in comp.template.get(cid, {}).items():
+                if k not in specs or not isinstance(raw, (int, float)):
+                    continue
+                assert float(applied[k]) == pytest.approx(float(raw), abs=1e-9), (
+                    tid, cid, k, raw, applied[k],
+                    f"レンジ [{specs[k].min}, {specs[k].max}] にクランプされた")
+
+
 def test_beak_taper_spans_body():
     """ビークがティップからブレンド終端まで本体を切り続けること。
 
@@ -202,21 +438,46 @@ def test_beak_taper_spans_body():
         assert all(a < b for a, b in zip(ys, ys[1:])), (tid, ys)
 
 
+#: ソプラノで「テーブル平坦部の終端 < リード全長」になる長いリードの食み出し [mm]。
+#:
+#: Stage F はここに `SOPRANO_TABLE_SHORTFALL_MM = 3.5` を置き、原因の候補を 3 つ
+#: 並べていた。**候補 ①「`reed_std_length_mm = 63.5` が違う」が当たった。**
+#: 実測（2026-08-11）はバンドーレン 3番（ケーン）**59.1** / レジェール アメリカン
+#: カット（樹脂）**62.0** で、63.5 はどちらからも 1.5mm 以上外れていた。ちょうど
+#: 2.5 インチの丸い値で、サイズ別の出所が descriptor に無かったのがそのまま答え。
+#:
+#: 残るのは**銘柄差そのもの**。テーブル終端 60.0 はケーンの 59.1 を 0.9mm 上回るが、
+#: 樹脂の 62.0 には 2.0mm 足りない。ただし 60.0 は**未実測の `body_dia` 25.0 から
+#: 解いた値**なので、実物のテーブルがどこで終わるかを測ればこの数字ごと動く。
+#: 踵の数 mm はリガチャー座（〜57.1）の外側で密着させる必要が無いため、
+#: `reference_check` はここを「軽微」に留める。
+SOPRANO_LONG_REED_OVERHANG_MM = 2.0
+
+
 def test_table_reaches_reed_heel():
     """テーブル平面がリード踵より後ろまで届くこと。
 
     外形プロファイルのリガチャー座を動かしたとき、テーブル終端の比率リテラルを
     置き忘れてリードの後端 20mm が宙に浮いていた。比率は profiles が単独で持つ。
+
+    見るのは**域の下端**（そのサイズで最も短いリード）。ここに届かなければどの
+    リードを使っても踵が浮く。上端（最も長いリード）に届くかは別の話で、
+    `reference_check` が軽微として扱う（上の定数）。
     """
+    from saxsketch.instruments.saxophone.components import reference_check
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
-        heel = _size_info(tid)["reed_std_length_mm"]
+        heel, longest = reference_check.reed_length_range(_size_info(tid))
         assert profiles.table_cut_end_z(p) > heel, tid
         # 踵の直前はフェイシングの持ち上がりがゼロ＝素のテーブル平面そのもの。
         # 比較先は `table_y`（座中央の 1 点）ではなく **その z のテーブル平面**。
         # テーブルは軸に 4.18° 傾いているので単一の Y では表せない。
         assert profiles.cut_top_y(p, heel - 1.0) == pytest.approx(
             profiles.table_plane_y(p, heel - 1.0)), tid
+        if tid == "soprano":
+            # 記録値。実物のテーブル終端（または body_dia）を測ったら落ちて更新を強制する。
+            assert longest - profiles.table_cut_end_z(p) == pytest.approx(
+                SOPRANO_LONG_REED_OVERHANG_MM, abs=0.5), tid
 
 
 def test_bore_clears_corked_tenon():
@@ -266,12 +527,38 @@ def test_undersized_bore_is_rejected_not_excused():
     assert reference_check.mouthpiece_card(p2, si)["status"] != "bad"
 
 
+#: 「リガチャー座の後端（＝最大径）に踵が来る」を各サイズで測った量 [mm]。
+#: `seat1 − リード全長`。**これは設計則ではなく観測。** 記録値であって合格の証ではない。
+#:
+#: Stage B.1 はこれを設計則として使い、テナー実測 × リード規格長比で soprano/alto の
+#: 全長を作った。Stage F でソプラノの実物が 71.4mm（18% 短い）と分かって崩れ、
+#: Stage G でリード実測が入って**符号が反転する**ことがはっきりした:
+#:
+#:   - tenor  +1.0 … 座の後端が踵より 1.0mm 後ろ（実測マウスピース × 未実測リード）
+#:   - alto   +0.9 … 同上（どちらも未実測）
+#:   - soprano −2.0（ケーン 59.1）〜 −4.9（樹脂 62.0）… **踵が座の後端より後ろへ出る**
+#:
+#: マウスピースとリードの両方を実測してある唯一の組がソプラノで、そこで反転する。
+#: alto/tenor の +1mm は「実測 × 代表値」の一致なので設計則の証拠として弱い
+#: （descriptor の `reed_std_length_source`）。判定はこの等値では出さず、
+#: `reference_check` の 2 本（テーブル終端 vs 座の後端 / vs リード全長域）が持つ。
+SEAT_MINUS_REED_MM = {"soprano": (-4.9, -2.0), "alto": (0.93, 0.93), "tenor": (1.02, 1.02)}
+
+
 def test_ligature_seat_matches_reed_heel():
-    """全長はリード規格長から決まる。座の後端に踵が来ること。"""
+    """座の後端と踵の位置関係を記録する（判定はしない。上の定数を見ること）。"""
+    from saxsketch.instruments.saxophone.components import reference_check
     for tid in SIZES:
         p = _template_params("mouthpiece", tid)
         _, seat1 = profiles.ligature_seat_range(p)
-        assert seat1 == pytest.approx(_size_info(tid)["reed_std_length_mm"], abs=1.5)
+        reed_lo, reed_hi = reference_check.reed_length_range(_size_info(tid))
+        want_lo, want_hi = SEAT_MINUS_REED_MM[tid]
+        assert seat1 - reed_hi == pytest.approx(want_lo, abs=0.5), (tid, seat1)
+        assert seat1 - reed_lo == pytest.approx(want_hi, abs=0.5), (tid, seat1)
+    # ソプラノの座の後端は実測（最大径がシャンク端から 14.3mm）。ここが動いたら
+    # 実測を書き換えたということなので、テンプレート側を疑うこと。
+    assert profiles.ligature_seat_range(
+        _template_params("mouthpiece", "soprano"))[1] == pytest.approx(57.1, abs=0.5)
 
 
 def test_cavity_station_roles():
@@ -319,14 +606,28 @@ def test_cavity_station_roles():
 
 
 def test_reference_card_all_match():
-    """規格照合カードが3サイズ×2部品すべてで「一致」になること。"""
+    """規格照合カードが3サイズ×2部品すべてで「一致」になること。
+
+    ソプラノのマウスピースだけ「テーブル終端 / リード全長域」が軽微になる。
+    **これはカードが仕事をしている状態で、消してはいけない。** テーブル終端 60.0mm が
+    ケーン 59.1 は上回るが樹脂 62.0 に 2.0mm 足りないことを言っている
+    （`SOPRANO_LONG_REED_OVERHANG_MM`）。**乖離は 1 行も出ないこと**、軽微は
+    その 1 行に閉じていることまで確かめる。
+    """
     reg = get_registry().get("saxophone")
     for tid in SIZES:
         mp = reg.make_component("mouthpiece", tid)
         cards = mp.simulate({s.key: s.default for s in mp.param_specs()})["cards"]
         card = next(c for c in cards if "照合" in c["title"])
-        assert card["status"] == "ok", (tid, card["rows"])
+        assert not [r for r in card["rows"] if "乖離" in r[1]], (tid, card["rows"])
+        minor = [r for r in card["rows"] if "軽微" in r[1]]
+        if tid == "soprano":
+            assert len(minor) == 1 and "リード全長域" in minor[0][0], (tid, card["rows"])
+            assert card["status"] == "warn", (tid, card["rows"])
+        else:
+            assert not minor and card["status"] == "ok", (tid, card["rows"])
 
+        # リード側は 3 サイズとも一致（ソプラノのテンプレートは実測 59.1 に置いてある）
         reed = reg.make_component("reed", tid)
         reed.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
         cards = reed.simulate({s.key: s.default for s in reed.param_specs()})["cards"]
@@ -591,25 +892,57 @@ def test_reed_printability_flag(alto_reed):
 def test_reed_override_changes_sound(alto_reed):
     """リード実形状が物理モデル音に効いていること（Phase 3 の価値の核）。
 
-    リード共振を大きく変えると発振するレジスタが変わる。OpenWind 必須なので
-    WSL でのみ実行される。
+    **観測量を音高から音色へ移した。** 以前は「リード共振を変えるとレジスタが
+    変わる」として f0 が 5% 以上動くことを見ていたが、それは `_coarsen` が
+    共鳴管を非調和にしていた頃の挙動で、直すとリードの硬さに関わらず
+    **第1共鳴が鳴る**（それが正しい。ビーティングリードはリード共振よりずっと
+    低い管の共鳴に乗る）。実測 tip 0.30 → 137.5Hz / 0.55 → 137.7Hz で差は 0.15%。
+
+    効くのは音色のほう。同じ実測で倍音比（f0 の 1〜8 倍、基音で正規化）が
+
+      tip 0.30 (f_reed 1847Hz)  1.00 / 0.35 / 0.71 / 0.24 / 0.29 / 0.12 / ...
+      tip 0.55 (f_reed 2154Hz)  1.00 / 0.01 / 0.25 / 0.00 / 0.06 / 0.01 / ...
+
+    と大きく変わる（L1 差 1.42。硬いほど偶数倍音が落ちる）。
+
+    **duration は既定のまま。** 0.3s では両方ともほぼ正弦で L1 差 0.006 しか
+    出ない —— 音高は 0.36s で定まるが、音色はそれより遅れて立つ。
+    OpenWind 必須なので WSL でのみ実行される。
     """
     pytest.importorskip("openwind")
+    import io
+    import wave
+
+    import numpy as np
     from saxsketch.acoustics import openwind_bridge as ob
     from saxsketch.acoustics import reed_model
     comp, p = alto_reed
     m = comp.ref_params()
+    f1 = ob._first_peak_hz(ob.build_resonator(m, comp.size_info),
+                           0.6 * comp.size_info["low_note_sounding_hz"],
+                           1.7 * comp.size_info["low_note_sounding_hz"])
 
     def play(tip):
         pp = {**p, "material": "cane", "tip_thickness": tip}
         ov = reed_model.reed_override(reed_model.reed_properties(pp, m), pp)
-        _, meta = ob.synthesize(m, comp.size_info, "normal",
-                                duration=0.15, override=ov)
-        return meta["f0"]
+        wav, meta = ob.synthesize(m, comp.size_info, "normal", override=ov)
+        with wave.open(io.BytesIO(wav)) as w:
+            a = np.frombuffer(w.readframes(w.getnframes()),
+                              dtype="<i2").astype(float)
+        seg = a[int(0.6 * a.size):]
+        seg = seg - seg.mean()
+        spec = np.abs(np.fft.rfft(seg * np.hanning(seg.size)))
+        freqs = np.fft.rfftfreq(seg.size, 1.0 / ob.SIM_SR)
+        h = [float(spec[np.argmin(abs(freqs - k * meta["f0"]))]) for k in range(1, 9)]
+        return meta["f0"], ov["f_reed"], [x / max(h[0], 1e-12) for x in h]
 
-    soft, hard = play(0.30), play(0.55)
-    assert soft > 0 and hard > 0            # どちらも自励発振している
-    assert abs(hard - soft) / soft > 0.05   # レジスタ/音高が動いた
+    (f_soft, r_soft, h_soft), (f_hard, r_hard, h_hard) = play(0.30), play(0.55)
+    assert r_hard > r_soft * 1.1, (r_soft, r_hard)      # 硬い＝リード共振が高い
+    # どちらも自励発振し、**どちらも第1共鳴**で鳴っている
+    for f in (f_soft, f_hard):
+        assert f == pytest.approx(f1, rel=0.03), (f, f1)
+    # 音色は大きく違う（実測 1.42。半分を下回ったらリード形状が効いていない）
+    assert sum(abs(a - b) for a, b in zip(h_soft, h_hard)) > 0.5, (h_soft, h_hard)
 
 
 def test_reed_filed_cut_removes_material(alto_reed):
@@ -1355,10 +1688,18 @@ def test_openwind_first_peak_reasonable(alto):
 # 0.02Hz で確かめた真値 -61.5 / -26.3 / -22.3 との差は 0.3 / 1.2 / 0.9 セント。
 #
 # 主張を「20 セント以内に収まる」から「この値である」へ変えてある。閾値の緩和では
-# なく、TIER1_RESIDUAL_CENTS と同じ「変化の検知」に揃えた。3 サイズとも実物より
-# flat なのは事実として残り、Tier1 との 4 倍の食い違いも TIER1_RESIDUAL_CENTS の
-# コメントに書いてある。
-TIER2_RESIDUAL_CENTS = {"soprano": -61.2, "alto": -27.5, "tenor": -23.2}
+# なく、TIER1_RESIDUAL_CENTS と同じ「変化の検知」に揃えた。
+#
+# Stage E で 2 度目の取り直し。-61.2 / -27.5 / -23.2 には**物差し側の偏りが 2 つ**
+# 乗っていた（詳細は TIER1_RESIDUAL_CENTS のコメント）: ジオメトリとソルバの音速の
+# 食い違い（+20.7 セント）と、放射端補正を持たない延長円錐長（-44〜-52 セント）。
+# どちらもマウスピースの形状とは無関係な量。
+#
+# Stage F で 3 度目。soprano だけ動いた（-30.5 → -2.1）。形状ではなく実測が入った
+# ため: 全長 87.52（テナー実測 × リード規格長比 0.8141）→ **71.4（実測）**、
+# ボア長 46.81 → **38.3（実測）**、コーク挿入深さ 17.91（当て推量）→ 23.5
+# （目標音が鳴る挿し込み量）。alto/tenor は触っていないので動いていない。
+TIER2_RESIDUAL_CENTS = {"soprano": -2.1, "alto": 0.9, "tenor": 1.3}
 
 
 def test_resonator_extension_replaces_missing_cone():
@@ -1377,32 +1718,171 @@ def test_resonator_extension_replaces_missing_cone():
         si = _size_info(tid)
         geo = ob.build_resonator(p, si)
         cone = ac_volume.missing_cone(si)
-        l_total = ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
         x_cork = (p["overall_length"] - p["cork_depth"]) / 1000.0
-        assert geo[-1][0] == pytest.approx(
-            x_cork + l_total - cone["apex_distance_mm"] / 1000.0, abs=1e-4), tid
+        # 気柱はコーク線で終わり、そこから先が延長円錐
+        assert geo[-2][0] == pytest.approx(x_cork + ob.NECK_STEP, abs=1e-6), tid
         # 円錐の始端はネック小端内径。マウスピースのボアより細い
         r_neck = cone["throat_radius_mm"] / 1000.0
         assert geo[-2][1] == pytest.approx(r_neck, abs=1e-6), tid
         assert r_neck < profiles.bore_radius(p) / 1000.0, tid
+
+        # 延長円錐は naive な `c/(2·f1) − x0` より**短い**。差が開口端の放射補正で、
+        # 実測 soprano 25.4 / alto 35.2 / tenor 43.1mm。ここが 0 に戻ったら
+        # `_calibrate_extension` が効いていない（＝基準管が 45〜52 セント低い状態）。
+        naive = (ob.C_SOUND / (2.0 * si["low_note_sounding_hz"])
+                 - cone["apex_distance_mm"] / 1000.0)
+        assert 0.015 < naive - (geo[-1][0] - x_cork) < 0.060, tid
 
         res = ob.impedance(p, si)
         assert res["first_cents_vs_target"] == pytest.approx(
             TIER2_RESIDUAL_CENTS[tid], abs=3.0), (tid, res["first_note"])
 
 
+def test_ideal_cone_reference_sounds_the_target_note():
+    """マウスピースを理想の欠損円錐に戻した基準管が、実際に目標低音で鳴ること。
+
+    これが延長円錐の長さの**定義**になっている。以前は `l_ext = c/(2·f1) − x0` と
+    置いていたが、これは開口端の放射補正がゼロの理想円錐の式で、実際のソルバは
+    放射を含む。マウスピースが 1 本も刺さっていない基準管だけで
+    soprano -52.3 / alto -48.2 / tenor -44.5 セント低く、報告していた残差の
+    ほとんどがこれだった。
+
+    ここが 0 でないと、Tier1/Tier2 の残差が「マウスピースのせい」ではなくなる。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    for tid in SIZES:
+        si = _size_info(tid)
+        f1 = si["low_note_sounding_hz"]
+        for use_ow in (False, True):
+            if use_ow and not ob.HAS_OPENWIND:
+                continue
+            geo = ob.ideal_cone_geometry(si, use_openwind=use_ow)
+            f = ob._first_peak_hz(geo, 0.6 * f1, 1.7 * f1, use_openwind=use_ow)
+            assert 1200.0 * math.log2(f / f1) == pytest.approx(0.0, abs=0.5), (
+                tid, use_ow, f, f1)
+
+
+def test_tier1_and_tier2_agree():
+    """同じ形状で、速いエンジン（Tier1=TMM）と正確なエンジン（Tier2=OpenWind）の
+    第1共鳴が一致すること。
+
+    このテストは Stage E まで書けなかった。ジオメトリを音速 343 で組みながら
+    OpenWind を 25℃（347.13）で走らせていたので、**同じジオメトリなのに
+    23.9 / 24.7 / 26.0 セント**離れていた。音速を 1 箇所（`TEMPERATURE_C`）に
+    してから 1 セント以内に入る。
+
+    延長円錐の校正はエンジンごとに別々に走る（基準管が 0 セントになる長さ）ので、
+    一致すること自体は自明ではない —— 校正が固定するのは**理想円錐**で、実測形状の
+    マウスピースが刺さった管はどちらのエンジンも独立に解いている。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    if not ob.HAS_OPENWIND:
+        pytest.skip("OpenWind 未導入（両者が同じ TMM になり検証にならない）")
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        si = _size_info(tid)
+        tmm = ob.first_resonance_cents(p, si)
+        ow = ob.impedance(p, si)["first_cents_vs_target"]
+        assert ow == pytest.approx(tmm, abs=3.0), (tid, tmm, ow)
+
+
+def test_sound_speed_matches_openwind_physics():
+    """自前の `sound_speed()` が OpenWind の `Physics` と一致すること。
+
+    式を写してあるのは OpenWind 未導入の環境でも同じ音速を使うため。写し間違えると
+    ジオメトリの全長（`c/(2·f1)` 由来）とソルバがまた食い違う ——
+    343.0 と 347.13 の差 1.2% が 20.7 セントになったのが Stage E の出発点。
+    """
+    pytest.importorskip("openwind")
+    from openwind.continuous.physics import Physics
+    from saxsketch.acoustics import openwind_bridge as ob
+    for t in (0.0, 20.0, ob.TEMPERATURE_C, 37.0):
+        assert ob.sound_speed(t) == pytest.approx(float(Physics(t).c(0)), rel=1e-12)
+    assert ob.C_SOUND == pytest.approx(ob.sound_speed(ob.TEMPERATURE_C))
+
+
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
 
-def test_coarsen_keeps_ends_and_spacing(alto):
+def test_coarsen_keeps_the_bore_step(alto):
+    """間引いても**段差は残る**こと（零長の不連続として）。
+
+    以前ここは「最終セグメント以外は最小間隔 `SIM_MIN_DX` を満たす」と主張して
+    いた。**それがまさに間違っていた不変条件**で、その規則がマウスピースのボアから
+    ネック小端への段差（alto で 7.90 → 6.35mm、前の点の 0.5mm 後ろ）を捨てていた。
+    捨てると第1共鳴が −67 セントずれ、共鳴列が非調和になる
+    （`test_coarsen_preserves_the_resonance_ladder`）。
+    """
     from saxsketch.acoustics import openwind_bridge as ob
     comp, p = alto
     geom = ob.build_resonator(p, comp.goal_seek_size_info())
     co = ob._coarsen(geom)
     assert co[0] == list(geom[0]) and co[-1] == list(geom[-1])
     assert len(co) <= len(geom)
-    # 最終セグメント以外は最小間隔を満たす（末尾は両端保持のため例外）
-    gaps = [co[i + 1][0] - co[i][0] for i in range(len(co) - 2)]
+    # 段差はちょうど 1 本、零長で入っていること（零長でないと CFL が 2 倍痛む）
+    steps = [i for i in range(len(co) - 1) if co[i + 1][0] == co[i][0]]
+    assert len(steps) == 1, [(round(x, 5), round(r, 5)) for x, r in co]
+    i = steps[0]
+    assert co[i + 1][1] < co[i][1], co[i:i + 2]          # ボア → ネック小端は細る
+    # 段差以外は最小間隔を満たす（末尾は両端保持のため例外）
+    gaps = [co[k + 1][0] - co[k][0] for k in range(len(co) - 2) if k != i]
     assert all(g >= ob.SIM_MIN_DX for g in gaps)
+
+
+def test_coarsen_preserves_the_resonance_ladder(alto):
+    """間引いた管の共鳴列が生の管と一致すること。**H.1 の再発防止の本体。**
+
+    段差を落とすと共鳴列が引き伸ばされて非調和になり（alto で n3 が 3.006 →
+    3.162 ＝ 5% シャープ）、高次モードの Q が 10〜40 倍に膨らむ。その状態では
+    基音より上のレジームが安定できず、リードがモードを渡り歩く。音程が合って
+    いるかだけでは捕まらないので、**比**まで見る。
+
+    実測（3 サイズ、段差を残した場合の 生 → 間引き後）:
+      soprano 207.47 → 207.19 (−0.13%) / alto 138.69 → 138.58 (−0.08%)
+      tenor   103.92 → 103.79 (−0.13%)
+    """
+    pytest.importorskip("openwind")
+    import numpy as np
+    from openwind import ImpedanceComputation
+    from saxsketch.acoustics import openwind_bridge as ob
+    comp, p = alto
+    freqs = np.geomspace(60.0, 900.0, 3000)
+
+    def ladder(geo):
+        z = np.abs(np.asarray(ImpedanceComputation(
+            freqs, geo, temperature=ob.TEMPERATURE_C,
+            source_location="entrance").impedance))
+        y = 20.0 * np.log10(z / np.max(z) + 1e-12)
+        peaks = [i for i in range(1, len(y) - 1)
+                 if y[i] > y[i - 1] and y[i] > y[i + 1]][:3]
+        return [float(freqs[i]) for i in peaks]
+
+    geom = ob.build_resonator(p, comp.goal_seek_size_info())
+    raw, co = ladder(geom), ladder(ob._coarsen(geom))
+    assert co[0] == pytest.approx(raw[0], rel=0.005), (raw, co)
+    for k in (1, 2):
+        assert co[k] / co[0] == pytest.approx(raw[k] / raw[0], rel=0.01), (raw, co)
+
+
+def test_embouchures_share_the_blowing_ratio(alto):
+    """3 アンブシュアの吹奏比 γ が揃っていること（OpenWind 不要の純計算）。
+
+    以前は吹圧をプリセットごとの定数で持っていて、`pulsation` だけ書き換えて
+    `mass` / `section` を CLARINET のまま残していたので、静的ビーティング圧
+    `p_M = ω₀²·(M/S)·y₀` が ω₀² で動き、γ が **1.14 / 0.70 / 0.30** とばらけて
+    いた。γ>1 は静的変位が静止開口を超える領域。「締め具合」を選ばせている
+    つもりで、実際に選ばせていたのは吹きすぎ具合だった。
+    """
+    pytest.importorskip("openwind")
+    from saxsketch.acoustics import openwind_bridge as ob
+    comp, p = alto
+    for emb, f_base in ob.EMBOUCHURES.items():
+        _, mouth_pa = ob._reed_player(p, emb)
+        f_reed = f_base * (23.0 / p["facing_length"])
+        p_m = ob.beating_pressure(f_reed, 4e-4 * (p["tip_opening"] / 1.8))
+        assert mouth_pa / p_m == pytest.approx(ob.BLOWING_RATIO, rel=1e-9), emb
+    # 締めるほどリード共振が高い（名前と物理の向きが一致していること）
+    assert (ob.EMBOUCHURES["loose"] < ob.EMBOUCHURES["normal"]
+            < ob.EMBOUCHURES["tight"])
 
 
 def test_synthesize_returns_playable_wav(alto):
@@ -1417,11 +1897,29 @@ def test_synthesize_returns_playable_wav(alto):
     with wave.open(io.BytesIO(wav)) as w:
         assert w.getframerate() == ob.SIM_SR
         assert w.getnframes() > 0
-    assert meta["f0"] > 0
-    # 鳴った音はインピーダンス解析の共鳴ピークのいずれか（レジスタは問わない）。
-    # 短いシミュは FFT 分解能が粗いので許容は 8%。
-    peaks = [pk["freq"] for pk in ob.impedance(p, si)["peaks"]]
-    assert any(abs(meta["f0"] - f) / f < 0.08 for f in peaks), (meta["f0"], peaks)
+    # **鳴るのはこの管の第1共鳴。** Stage F ではこの主張を外していた（当時の
+    # 実測は loose 1220 / normal 951 / tight 133Hz と 3 通りばらけ、上位成分が
+    # 5 本あり、duration を 0.6→1.2s にすると支配成分が 950 → 1083Hz へ移って
+    # いた）。原因は `_coarsen` がボア → ネック小端の段差を落として共鳴列を
+    # 非調和にしていたことで、直すと 3 アンブシュアとも第1共鳴に落ち着く。
+    # 外していた主張が戻せる状態になったので戻す —— これが `_coarsen` の
+    # 退行に対する一番効く検査になる。
+    #
+    # 3 サイズ × 3 アンブシュアの実測（f0 / 第1共鳴、セント）:
+    #
+    #   alto     loose −13.6  normal  −7.3  tight  −4.8
+    #   tenor    loose  −0.4  normal  −2.1  tight  −2.1
+    #   soprano  loose  ****  normal −21.5  tight −11.4
+    #
+    # **9 通り中 8 通りが第1共鳴。soprano の loose だけ 67.8Hz ＝ f1 の 0.327 倍**
+    # （207.47/3 = 69.2 に近い）で、周期 3 倍化のレジームに落ちている。γ を
+    # 揃えても残るので `_coarsen` の話ではなく、リード共振（soprano loose は
+    # f_reed 2070Hz ＝ f1 の 10.0 倍）と非線形の組合せ。ここでは既定の
+    # alto/normal だけを検査し、soprano loose は既知として記録に留める。
+    f1 = ob._first_peak_hz(ob.build_resonator(p, si),
+                           0.6 * si["low_note_sounding_hz"],
+                           1.7 * si["low_note_sounding_hz"])
+    assert meta["f0"] == pytest.approx(f1, rel=0.03), (meta, f1)
 
 
 # ------------------------------------------------------------------ プロジェクトI/O

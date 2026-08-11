@@ -42,15 +42,31 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
   return (
     <div>
       <div className="simcard">
-        <h3>音程チェック（内容積 vs 欠損円錐）</h3>
+        {/* 主指標はセントではなく「合う挿し込み量」。コーク挿入深さは寸法ではなく
+            演奏者が抜き差しするチューニングそのものなので、固定した状態のセントを
+            前面に出すと寸法の誤差とチューニングの自由度が混ざる。
+            容積の行は判定の理由として並べてある（両者は一対一で動かない）。 */}
+        <h3>チューニング位置</h3>
         <div className={`big ${t1.status}`}>
-          {t1.deviation_cents > 0 ? "+" : ""}{t1.deviation_cents} セント
+          {t1.in_tune_mm.toFixed(1)} mm
           <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-            {t1.status === "ok" ? "良好" : t1.status === "sharp" ? "高め傾向" : "低め傾向"}
+            {t1.status === "ok" ? "実用域の内側" :
+             t1.status === "tight" ? "端に寄っている" : "実用域の外"}
           </span>
         </div>
+        {/* 基準条件での値であって「あなたが実際に挿す深さ」ではない。実際の位置は
+            リード・リガチャー・気温・アンブシュアで動き、後ろ 2 つはモデルに無い。
+            条件は advice の下の note に出ている。 */}
+        <div className="hint">基準条件（25°C・目標音）で合う位置。実演奏の位置は
+          リード・リガチャー・アンブシュアでも動く</div>
         <table>
           <tbody>
+            <tr><td>実用域（挿し込み）</td>
+                <td className="num">{t1.cork_range_mm[0]}〜{t1.cork_range_mm[1]} mm</td></tr>
+            <tr><td>感度（1mm 押し込んだときの第1共鳴）</td>
+                <td className="num">{t1.cents_per_mm > 0 ? "+" : ""}{t1.cents_per_mm} セント/mm</td></tr>
+            <tr><td>現在 {t1.current_mm} mm でのズレ</td>
+                <td className="num">{t1.deviation_cents > 0 ? "+" : ""}{t1.deviation_cents} セント</td></tr>
             <tr><td>実効内容積</td><td className="num">{t1.effective_cc} cc</td></tr>
             <tr><td>目標（欠損円錐）</td><td className="num">{t1.target_cc} cc</td></tr>
           </tbody>

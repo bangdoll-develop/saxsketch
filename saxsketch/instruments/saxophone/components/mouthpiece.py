@@ -102,7 +102,13 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- ボア ---
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
           "ネックコルクとの適合寸法。音程の基準に直結", advanced=True),
-        f("bore_length", "ボア長", "ボア", "mm", 18.0, 60.0, 1.0,
+        # レンジをテンプレート基準にするのは `bore_dia` と同じ理由に加えて、
+        # **絶対値の 18〜60 が 3 サイズ共通だと単独で形状を潰せる**ため。
+        # ボアの始まり = 全長 − ボア長 で、これが窓の手前へ来ると空洞が消える
+        # （`profiles.cavity_layout_error`）。テナー既定 57.5 に対し上限 60 は
+        # 全長 107.5 なら無害だが、全長側の下限 60 と組むと成立しない。
+        f("bore_length", "ボア長", "ボア", "mm",
+          round(0.5 * t["bore_length"]), round(1.25 * t["bore_length"]), 1.0,
           "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True),
         f("cork_depth", "コーク挿入深さ", "ボア", "mm", 12.0, 32.0, 1.0,
           "ネックの標準挿入量。音程チェックの基準位置"),
@@ -119,14 +125,26 @@ def _specs(t: dict) -> list[ParamSpec]:
           round(0.35 * t["body_dia"], 1), round(0.75 * t["body_dia"], 1), 0.5,
           "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
           "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨"),
-        f("body_dia", "ボディ径", "外形", "mm", 20.0, 34.0, 0.1,
+        # レンジの下限はソプラノ実測（全長 71.4 / シャンク径 15.3 / シャンク長 6.4）が
+        # 入るところまで下げてある。`ParamSpec.validate` は範囲外を**黙ってクランプ**
+        # するので、下限が実物より上にあるとテンプレートに書いた値が別物にすり替わる。
+        f("body_dia", "ボディ径", "外形", "mm", 18.0, 34.0, 0.1,
           "リガチャー適合寸法（最大径）", advanced=True),
-        f("shank_dia", "シャンク径", "外形", "mm", 16.0, 28.0, 0.1,
+        f("shank_dia", "シャンク径", "外形", "mm", 14.0, 28.0, 0.1,
           "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True),
-        f("shank_length", "シャンク長", "外形", "mm", 8.0, 30.0, 0.5,
+        f("shank_length", "シャンク長", "外形", "mm", 5.0, 30.0, 0.5,
           "シャンク平行部の長さ。長いほどロングシャンク仕様。テーブル踵の位置は"
           "全長からこれを引いて決まるので、リードの座りにも効く"),
-        f("overall_length", "全長", "外形", "mm", 70.0, 130.0, 0.5,
+        f("shoulder_ratio", "肩の長さ比", "外形", "比", 0.02, 0.25, 0.005,
+          "最大径からシャンク径へ絞る肩の長さ（最大径位置に対する比）。"
+          "最大径の位置は 全長 −（シャンク長 ＋ 肩）で決まるので、"
+          "シャンク長とこの比の組が最大径の位置を決める。テナー実測 0.139", advanced=True),
+        # ここも実測基準の ±25%。以前は 3 サイズ共通の 60〜130 で、**テナーを
+        # 下限 60 にするだけで空洞が消えた**（既定ボア長 57.5 が全長を食い切る）。
+        # サイズを跨いだ絶対レンジは「ソプラノの長さのテナー」を許してしまう。
+        f("overall_length", "全長", "外形", "mm",
+          round(0.75 * t["overall_length"] * 2) / 2,
+          round(1.25 * t["overall_length"] * 2) / 2, 0.5,
           "マウスピース全長", advanced=True),
         # --- 製造 ---
         f("min_wall", "最小肉厚", "製造", "mm", 1.2, 4.0, 0.1,
@@ -261,6 +279,10 @@ class MouthpieceComponent(Component):
 
     # ------------------------------------------------------------ シミュレーション
 
+    def params_error(self, params: dict) -> str | None:
+        """空洞の並びが成立するか。全長・ボア長・ウィンドウ長の**組**で決まる。"""
+        return profiles.cavity_layout_error(params)
+
     def simulate(self, params: dict) -> dict:
         with profiles.params_scope(params):
             return self._simulate(params)
@@ -272,8 +294,14 @@ class MouthpieceComponent(Component):
         # 「容積を増やせ」という助言を出す前に、スライダ上限まで上げて本当に届くのかを
         # 数えておく。上限は ParamSpec が唯一の出所（profiles は spec を知らない）。
         cr_max = next(s.max for s in self.param_specs() if s.key == "chamber_ratio")
+        # 判定は「合う挿し込み量が実用域に入るか」。コーク挿入深さは寸法ではなく
+        # 演奏者が抜き差しするチューニングなので、固定した状態のセントで判定すると
+        # 寸法の誤差とチューニングの自由度が混ざる（`ac_volume.tier1_report`）。
+        # 既定の速い経路は共鳴を 2 回だけ解く（simulate の予算は 50ms）。
+        from saxsketch.acoustics import openwind_bridge as ob
         tier1 = ac_volume.tier1_report(
             profiles.cavity_volume_cc(params), self.size_info,
+            ob.tuning_position(params, self.size_info),
             headroom_cc=profiles.chamber_headroom_cc(params, cr_max))
         tier2 = ac_brightness.tone_metrics(params)
         sens = ac_brightness.sensitivity(params, self.param_specs())
@@ -489,8 +517,12 @@ class MouthpieceComponent(Component):
            f"赤破線=テーブル平面 傾斜{deg:.2f}°） 単位:mm")
 
     def spec_extras(self, params: dict) -> dict:
+        from saxsketch.acoustics import openwind_bridge as ob
         p = params
         vol = profiles.cavity_volume_cc(p)
+        # 仕様書は 1 回しか作らないので厳密解（零点を包んで詰める）を使う。
+        # UI 側は速い線形推定（`ob.tuning_position` の既定）。
+        tune = ob.tuning_position(p, self.size_info, exact=True)
         dims = [
             ("全長", f"{p['overall_length']:.1f} mm"),
             ("ティップ開き", f"{p['tip_opening']:.2f} mm"),
@@ -500,6 +532,14 @@ class MouthpieceComponent(Component):
             ("ウィンドウ長 × 窓幅",
              f"{p['window_length']:.1f} × {profiles.window_width(p):.1f} mm"),
             ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
+            # コーク挿入深さは寸法ではなくチューニング量。設計値として意味があるのは
+            # 「目標音で鳴らせる挿し込み量が実際に届く範囲にあるか」の方。
+            # **基準条件での値**であって実演奏の位置の予測ではない（volume.py の
+            # モジュール docstring）。仕様書は単独で読まれるので条件をラベルに書く。
+            (f"目標音が出る挿し込み量（{ob.TEMPERATURE_C:.0f}°C 基準）",
+             f"{tune['in_tune_mm']:.1f} mm"
+             f"（実用域 {tune['range_mm'][0]:.0f}〜{tune['range_mm'][1]:.0f} mm、"
+             f"1mm 押し込むと {tune['cents_per_mm']:+.2f} セント）"),
         ]
         # 各部名称（参照サイト準拠）を寸法表に畳み込む。コア（spec.py）は dimensions と
         # sections しか知らないので、部品側で行として組み立てる（「コアは楽器を知らない」）。

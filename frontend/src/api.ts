@@ -8,7 +8,12 @@ export interface ParamSpec {
 }
 export interface Tier1 {
   total_cc: number; effective_cc: number; target_cc: number;
-  deviation_cents: number; status: string; advice: string; note: string;
+  // deviation_cents は「いまの挿し込み量での」ズレ。判定そのものは in_tune_mm が
+  // cork_range_mm に入るかで出ている（コーク挿入深さは寸法ではなくチューニング）。
+  deviation_cents: number;
+  in_tune_mm: number; cork_range_mm: [number, number];
+  cents_per_mm: number; current_mm: number; tuning_method: string;
+  status: string; advice: string; note: string;
 }
 export interface Tier2 {
   brightness: number; power: number; resistance: number; flexibility: number;

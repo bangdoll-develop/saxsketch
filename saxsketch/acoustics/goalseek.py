@@ -14,6 +14,14 @@ from . import volume as vol
 # 最適化対象の連続パラメータ
 OPT_KEYS = ["tip_opening", "facing_length", "baffle_height", "throat_ratio"]
 
+#: `pitch_neutral` が目指す実効容積 / 欠損円錐の比。
+#:
+#: 0 ではない。実測を入れた 3 サイズは、目標音で鳴る挿し込み量のとき
+#: soprano +25% / alto +21% / tenor +26% になる。マウスピースは代替する欠損円錐
+#: より短いので、太いぶんと短いぶんが釣り合ったところが「合っている」状態で、
+#: 容積が一致する点ではない。3 サイズの平均を採る。
+PITCH_NEUTRAL_RATIO = 0.24
+
 
 def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
               volume_fn) -> dict:
@@ -37,13 +45,22 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
             q[k] = float(xv)
         return q
 
+    target_cc = vol.missing_cone(size_info)["cc"]
+
     def objective(x):
         q = apply_x(x)
         m = br.tone_metrics(q)
         err = sum((m[k] - t) ** 2 for k, t in metric_targets.items())
         if pitch_neutral:
-            t1 = vol.tier1_report(volume_fn(q), size_info)
-            err += (t1["deviation_cents"] / 25.0) ** 2  # 25セントで指標1相当
+            # ここは**容積比**で測る。音程そのもの（第1共鳴）は伝達行列法を解くので
+            # 1 回 31〜52ms あり、Nelder-Mead が 400 回まわると 20 秒近くかかる。
+            # 最適化に要るのは向きと大小だけで、セントの絶対値ではない。
+            # 狙いは比 0 ではなく **+21%**。実測を入れた 3 サイズは、目標音で鳴る
+            # 挿し込み量のとき実効容積が欠損円錐の +21〜26% になる（soprano +25 /
+            # alto +21 / tenor +26）。0 を目指すのは到達不能な点を目指すこと。
+            # 幅 0.1（＝10 ポイント）で指標 1 相当。
+            ratio = (volume_fn(q)["effective_cc"] - target_cc) / target_cc
+            err += ((ratio - PITCH_NEUTRAL_RATIO) / 0.1) ** 2
         # 現在値からの逸脱ペナルティ（最小変更で目標を達成する）
         err += 0.01 * float(np.sum(((x - x0) / (np.array([b[1] - b[0] for b in bounds]))) ** 2))
         return err
@@ -61,7 +78,10 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
     q.update(proposal)
 
     predicted = br.tone_metrics(q)
-    t1 = vol.tier1_report(volume_fn(q), size_info)
+    # 提案 1 件だけは実際に共鳴を解いて報告する（最適化ループの外なので 1 回で済む）
+    from . import openwind_bridge as ob
+    t1 = vol.tier1_report(volume_fn(q), size_info,
+                          ob.tuning_position(q, size_info))
     return {
         "proposal": proposal,
         "current": {k: params[k] for k in keys},
