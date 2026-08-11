@@ -211,13 +211,24 @@ def _pchip(pts: list[tuple[float, float]], x: float) -> float:
 
 # ---------------------------------------------------------------- 軸方向のランドマーク
 
-#: シャンク肩（最大径→シャンク径）の長さ。実測 11mm / heel_z 79mm。
+#: シャンク肩（最大径→シャンク径）の長さの既定比。テナー実測 11mm / heel_z 79mm。
+#:
+#: サイズ間で移る保証は無い。ソプラノ実測（全長 71.4 / 最大径がシャンク端から
+#: 14.3mm）はこの比と `shank_length` の組でしか表せず、比が 0.139 なら
+#: `shank_length` は 6.4mm、段差が 11mm なら比は 0.058 になる。どちらでも
+#: `heel_z` は 57.1mm で同じなので音程には効かない（実測 0.00 セント）が、
+#: 胴の外形と `table_cut_end_z` は変わる。テンプレートの `shoulder_ratio` で
+#: サイズごとに持てるようにしてある。
 _SHOULDER_RATIO = 0.139
 
 
 def shank_length(p: dict) -> float:
     """シャンク平行部の長さ。ロングシャンク/標準シャンクの作り分けに使う。"""
     return p.get("shank_length", 17.5)
+
+
+def shoulder_ratio(p: dict) -> float:
+    return p.get("shoulder_ratio", _SHOULDER_RATIO)
 
 
 def shank_radius(p: dict) -> float:
@@ -232,12 +243,12 @@ def heel_z(p: dict) -> float:
     """
     length = p["overall_length"]
     sh = shank_length(p)
-    heel = (length - sh) / (1.0 + _SHOULDER_RATIO)
+    heel = (length - sh) / (1.0 + shoulder_ratio(p))
     return max(heel, 0.30 * length)
 
 
 def shoulder_length(p: dict) -> float:
-    return _SHOULDER_RATIO * heel_z(p)
+    return shoulder_ratio(p) * heel_z(p)
 
 
 def shank_start_z(p: dict) -> float:
@@ -1770,6 +1781,7 @@ def param_regions(p: dict) -> dict:
         "body_dia":        r(*ligature_seat_range(p), "all", "ボディ（リガチャー座）"),
         "shank_dia":       r(heel, length, "all", "シャンク"),
         "shank_length":    r(length - shank_length(p), length, "all", "シャンク平行部"),
+        "shoulder_ratio":  r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
         "overall_length":  r(0.0, length, "all", "全体"),
         "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
     }
@@ -2017,7 +2029,8 @@ def baffle_warnings(p: dict) -> list[str]:
 
 #: `p` だけで決まるスカラ／タプル。断面 1 枚で数千回ずつ呼ばれる。
 _PARAM_ONLY = (
-    "shank_length", "shank_radius", "heel_z", "shoulder_length", "shank_start_z",
+    "shank_length", "shoulder_ratio", "shank_radius", "heel_z", "shoulder_length",
+    "shank_start_z",
     "bore_radius", "bore_start_z", "ligature_seat_range",
     "tip_chamfer_depth", "tip_chamfer_len",
     "table_angle", "table_y", "table_cut_end_z", "facing_cut_z_range",

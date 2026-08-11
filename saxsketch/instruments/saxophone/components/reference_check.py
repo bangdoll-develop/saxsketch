@@ -6,7 +6,14 @@
   - リードの規格寸法（全長・先端幅）… 市販品の規格。descriptor の reed_std_*
   - ネックのテノン外径＋コルク厚 … はめあい寸法。ボアがこれ未満だと装着できない
   - フェイシング長の公表レンジ … 各社フェイシングチャートの実測公表値
-  - リガチャー座の後端 vs リード全長 … 踵が座に収まるという幾何拘束
+  - テーブル終端 vs リガチャー座の後端 … 締める範囲は平坦でなければならない（自己整合）
+  - テーブル終端 vs リード全長域 … 踵まで平坦面が続くかという幾何拘束
+
+**リード全長は 1 点ではない。** 同じソプラノ用でバンドーレン 3番（ケーン）59.1mm と
+レジェール アメリカンカット（樹脂）62.0mm の 2.9mm 差がある（どちらも実測、2026-08-11）。
+以前ここにあった「リガチャー座の後端 ＝ 規格リード全長」という等値照合は、許容差
+`SEAT_REACH_TOL` 1.5mm の倍ぶれる量を 1 点と比べていたので、どのしきい値を選んでも
+成立しない。判定は**向きのある拘束**だけで出し、等値は参考値として数字だけ並べる。
 
 **採らなかったもの**: マウスピースの全長・ボディ径・チェンバー寸法。どのメーカーも
 公表しておらず（ティップ開きとフェイシング長しか出さない）、こちらで「実物値」を
@@ -23,9 +30,43 @@ from . import profiles
 #: 正しい姿（座はバンド幅より広いので締まる）。ここが 2 箇所に別々の数字で書いてあり、
 #: リード側だけ 1.0mm だったため、テナー既定が **0.02mm 差**で警告を出していた。
 #: 判定するのは同じ幾何なので、しきい値も 1 箇所から配る。
+#:
+#: **いま使っているのは `reed.py` のリード側だけ**（「設計中のリードが座の後端に
+#: 届かない」＝本当に締まらない状態の警告）。マウスピース側の等値照合は Stage G で
+#: 外した。リード全長が銘柄で 2.9mm 動くので、この 1.5mm では判定できない。
 SEAT_REACH_TOL = 1.5
-#: 同上、「軽微」までの許容差 [mm]。
-SEAT_REACH_TOL_MINOR = 4.0
+
+#: テーブル平坦部がリガチャー座の後端に届いているかの判定ゼロ点 [mm]。
+#: これは規格との照合ではなく `profiles` 内部の自己整合で、リガチャーが締める範囲は
+#: 全部平坦でなければならないという物理条件。以前ここが崩れて「リード後端 20mm が
+#: 宙に浮く」形状が出たことがある（tests の `test_table_reaches_reed_heel`）。
+#: 浮動小数の丸め以上の不足は許さないので、ゼロ点はほぼ 0。
+TABLE_FLAT_EPS = 0.05
+#: 同上、「軽微」までの不足 [mm]。これを超えたら座の下に平坦でない面がある。
+TABLE_FLAT_TOL_MINOR = 1.0
+
+
+def reed_length_range(size_info: dict) -> tuple[float, float]:
+    """このサイズで実際に使われるリード全長の域 [mm]。
+
+    `reed_length_range_mm` があればそれを、無ければ `reed_std_length_mm` の 1 点を
+    上下端の両方に使う。域を持つのは実測が 2 本以上あるサイズだけ（いまはソプラノ）。
+    """
+    rng = size_info.get("reed_length_range_mm")
+    if rng:
+        return float(rng[0]), float(rng[1])
+    std = float(size_info["reed_std_length_mm"])
+    return std, std
+
+
+def _span_text(lo: float, hi: float) -> str:
+    """域の表示。1 点しか無いサイズでは「59.1〜59.1」と書かない。"""
+    return f"{lo:.1f}" if hi <= lo else f"{lo:.1f}〜{hi:.1f}"
+
+
+def reed_length_span(size_info: dict) -> str:
+    """リード全長域の表示用文字列 [mm]。カード以外（BOM など）からも使う。"""
+    return _span_text(*reed_length_range(size_info))
 
 #: コルクの締め代 [mm]。マウスピースのボアは「テノン外径＋2×コルク厚」**より細い**。
 #: コルクは圧縮して食いつくので、自由状態のコルク込み外径ぴったりだと抜ける。
@@ -86,16 +127,41 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
                  f"{bore:.2f} / {aim:.2f} mm  {v}"])
     verdicts.append(v)
 
-    for r, v in (
-        _row("テーブル幅 / 規格リード先端幅", p["reed_width"],
-             size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8),
-        _row("リガチャー座の後端 / 規格リード全長",
-             profiles.ligature_seat_range(p)[1],
-             size_info["reed_std_length_mm"], "mm",
-             SEAT_REACH_TOL, SEAT_REACH_TOL_MINOR),
-    ):
-        rows.append(r)
-        verdicts.append(v)
+    r, v = _row("テーブル幅 / 規格リード先端幅", p["reed_width"],
+                size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8)
+    rows.append(r)
+    verdicts.append(v)
+
+    seat1 = profiles.ligature_seat_range(p)[1]
+    table_end = profiles.table_cut_end_z(p)
+    reed_lo, reed_hi = reed_length_range(size_info)
+
+    # (1) 必須。リガチャーが締める範囲は全部平坦でなければならない。規格ではなく
+    #     profiles 内部の自己整合なので、サイズやリードの銘柄に依らず必ず成り立つ。
+    slack = table_end - seat1
+    if slack >= -TABLE_FLAT_EPS:
+        v = "一致"
+    else:
+        v = "軽微" if slack >= -TABLE_FLAT_TOL_MINOR else "乖離"
+    rows.append(["テーブル終端 / リガチャー座の後端",
+                 f"{table_end:.1f} / {seat1:.1f} mm  {v}"])
+    verdicts.append(v)
+
+    # (2) 踵まで平坦面が続くか。**非対称**に見る。長いリードにだけ足りないなら軽微
+    #     （踵の数 mm はリガチャーの外側で、密着させる必要が無い）。域の下端にも
+    #     足りなければ、どのリードを使っても踵が浮くので乖離。
+    #     伸ばす側は害が無いので上限は見ない。
+    v = "一致" if table_end >= reed_hi else ("軽微" if table_end >= reed_lo else "乖離")
+    rows.append(["テーブル終端 / リード全長域",
+                 f"{table_end:.1f} / {_span_text(reed_lo, reed_hi)} mm  {v}"])
+    verdicts.append(v)
+
+    # (3) 参考。**判定しない。** 「踵が最大径の位置に来る」という設計則は、実測どうしで
+    #     確かめられる唯一の組（ソプラノ: マウスピース 71.4 / リード 59.1・62.0）で
+    #     符号が反転する。モジュール docstring の理由でしきい値を置かない。
+    d_lo, d_hi = seat1 - reed_lo, seat1 - reed_hi
+    gap = f"{d_lo:+.1f}" if reed_hi <= reed_lo else f"{d_hi:+.1f}〜{d_lo:+.1f}"
+    rows.append(["（参考）リガチャー座の後端 − リード全長", f"{gap} mm"])
 
     lo, hi = size_info["facing_length_range_mm"]
     fl = p["facing_length"]
@@ -106,20 +172,29 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
 
     return _finish("実物・規格との照合", rows, verdicts,
                    "全長・ボディ径・チェンバーは各社とも公表していないため照合対象外。"
+                   "リード全長は銘柄・カット・材質で 3mm ほど動くので 1 点ではなく域で"
+                   "見ています（descriptor の reed_length_range_mm）。"
                    "手元の実物と比べたい場合は採寸して基準に取り込んでください。")
 
 
 def reed_card(p: dict, size_info: dict) -> dict:
     """リードの規格照合。"""
     rows, verdicts = [], []
-    for r, v in (
-        _row("全長 / 規格", p["reed_length"], size_info["reed_std_length_mm"],
-             "mm", 1.0, 3.0),
-        _row("先端幅 / 規格", p["tip_width"], size_info["reed_std_tip_width_mm"],
-             "mm", 0.3, 0.8),
-    ):
-        rows.append(r)
-        verdicts.append(v)
+
+    # 全長は域の外へ出た分だけで測る。域の中はどこでも実在する市販品なので
+    # 代表値からの距離では判定しない（ソプラノは 59.1 と 62.0 が両方とも実物）。
+    lo, hi = reed_length_range(size_info)
+    length = p["reed_length"]
+    over = 0.0 if lo <= length <= hi else (length - hi if length > hi else length - lo)
+    v = _verdict(over, 1.0, 3.0)
+    rows.append(["全長 / 規格域", f"{length:.1f} / {_span_text(lo, hi)} mm  {v}"])
+    verdicts.append(v)
+
+    r, v = _row("先端幅 / 規格", p["tip_width"],
+                size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8)
+    rows.append(r)
+    verdicts.append(v)
+
     return _finish("規格リードとの照合", rows, verdicts,
                    "規格から外すと市販リガチャー・マウスピースに合わなくなります。"
                    "厚みプロファイルは規格が無いため照合対象外。")

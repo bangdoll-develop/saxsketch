@@ -25,7 +25,10 @@ from saxsketch.core.registry import get_registry  # noqa: E402
 
 #: 端に振る設計パラ。形が接する所へ効くものを選ぶ。
 SWEEP_KEYS = ["tip_opening", "facing_length", "tip_rail_width", "tip_rail_thickness",
-              "tip_chamfer", "side_rail_width", "baffle_height", "table_angle"]
+              "tip_chamfer", "side_rail_width", "baffle_height", "table_angle",
+              # 肩の長さ比。最大径の位置＝リード踵が動くので、テーブルカットが胴を
+              # 抜ける位置とシャンクの取り合いが端で成立するかを見る。
+              "shoulder_ratio"]
 
 #: バッフル型ごとに効くハンドルの極値。型と組で振らないと意味が無い
 #: （`baffle_step_rise` はステップ型でしか効かない）ので専用の表にする。

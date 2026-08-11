@@ -215,22 +215,41 @@ def build_resonator(params: dict, size_info: dict,
     Tier1 は速い方（TMM）で一貫させたいので False を渡す。ここを固定しないと、
     OpenWind が入っている環境と入っていない環境で Tier1 の値が変わる。
     """
-    p = params
+    return _assemble_resonator(_cavity_points(params), params, size_info,
+                               float(params["cork_depth"]), use_openwind)
+
+
+def _cavity_points(params: dict) -> tuple[list[float], list[float]]:
+    """共鳴管のうち**マウスピース空洞だけ**（各断面 → 等価半径）。単位 m。
+
+    断面積は形状依存（馬蹄/フラットサイドウォールも正しく計上）なので断面
+    ポリゴンから求める。ここは **リード面で切った実効断面積** を使う:
+    ロフト用ステーションは窓を開けるためカット面より下へはみ出しており、その
+    はみ出しは気柱ではない（リードが塞ぐ）。`cavity_volume_cc` は同じ切り直しを
+    しているので、素の `section_area` を使うと Tier1 と Tier3 の前提が食い違う。
+
+    組み立ての残り（ボアと延長円錐）から分けてあるのは `cork_depth` に依らない
+    ため。`cavity_stations` は list を返すので `profiles` のキャッシュに載って
+    おらず（呼び出し側の書き換えでキャッシュが汚れるため意図的に外してある）、
+    挿し込み量を振るたびに組み直すと 1 回 6〜9ms を毎回払うことになる。
+    """
     xs: list[float] = []
     rs: list[float] = []
-
-    # (a) マウスピース空洞（各断面 → 等価半径）。断面積は形状依存（馬蹄/フラット
-    #     サイドウォールも正しく計上）なので断面ポリゴンから求める。
-    #     ここは **リード面で切った実効断面積** を使う: ロフト用ステーションは窓を
-    #     開けるためカット面より下へはみ出しており、そのはみ出しは気柱ではない
-    #     （リードが塞ぐ）。cavity_volume_cc は同じ切り直しをしているので、
-    #     素の section_area を使うと Tier1 と Tier3 の前提が食い違う。
-    stations = profiles.cavity_stations(p)
-    for s in stations:
-        area_mm2 = profiles.effective_section_area(p, s)
+    for s in profiles.cavity_stations(params):
+        area_mm2 = profiles.effective_section_area(params, s)
         r_eq = math.sqrt(max(area_mm2, 1e-6) / math.pi)  # mm
         xs.append(s["z"] / 1000.0)
         rs.append(r_eq / 1000.0)
+    return xs, rs
+
+
+def _assemble_resonator(cavity: tuple[list[float], list[float]], params: dict,
+                        size_info: dict, cork_mm: float,
+                        use_openwind: bool | None) -> list[list[float]]:
+    """空洞に円筒ボアと欠損円錐延長を継いで共鳴管にする。挿し込み量は引数で受ける。"""
+    p = params
+    xs = list(cavity[0])
+    rs = list(cavity[1])
 
     # (b) 円筒ボア。終端はシャンク端ではなく**コーク線**（= overall_length - cork_depth）。
     # シャンク端までを空気柱として数えると、ネックのテノンが埋めている体積まで
@@ -238,7 +257,7 @@ def build_resonator(params: dict, size_info: dict,
     # cavity_volume_cc() は同じ分を neck_occupied として差し引いており、こちらだけ
     # 数えていて Tier1 と Tier3 が食い違っていた。
     r_bore = profiles.bore_radius(p) / 1000.0
-    x_cork = max(p["overall_length"] - p["cork_depth"], xs[-1] * 1000.0) / 1000.0
+    x_cork = max(p["overall_length"] - cork_mm, xs[-1] * 1000.0) / 1000.0
     if x_cork > xs[-1]:
         xs.append(x_cork)
         rs.append(r_bore)
@@ -495,6 +514,132 @@ def first_resonance_cents(params: dict, size_info: dict) -> float:
     f1 = float(size_info["low_note_sounding_hz"])
     f = _first_peak_hz(geo, 0.6 * f1, 1.7 * f1, use_openwind=False)
     return _cents(f, f1)
+
+
+#: 挿し込み量の探索下限 [mm]。これより浅いとコルクが噛まない。
+_CORK_MIN_MM = 3.0
+#: ボアの奥に残す余裕 [mm]。ネックは円筒ボアが終わる段で止まるが、コルクは
+#: 潰れながら効くので実際はその手前で噛む。
+_CORK_BORE_MARGIN_MM = 3.0
+#: 収束条件 [セント]。0.05 だとテナー（0.27 セント/mm）で 0.19mm 残り、速い経路の
+#: 線形推定（実測 0.029mm）より粗くなる。厳密解の方が粗いのでは名前負けする。
+_TUNE_TOL_CENTS = 0.02
+#: 反復の上限。実測では 2〜3 回で収束する。
+_TUNE_MAX_ITER = 6
+#: 感度を測る差分幅 [mm]。「1mm 押し込むと何セント上がるか」をそのまま返したいので 1.0。
+_TUNE_SLOPE_MM = 1.0
+#: 傾きの 2 点も**全帯域 200 点のまま**解く。第1共鳴の周り ±3% だけを 60 点で
+#: 探れば 1 回 17ms → 1ms になるが、**精度が落ちる**（実測: 零点の誤差が
+#: 0.03mm → 1.87mm、テナーの感度が 0.271 → 0.378 セント/mm）。共鳴の山が広いので
+#: 格子を細かくすると放物線あてはめに使う 3 点がほぼ一直線になり、条件が悪くなる。
+#: 「細かい格子ほど正確」はここでは成り立たない。測って不採用にした。
+
+
+def tuning_position(params: dict, size_info: dict,
+                    cork_max_mm: float | None = None,
+                    exact: bool = False) -> dict:
+    """目標低音が合う挿し込み量を解く（**TMM 固定**）。
+
+    `cork_depth` はマウスピースの寸法ではない。気温・リード・合わせる音程で
+    演奏者が抜き差しする量、すなわちチューニングそのものである。固定値として
+    持ってそこからのズレをセントで報告すると、**寸法の誤差とチューニングの
+    自由度が混ざる**。Stage E がソプラノに付けた −31 セントはまさにそれで、
+    全長 71.4mm の実物に 17.91mm という当て推量の挿し込みを固定していたぶん
+    だった（実測を入れて解き直すと 3 サイズとも実用域の内側に入る）。
+
+    返す量:
+      in_tune_mm      合う挿し込み量
+      method          "linear"（既定の速い経路）/ "solved"（`exact=True`、または
+                      速い経路の推定が実用域の外へ出て解き直したとき）
+      range_mm        実用域 [浅い側, 深い側]
+      cents_at_range  実用域の両端でのセント。`exact=True` のときだけ。速い経路では None
+      cents_per_mm    現在位置で 1mm 押し込んだときのセント変化
+      current_mm      params["cork_depth"]
+      cents_at_current
+      reachable       in_tune_mm が実用域に入っているか
+      headroom_mm     [抜ける余裕, 押し込める余裕]
+
+    深い側の上限はボアではなく**ネックのコルク帯**で決まることが多い
+    （ソプラノはボア 38.3mm に対しコルク 26.0mm）。`cork_max_mm` を渡さない
+    場合は `size_info["neck_cork_length_mm"]` を使う。
+
+    **既定の経路は共鳴を 2 回しか解かない。** `simulate` の予算は 50ms
+    （`cad/perf/bench_ui_latency.BUDGET`）で、`simulate` 自体が既に 20〜31ms
+    使っている。零点を包んで詰める厳密解は 10 回前後（テナーで 335ms）かかり、
+    どう刻んでも入らない。代わりに現在位置とその 1mm 奥を解いて**局所の傾き**を
+    取り、そこから線形に零点を推す。テンプレートの `cork_depth` は零点の
+    0.1〜1.1mm 手前にあるので、常用状態ではこの推定が効く（誤差はテストで記録）。
+    大きく外れた形状を触っているときは推定も粗くなる（実測で最大 3.4mm）。
+    **その粗さで「実用域に入らない」と言わないよう、推定が域外に出たときだけ
+    自動で解き直す。** 仕様書とテストは常に `exact=True` を使う。
+
+    ここではキャッシュしない —— 引数が dict でキーにできず、
+    `server.state.simulate` が `_params_key()` で同じ粒度のキャッシュを既に持つ。
+    """
+    lo = _CORK_MIN_MM
+    hi = float(params["bore_length"]) - _CORK_BORE_MARGIN_MM
+    cap = cork_max_mm if cork_max_mm is not None else size_info.get("neck_cork_length_mm")
+    if cap is not None:
+        hi = min(hi, float(cap))
+    hi = max(hi, lo + 1.0)
+
+    # 空洞部は挿し込み量に依らないので 1 回だけ組む（1 回 6〜9ms）。
+    cavity = _cavity_points(params)
+    f1 = float(size_info["low_note_sounding_hz"])
+
+    def cents_at(mm: float) -> float:
+        geo = _assemble_resonator(cavity, params, size_info, mm, False)
+        return _cents(_first_peak_hz(geo, 0.6 * f1, 1.7 * f1, use_openwind=False), f1)
+
+    cur = float(params["cork_depth"])
+    c_cur = cents_at(cur)
+    # 傾きを測る足場は**実用域の中へ寄せる**。`cork_depth` が実用域より深いと
+    # （`bore_length` 最小 × `cork_depth` 最大のようなスライダの端）コーク線が
+    # 空洞の終端でクランプされ、2 点とも同じジオメトリになって傾きが 0 になる。
+    # 刻みが 1.0mm なのは「1mm 押し込むと何セント上がるか」をそのまま返すため。
+    base = min(max(cur, lo), hi - _TUNE_SLOPE_MM)
+    c_base = c_cur if abs(base - cur) < 1e-9 else cents_at(base)
+    slope = (cents_at(base + _TUNE_SLOPE_MM) - c_base) / _TUNE_SLOPE_MM
+    z = base - c_base / slope if abs(slope) > 1e-9 else float("nan")
+    method = "linear"
+    c_range = None
+
+    # 推定が実用域の外へ出たときは**必ず**厳密に解き直す。「この形状はチューニング
+    # では合わせられない」は強い主張で、線形推定の粗さで言ってはいけない。実測で
+    # 誤警報が出ている: テナーのボアを 46mm にすると推定 1.61mm（域外）に対し
+    # 厳密解は 5.05mm（域内）。追加のコストを払うのは悪い知らせを出す直前だけ。
+    if exact or not lo <= z <= hi:
+        c_lo, c_hi = cents_at(lo), cents_at(hi)
+        c_range = [c_lo, c_hi]
+        if c_lo * c_hi <= 0.0:
+            # 割線法で包んだまま詰める。実用域の両端を結ぶ線形近似は零点を最大
+            # 2.68mm 外す（tenor で実測）ので、1 発では決めない。
+            a, ca, b, cb = lo, c_lo, hi, c_hi
+            for _ in range(_TUNE_MAX_ITER):
+                z = b - cb * (b - a) / (cb - ca) if abs(cb - ca) > 1e-12 else 0.5 * (a + b)
+                z = min(max(z, lo), hi)
+                cz = cents_at(z)
+                if abs(cz) < _TUNE_TOL_CENTS:
+                    break
+                if ca * cz < 0.0:
+                    b, cb = z, cz
+                else:
+                    a, ca = z, cz
+            method = "solved"
+        # 挟まないなら零点は実用域の外。速い経路の線形外挿をそのまま残す
+        # （どこまで要るかは出るが、reachable=False の方が伝えたいこと）。
+
+    return {
+        "in_tune_mm": z,
+        "method": method,
+        "range_mm": [lo, hi],
+        "cents_at_range": c_range,
+        "cents_per_mm": slope,
+        "current_mm": cur,
+        "cents_at_current": c_cur,
+        "reachable": bool(lo <= z <= hi),
+        "headroom_mm": [z - lo, hi - z],
+    }
 
 
 def impedance(params: dict, size_info: dict,

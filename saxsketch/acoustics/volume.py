@@ -18,9 +18,30 @@
   過小、集中コンプライアンス（切り詰め円錐の厳密アドミタンス）は 8 倍過小で、
   どれも 1 個の数字からは出せなかった。
 
-いまは `openwind_bridge.first_resonance_cents()`（TMM、実測 31〜52ms）が解いた
-第1共鳴を受け取る。Tier2 との違いはエンジンだけで、モデルは同じ。
+**判定はセントでもない。** `cork_depth`（コーク挿入深さ）はマウスピースの寸法では
+なく、気温・リード・合わせる音程で演奏者が抜き差しするチューニングそのものである。
+それを固定した状態のセントを判定に使うと、寸法の誤差とチューニングの自由度が混ざる。
+Stage E がソプラノに付けた −31 セントはまさにそれで、全長 71.4mm の実物に 17.91mm
+という当て推量の挿し込みを固定していたぶんだった。
+
+いまは `openwind_bridge.tuning_position()` が解いた**合う挿し込み量**を受け取り、
+それが実用域（浅い側はコルクが噛む下限、深い側はネックのコルク帯の長さ）に
+入るかで判定する。実測を入れた 3 サイズはどれも入る:
+
+    soprano 23.5mm / alto 19.1mm / tenor 20.8mm
+
+しかもそのとき実効容積は欠損円錐の +21〜26% で揃う。挿し込み量と容積比という
+独立な 2 つの指標が同じことを言っている。
 容積の比較（`effective_cc` / `target_cc`）は**理由の説明**として残す。
+
+**この挿し込み量は「あなたが実際に挿す深さ」の予測ではない。** 基準条件
+（`openwind_bridge.TEMPERATURE_C` = 25°C、descriptor の `pitch_standard_hz` = 440Hz）で
+第1共鳴が目標音に合う位置であって、それ以上のことは言っていない。実際の位置は
+気温・リード・リガチャー・マウスピース個体・アンブシュアで動き、**このうち
+モデルに入っているのは気温と合わせる音程の 2 つだけ**（リード・リガチャー・
+アンブシュアは入っていない）。だから典型値との一致では検証できない。
+検証できる形にすると「演奏者が実際に使う挿し込み量の**域**（最も深い位置と
+最も浅い位置）に、この値が入るか」になる。
 
 楽器非依存: 体積計算はコンポーネント側（profiles）が行い、結果 dict を受け取る。
 """
@@ -63,12 +84,31 @@ def missing_cone(size_info: dict) -> dict:
     }
 
 
-def tier1_report(cavity_vol: dict, size_info: dict, cents: float,
+#: 実用域の端からこれだけ離れていないと「余裕が無い」扱いにする [mm]。
+TUNING_MARGIN_MM = 2.0
+
+
+def reference_conditions(size_info: dict) -> str:
+    """`in_tune_mm` がどの条件での値かを書いた一文。
+
+    ユーザーから「典型値は提示できない。マウスピース・リード・リガチャー・気温・
+    アンブシュアすべてに影響される」という指摘があった。そのとおりで、モデルが
+    出しているのは**基準条件での値**でしかない。条件を書かずに mm だけ出すと
+    「あなたはここに挿すことになる」という主張に読める。
+    """
+    from . import openwind_bridge as ob
+    return (f"合う挿し込み量は**基準条件での値**で、実際に挿す深さの予測ではない: "
+            f"気温 {ob.TEMPERATURE_C:.0f}°C（音速 {ob.C_SOUND:.1f} m/s）で第1共鳴が "
+            f"{size_info['low_note_label']} {size_info['low_note_sounding_hz']:.2f}Hz に"
+            f"合う位置。実際の位置はリード・リガチャー・マウスピース個体・"
+            f"アンブシュアでも動き、それらはモデルに入っていない。")
+
+
+def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
                  headroom_cc: float | None = None) -> dict:
     """cavity_vol: {"total_cc": float, "effective_cc": float}
 
-    cents: 組み立て共鳴管の第1共鳴が目標低音から外れているセント数
-    （`openwind_bridge.first_resonance_cents`）。**呼び出し側が渡す。**
+    tuning: `openwind_bridge.tuning_position()` の結果。**呼び出し側が渡す。**
     `openwind_bridge` がこのモジュールの `missing_cone` を使っているので、
     ここから import すると循環になる。
 
@@ -76,35 +116,51 @@ def tier1_report(cavity_vol: dict, size_info: dict, cents: float,
     容積 [cc]（`profiles.chamber_headroom_cc`）。容積を増やす助言を出しておいて、実は
     上限まで上げても届かない、という状態を避けるために使う。None なら助言しない。
 
-    以前はここに真偽値 `saturated`（＝チェンバー断面が全部外殻に接している）を
-    渡していたが、実測から起こした形状ではそれが永久に False で、分岐ごと到達不能
-    だった。判定すべきは幾何の接触ではなく「上限まで上げて目標に届くか」。
+    判定の主指標は**合う挿し込み量**であってセントではない。`cork_depth` は
+    演奏者が抜き差しするチューニングそのものなので、それを固定した状態のセントを
+    判定に使うと、寸法の誤差とチューニングの自由度が混ざる。問うべきは
+    「目標音で鳴らせる挿し込み量が実際に届く範囲にあるか」。
+
+    `in_tune_mm` は**基準条件での値であって典型値の予測ではない**（モジュールの
+    docstring を見ること）。`note` に基準条件を書いて出すのはそのため。
     """
     cone = missing_cone(size_info)
     target = cone["cc"]
     effective = cavity_vol["effective_cc"]
     ratio = (effective - target) / target
+    cents = tuning["cents_at_current"]
+    z = tuning["in_tune_mm"]
+    lo, hi = tuning["range_mm"]
+    out_mm, in_mm = tuning["headroom_mm"]
+    slope = tuning["cents_per_mm"]
 
-    if abs(cents) < 10:
-        status, advice = "ok", "音程バランス良好。コーク標準位置で使用できます。"
-    elif cents > 0:
-        status = "sharp"
-        advice = ("第1共鳴が目標より高い。コークを浅め（抜き気味）にするか、"
-                  "スロート断面積比/ウィンドウ長の拡大を検討。")
+    if not tuning["reachable"]:
+        status = "unreachable"
+        side = "深く" if z > hi else "浅く"
+        advice = (f"目標音で鳴らせる挿し込み量が {z:.1f}mm で、実用域 "
+                  f"{lo:.0f}〜{hi:.0f}mm の外にある（{side}挿さないと合わない）。"
+                  f"チューニングでは埋められないので形状側を直す必要がある。")
         if headroom_cc is not None and effective + headroom_cc < target:
-            advice += (f"ただしチェンバー断面積比を上限まで上げても増えるのは "
+            advice += (f"チェンバー断面積比を上限まで上げても増えるのは "
                        f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
                        f"欠損円錐 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の"
                        f"肉厚で、これ以上増やすにはボディ径を上げるか最小肉厚を"
                        f"下げる必要がある。")
     else:
-        status = "flat"
-        advice = ("第1共鳴が目標より低い。コークを深めに挿すか、"
-                  "スロート断面積比の縮小を検討。")
+        tight = min(out_mm, in_mm) < TUNING_MARGIN_MM
+        status = "tight" if tight else "ok"
+        advice = (f"挿し込み {z:.1f}mm で目標音に合う（実用域 {lo:.0f}〜{hi:.0f}mm）。"
+                  f"1mm 押し込むと {slope:+.2f} セント動くので、"
+                  f"高い側へ約 {in_mm * slope:+.0f} / 低い側へ約 {-out_mm * slope:+.0f} "
+                  f"セントのチューニング幅がある。")
+        if tight:
+            advice += ("ただし実用域の端まで 2mm を切っている。深い側の上限は"
+                       "ボアではなく**ネックのコルク帯の長さ**で決まっていて、"
+                       "いまの値は推定なので、実物のコルクを測ると評価が動く。")
 
     # 容積の比較は**判定ではなく理由**として出す。両者は一対一で動かない:
     # マウスピースは代替する欠損円錐より短いので、容積が数十%多くても音程が
-    # 合うことがある（テナー実測形状は +23% で +0.3 セント）。
+    # 合うことがある（3サイズとも合う挿し込み量では +21〜26%）。
     advice += (f"（実効容積 {effective:.2f}cc は欠損円錐 {target:.2f}cc の "
                f"{ratio * 100:+.0f}%。マウスピースは代替する円錐より短いので、"
                f"容積差はそのまま音程差にはならない。）")
@@ -125,9 +181,17 @@ def tier1_report(cavity_vol: dict, size_info: dict, cents: float,
         "effective_cc": round(effective, 2),
         "target_cc": round(target, 2),
         "deviation_cents": round(cents, 1),
+        "in_tune_mm": round(z, 2),
+        "cork_range_mm": [round(lo, 1), round(hi, 1)],
+        "cents_per_mm": round(slope, 2),
+        "current_mm": round(tuning["current_mm"], 2),
+        "tuning_method": tuning["method"],
         "status": status,
         "advice": advice,
         "note": (origin + "ネック小端内径は3サイズとも実測値（descriptor の "
                  "neck_dimensions_source に測った個体がある）。セントは容積からの"
-                 "換算ではなく、この形状の共鳴管を伝達行列法で解いた第1共鳴。"),
+                 "換算ではなく、この形状の共鳴管を伝達行列法で解いた第1共鳴。"
+                 "deviation_cents は**いまの挿し込み量での**値で、判定そのものは"
+                 "合う挿し込み量が実用域に入るかで出している。"
+                 + reference_conditions(size_info)),
     }

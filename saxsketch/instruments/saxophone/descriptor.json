@@ -3,7 +3,7 @@
   "label": "サクソフォン",
   "family": "single_reed",
   "pitch_standard_hz": 440.0,
-  "notes": "欠損円錐は cone_half_angle_deg と neck_bore_id_mm から acoustics/volume.missing_cone() が導出する（体積を定数で持たない）。半頂角はソプラノ 1.74°/テナー 1.52° の実測文献値、アルトはその間を採る。neck_cork_thickness_mm はテノンに巻かれたコルクの片側厚。マウスピースのボア径は テノン外径＋2×コルク厚 を基準に、締め代 reference_check.INTERFERENCE_FIT_MM だけ細く取る（コルクは圧縮して食いつくので、隙間があると抜ける）。neck_bore_id_mm はネック小端の内径で、3サイズとも実測値（2026-08-09。測った個体と実際の数字は各サイズの neck_dimensions_source にある）。以前は テノン外径から コルク厚＋管肉厚0.4mm を両側分引く推定規則で埋めていたが、実測の管肉厚は 0.90〜1.25mm で 0.4mm という仮定に根拠が無かった。アルトは実測内径 12.7 で欠損円錐長の導出値が 227mm になり、公表されている SBA アルトの実測 217.5mm との差が 11% から 4.5% に縮む。半頂角 1.52°/1.6°/1.74° は本体円錐の文献値をネック小端に当てたもので、実測ではない（各サイズの cone_half_angle_source を見ること）。テナー大端内径 26.0mm の実測で掃引して、これが Tier1 の残差 -81 セントの原因ではないことは確認済み。facing_length_range_mm は各社公表フェイシングチャートの実測レンジ（アルト: Meyer 21mm / V16 A7M 23mm / Florida Link 20–20.5mm）。測定基準のフィーラー厚がメーカーごとに違うため厳密な比較はできない。reed_std_* は市販ケーンリードの規格寸法。 low_note_sounding_hz は記譜最低音 B♭3 の実音（移調後）。旧 written_low_note_hz は調の主音を並べただけの代用値で、アルトで 155.56Hz(E♭3) と実際の D♭3 から 2 半音ずれていた。",
+  "notes": "欠損円錐は cone_half_angle_deg と neck_bore_id_mm から acoustics/volume.missing_cone() が導出する（体積を定数で持たない）。半頂角はソプラノ 1.74°/テナー 1.52° の実測文献値、アルトはその間を採る。neck_cork_thickness_mm はテノンに巻かれたコルクの片側厚。マウスピースのボア径は テノン外径＋2×コルク厚 を基準に、締め代 reference_check.INTERFERENCE_FIT_MM だけ細く取る（コルクは圧縮して食いつくので、隙間があると抜ける）。neck_bore_id_mm はネック小端の内径で、3サイズとも実測値（2026-08-09。測った個体と実際の数字は各サイズの neck_dimensions_source にある）。以前は テノン外径から コルク厚＋管肉厚0.4mm を両側分引く推定規則で埋めていたが、実測の管肉厚は 0.90〜1.25mm で 0.4mm という仮定に根拠が無かった。アルトは実測内径 12.7 で欠損円錐長の導出値が 227mm になり、公表されている SBA アルトの実測 217.5mm との差が 11% から 4.5% に縮む。半頂角 1.52°/1.6°/1.74° は本体円錐の文献値をネック小端に当てたもので、実測ではない（各サイズの cone_half_angle_source を見ること）。テナー大端内径 26.0mm の実測で掃引して、これが Tier1 の残差 -81 セントの原因ではないことは確認済み。facing_length_range_mm は各社公表フェイシングチャートの実測レンジ（アルト: Meyer 21mm / V16 A7M 23mm / Florida Link 20–20.5mm）。測定基準のフィーラー厚がメーカーごとに違うため厳密な比較はできない。reed_std_length_mm は**1 点ではなく域の代表値**として扱う。同じソプラノ用でバンドーレン 3番（ケーン）59.1 とレジェール アメリカンカット（樹脂）62.0 の 2.9mm 差があり（どちらも実測）、銘柄・カット・材質で動く。域が分かっているサイズは reed_length_range_mm を持ち、reference_check はそちらを見る。以前ソプラノに置いていた 63.5 はちょうど 2.5 インチの丸い値で、実測 2 本のどちらからも外れていた。 low_note_sounding_hz は記譜最低音 B♭3 の実音（移調後）。旧 written_low_note_hz は調の主音を並べただけの代用値で、アルトで 155.56Hz(E♭3) と実際の D♭3 から 2 半音ずれていた。",
   "sizes": {
     "soprano": {
       "key": "B♭",
@@ -12,8 +12,15 @@
       "neck_bore_id_mm": 9.5,
       "neck_tenon_od_mm": 12.0,
       "neck_cork_thickness_mm": 1.0,
+      "neck_cork_length_mm": 26.0,
+      "neck_cork_length_source": "**推定値**（neck テンプレートの tenon_length を写しただけ）。マウスピースをどこまで押し込めるかの上限を決めていて、合う挿し込み量（ソプラノ 23.5mm）に対する余裕がここで決まる。ボア側は 38.3mm あるので効いているのはコルク側。実測待ち。",
       "neck_dimensions_source": "Yanagisawa S-902 のネックをノギスで実測（2026-08-09）。テノン素の外径 12.0 / コルク込み外径 14.0 / 小端内径 9.5。コルク厚は (14.0-12.0)/2、管肉厚は (12.0-9.5)/2 = 1.25。",
-      "reed_std_length_mm": 63.5,
+      "reed_std_length_mm": 59.1,
+      "reed_length_range_mm": [
+        59.1,
+        62.0
+      ],
+      "reed_std_length_source": "**実測 2 本**（2026-08-11）。バンドーレン 3番（ケーン）59.1 / レジェール アメリカンカット（樹脂）62.0。代表値はケーンの 59.1 を採る（テンプレートの既定材料がケーン）。以前の 63.5 は**ちょうど 2.5 インチ**の丸い値で出所が無く、実測 2 本のどちらからも 1.5mm 以上外れていた。**同じソプラノ用で銘柄・カットにより 2.9mm 違う**ので、1 点との等値比較は原理的に成立しない。照合は reference_check が域として扱う。",
       "reed_std_tip_width_mm": 12.9,
       "facing_length_range_mm": [
         16,
@@ -29,10 +36,13 @@
       "neck_bore_id_mm": 12.7,
       "neck_tenon_od_mm": 14.5,
       "neck_cork_thickness_mm": 0.75,
+      "neck_cork_length_mm": 30.0,
+      "neck_cork_length_source": "**推定値**（neck テンプレートの tenon_length を写しただけ）。押し込める上限を決める。実測待ち。",
       "neck_dimensions_source": "Yamaha YAS-875 のネックをノギスで実測（2026-08-09）。テノン素の外径 14.5 / コルク込み外径 16.0 / 小端内径 12.7。管肉厚は (14.5-12.7)/2 = 0.90。コルクは交換から時間が経って痩せており、3サイズで唯一 1.0mm を割る（0.75）。コルク厚だけは下限として扱うこと。",
       "missing_cone_length_mm": 217.5,
       "missing_cone_length_source": "Selmer Balanced Action アルトの公表実測値。導出値 241.7mm より 11% 短い。",
       "reed_std_length_mm": 71.5,
+      "reed_std_length_source": "**未実測**。市販ケーンリードの代表値を置いているだけで、個体を測っていない。ソプラノは同じ出所の 63.5 が実測 2 本（59.1 / 62.0）から 4.4mm 外れていたので、この値も同程度に疑わしい。実測が来るまで reed_length_range_mm を持たない（域が無いサイズは 1 点を域の上下端として扱う）。",
       "reed_std_tip_width_mm": 13.4,
       "facing_length_range_mm": [
         19,
@@ -48,8 +58,11 @@
       "neck_bore_id_mm": 13.1,
       "neck_tenon_od_mm": 15.0,
       "neck_cork_thickness_mm": 1.1,
+      "neck_cork_length_mm": 32.0,
+      "neck_cork_length_source": "**推定値**（neck テンプレートの tenon_length を写しただけ）。押し込める上限を決める。実測待ち。",
       "neck_dimensions_source": "Selmer Super Action 80 Serie II Jubilee のネックをノギスで実測（2026-08-09）。テノン素の外径 15.0 / コルク込み外径 17.2 / 小端内径 13.1。管肉厚は (15.0-13.1)/2 = 0.95。テノン＋2×コルク = 17.2 に対し実測マウスピース WindyCity のボアは 17.0 で、0.2mm の締め代がある。この 0.2 が reference_check.INTERFERENCE_FIT_MM の出所で、3サイズで唯一ネックとマウスピースの両方を実測してある組。",
       "reed_std_length_mm": 78.0,
+      "reed_std_length_source": "**未実測**。市販ケーンリードの代表値。マウスピース側（WindyCity 107.5mm）は実測なので、座の後端 79.02 との差 +1.02mm は「実測 × 代表値」の比較であって実測どうしではない。ソプラノで同じ出所の値が 4.4mm 外れた以上、この一致を設計則の証拠として重く見ないこと。",
       "reed_std_tip_width_mm": 14.8,
       "facing_length_range_mm": [
         22,
