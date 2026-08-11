@@ -385,6 +385,207 @@ def test_impossible_params_are_not_saved():
     STATE.simulate()                                   # まだ描ける
 
 
+# ------------------------------------------------------------------ ファイルダイアログ
+# 「名前を付けて保存でダイアログが固まる」の再発防止。ダイアログは必ず別プロセスで
+# 出し、切られたら殺す。ここでは**本物の窓を出さない**（バックエンドを差し替える）。
+
+def _fake_dialog_backend(monkeypatch, *, script: str):
+    """`filedialog` の子プロセスを、窓を出さない python に差し替える。"""
+    import sys
+    from saxsketch.server import filedialog
+    monkeypatch.setattr(filedialog, "_backend_argv",
+                        lambda mode, suggested: [sys.executable, "-c", script])
+
+
+def test_dialog_always_returns_even_if_nobody_answers(monkeypatch):
+    """誰も応答しなくても必ず返ること。
+
+    ここが返らないと `POST /api/dialog` を待っている画面が固まる。以前は
+    `asyncio.to_thread` で tkinter を呼んでいたため、閉じられるまで永久に待った。
+    """
+    import asyncio
+    from saxsketch.server import filedialog
+    _fake_dialog_backend(monkeypatch, script="import time; time.sleep(60)")
+    path, reason = asyncio.run(filedialog.pick("save", "x.wproj", timeout=1.0))
+    assert (path, reason) == (None, "timeout")
+
+
+def test_cancelled_dialog_leaves_no_process(monkeypatch, tmp_path):
+    """リクエストが切られたら子プロセスも死ぬこと。
+
+    これが本丸。`asyncio.to_thread` は走り出したワーカーを中断できないので、
+    ブラウザが切って `CancelledError` になってもダイアログの窓とスレッドは残り、
+    押し直すたびに増えていた（実測: Windows 側の powershell.exe が積み上がる）。
+    """
+    import asyncio
+    import sys
+    from saxsketch.server import filedialog
+
+    pidfile = tmp_path / "child.pid"
+    script = (f"import os, time; open({str(pidfile)!r}, 'w').write(str(os.getpid()));"
+              " time.sleep(60)")
+    monkeypatch.setattr(filedialog, "_backend_argv",
+                        lambda mode, suggested: [sys.executable, "-c", script])
+
+    async def run():
+        task = asyncio.create_task(filedialog.pick("open", timeout=60.0))
+        for _ in range(200):                        # 子が名乗るまで最大 10 秒
+            if pidfile.exists():
+                break
+            await asyncio.sleep(0.05)
+        pid = int(pidfile.read_text())
+        assert not _process_gone(pid), "子プロセスが起動していない"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        for _ in range(200):                        # 死ぬまで最大 10 秒
+            if _process_gone(pid):
+                # ゾンビも「終了」と数えているので、親（`_reap`）が回収して
+                # パイプを閉じるまで一息置く。ここを待たずにループを畳むと
+                # GC が閉じたループに触って PytestUnraisableExceptionWarning になる。
+                await asyncio.sleep(0.3)
+                return pid, True
+            await asyncio.sleep(0.05)
+        return pid, False
+
+    pid, gone = asyncio.run(run())
+    assert gone, f"キャンセル後も子プロセス {pid} が生きている"
+
+
+def _process_gone(pid: int) -> bool:
+    """終了済みか。**ゾンビも終了扱い**（親が回収する前に見ることがある）。"""
+    stat = Path(f"/proc/{pid}/stat")
+    if not stat.exists():
+        return True
+    try:
+        return stat.read_text().rsplit(") ", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return True
+
+
+def test_dialog_backend_reports_cancel_and_pick(monkeypatch, tmp_path):
+    """子プロセスの 1 行プロトコルを往復できること（日本語パスを含む）。"""
+    import asyncio
+    import base64
+    from saxsketch.server import filedialog
+
+    _fake_dialog_backend(monkeypatch, script="print('CANCEL')")
+    assert asyncio.run(filedialog.pick("open")) == (None, "cancelled")
+
+    picked = str(tmp_path / "アルト マウスピース.wproj")
+    b64 = base64.b64encode(picked.encode("utf-8")).decode("ascii")
+    _fake_dialog_backend(monkeypatch, script=f"print('OK {b64}')")
+    path, reason = asyncio.run(filedialog.pick("save", "x.wproj"))
+    assert reason == "ok"
+    assert path.endswith("アルト マウスピース.wproj")
+
+
+def test_powershell_dialog_script_parses(tmp_path):
+    """生成した PowerShell が 4 モードとも構文として通ること。
+
+    日本語のタイトル・フィルタと `C:\\` を含むパスが、WSL の exec 境界・
+    PowerShell のパーサ・埋め込み C#（`Add-Type -MemberDefinition`）の 3 層を
+    通る。ここは目視では守れないので、実物のパーサに読ませて確かめる。
+    """
+    import subprocess
+    from saxsketch.server import filedialog, hostenv
+
+    exe = hostenv.powershell_exe()
+    if exe is None:
+        pytest.skip("PowerShell が無い環境")
+
+    for mode in filedialog.MODES:
+        script = filedialog._ps_script(mode, str(tmp_path / "テスト.wproj"))
+        f = tmp_path / f"{mode}.ps1"
+        f.write_text(script, encoding="utf-8")
+        win = hostenv.to_win_path(str(f))
+        out = subprocess.run(
+            [exe, "-NoProfile", "-NonInteractive", "-Command",
+             f"[void][ScriptBlock]::Create("
+             f"(Get-Content -Raw -Encoding UTF8 '{win}')); 'PARSE_OK'"],
+            capture_output=True, timeout=90)
+        assert b"PARSE_OK" in out.stdout, (
+            f"{mode}: {out.stdout[-400:]!r} {out.stderr[-400:]!r}")
+
+
+def test_remote_client_gets_no_native_dialog():
+    """サーバから離れた画面には、OS のダイアログを出さないと申告すること。
+
+    出しても**サーバの机の前**に現れるだけで、利用者からは無反応に見える。
+    ループバック以外は「誰も見ていない」とみなす。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server import filedialog
+    from saxsketch.server.app import app
+
+    local = TestClient(app, client=("127.0.0.1", 51000))
+    remote = TestClient(app, client=("192.168.1.50", 51000))
+    # ローカルは「この環境で出せるか」がそのまま出る（CI にはどちらも無い）
+    assert (local.get("/api/capabilities").json()["native_dialogs"]
+            is filedialog.available())
+    assert remote.get("/api/capabilities").json()["native_dialogs"] is False
+    # 直接叩かれてもダイアログは開かない（開くと誰も閉じられない）
+    assert remote.post("/api/dialog", json={"mode": "save"}).json() == {
+        "path": None, "reason": "unavailable"}
+
+
+def test_settings_live_outside_the_user_home():
+    """テストが実ユーザーの設定を書き換えないこと。
+
+    以前は `~/.saxsketch/settings.json` を直接触っていて、「最近使ったプロジェクト」
+    が pytest の一時ディレクトリ 10 件で埋まっていた（実際に起きた）。
+    """
+    import os
+    from saxsketch.server import state
+    assert os.environ.get("SAXSKETCH_HOME")
+    assert state.settings_dir() == Path(os.environ["SAXSKETCH_HOME"])
+    assert Path.home() / ".saxsketch" != state.settings_dir()
+
+
+def test_legacy_export_root_is_migrated_once(tmp_path, monkeypatch):
+    """旧版が書いた出力先は一度だけ捨て、選び直した値は残ること。
+
+    WSL では旧既定 `~/Documents/SaxSketch` は Windows から辿れない場所だが、
+    そのフォルダは書き出した結果**実在する**ので「実在しなければ捨てる」では
+    条件が成立しない。かといって値の一致だけで毎回捨てると、同じ場所を自分で
+    選び直した設定が永久に保存できなくなる。だから版で一度きりにする。
+    """
+    import json as _json
+    from saxsketch.server import state as st
+
+    monkeypatch.setenv("SAXSKETCH_HOME", str(tmp_path))
+    monkeypatch.setattr(st, "IS_WSL", True)
+    legacy = str(st._LEGACY_EXPORT_ROOT)
+
+    # 版 1（= 版キーが無い）の設定を読むと捨てられる
+    (tmp_path / "settings.json").write_text(
+        _json.dumps({"export_root": legacy}), encoding="utf-8")
+    assert st.AppState._load_settings(None)["export_root"] == ""
+
+    # 版 2 として保存された同じ値は尊重される（利用者が選び直した場合）
+    (tmp_path / "settings.json").write_text(
+        _json.dumps({"export_root": legacy, "settings_version": 2}), encoding="utf-8")
+    assert st.AppState._load_settings(None)["export_root"] == legacy
+
+
+def test_recent_projects_drop_paths_that_vanished(tmp_path):
+    """消えたプロジェクトは保存側でも落ちること。
+
+    `/api/recent` は表示時に濾していたが保存側が素通しだったので、一度混ざった
+    ゴミが 10 件の枠を占めたまま残り、実際に開いたものを押し出していた。
+    """
+    from saxsketch.server.state import STATE
+    alive = tmp_path / "alive.wproj"
+    alive.write_text("{}", encoding="utf-8")
+    before = list(STATE.settings.get("recent_projects", []))
+    try:
+        STATE.settings["recent_projects"] = [str(tmp_path / "gone.wproj")]
+        STATE.push_recent(str(alive))
+        assert STATE.settings["recent_projects"] == [str(alive)]
+    finally:
+        STATE.settings["recent_projects"] = before
+
+
 def test_template_values_survive_the_schema_unclamped():
     """テンプレートに書いた数値がスキーマ範囲で黙って書き換えられないこと。
 

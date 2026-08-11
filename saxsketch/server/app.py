@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import os
-import platform
 import re
 import subprocess
 import time
@@ -24,6 +24,10 @@ from saxsketch.export.bom import bom_csv
 from saxsketch.export.models import check_mesh, export_model
 from saxsketch.export.package import build_package, readme_text
 from saxsketch.export.spec import spec_html
+from . import filedialog
+from .hostenv import IS_WSL, host_kind
+from .hostenv import to_win_path as _to_win_path
+from .hostenv import to_wsl_path as _to_wsl_path
 from .state import STATE
 
 @contextlib.asynccontextmanager
@@ -50,27 +54,10 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "di
 # SAC 回避のためバックエンドを WSL2(Linux) で動かす。外部ツール連携（Windows 側の
 # FreeCAD/エクスプローラ/既定アプリ）は WSL⇄Windows のパス変換と exe 起動が要る。
 # Windows ネイティブ実行時は従来どおり動くよう両対応で分岐する。
-IS_WSL = "microsoft" in platform.uname().release.lower()
-
-
-def _to_win_path(p: str) -> str:
-    """WSL パス → Windows パス（wslpath -w）。Windows 実行時/失敗時は原文を返す。"""
-    if not IS_WSL:
-        return str(p)
-    try:
-        return subprocess.check_output(["wslpath", "-w", str(p)], text=True).strip()
-    except Exception:
-        return str(p)
-
-
-def _to_wsl_path(p: str) -> str:
-    """Windows パス(C:\\..) → WSL パス(/mnt/c/..)。既に WSL パスなら原文を返す。"""
-    if not IS_WSL:
-        return str(p)
-    try:
-        return subprocess.check_output(["wslpath", "-u", str(p)], text=True).strip()
-    except Exception:
-        return str(p)
+#
+# 実体は `hostenv.py`。`filedialog.py` と `state.py` も要るので切り出した
+# （この app が filedialog を import するので、逆向きは循環になる）。
+# 旧来の `app.IS_WSL` を見ている呼び出し（`scripts/wsl_sync.sh`）のため名前は残す。
 
 
 def _open_default_app(path: Path) -> None:
@@ -247,54 +234,71 @@ def recent():
     return [p for p in STATE.settings.get("recent_projects", []) if Path(p).exists()]
 
 
-# ------------------------------------------------------------------ ファイルダイアログ（ローカルアプリ向け）
+# ------------------------------------------------------------------ ファイルダイアログ（ローカル同居時のみ）
+# ダイアログは **サーバのデスクトップ** に出る。サーバと利用者が同じ机に居るときだけ
+# 意味があるので、出せるかどうかを `/api/capabilities` で宣言し、UI が分岐する。
+# 実装は `filedialog.py`（必ず別プロセス。理由はそちらの docstring）。
 
 _dialog_lock = asyncio.Lock()
 
+#: ダイアログの順番待ちの上限 [秒]。`filedialog.pick` 自体にも時間切れがあるので
+#: 本来ここで詰まることは無いが、待ち行列が伸びたまま返らない状態を作らない。
+_DIALOG_QUEUE_TIMEOUT = 200.0
 
-def _native_dialog(mode: str, suggested: str) -> str | None:
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
+
+def _is_local_client(request: Request) -> bool:
+    """リクエスト元が同じ機械か。
+
+    WSL 構成でも Windows のブラウザからは localhost 転送で 127.0.0.1 に見える。
+    LAN やトンネル越しに公開したときは非ループバックになるので、その場合は
+    「サーバの机の前に誰も居ない」とみなしてダイアログを出さない。
+    """
+    if os.environ.get("SAXSKETCH_FORCE_REMOTE"):
+        return False
+    host = request.client.host if request.client else ""
     try:
-        if mode == "save":
-            path = filedialog.asksaveasfilename(
-                title="プロジェクトを保存", defaultextension=".wproj",
-                initialfile=suggested,
-                filetypes=[("SaxSketch プロジェクト", "*.wproj")])
-        elif mode == "open":
-            path = filedialog.askopenfilename(
-                title="プロジェクトを開く",
-                filetypes=[("SaxSketch プロジェクト", "*.wproj")])
-        elif mode == "open_model":
-            kwargs = {"initialdir": suggested} if suggested and Path(suggested).is_dir() else {}
-            path = filedialog.askopenfilename(
-                title="編集済みモデルを取込",
-                filetypes=[("3Dモデル", "*.stl *.step *.stp *.3mf *.obj *.ply"),
-                           ("すべて", "*.*")],
-                **kwargs)
-        else:  # dir
-            path = filedialog.askdirectory(title="出力先フォルダを選択")
-        return path or None
-    finally:
-        root.destroy()
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@app.get("/api/capabilities")
+def capabilities(request: Request):
+    """この稼働環境で UI が使ってよい機能。
+
+    `native_dialogs` が false のときフロントはパス入力へ落ちる。ダイアログを
+    「出したのに誰も見えない」状態が、利用者からはフリーズと区別できないため。
+    """
+    return {
+        "native_dialogs": _is_local_client(request) and filedialog.available(),
+        "host": host_kind(),
+        "export_root": str(STATE.export_root()),
+    }
 
 
 class DialogReq(BaseModel):
-    mode: str  # save | open | dir
+    mode: str  # save | open | open_model | dir
     suggested: str = ""
 
 
 @app.post("/api/dialog")
-async def dialog(req: DialogReq):
-    async with _dialog_lock:
-        try:
-            path = await asyncio.to_thread(_native_dialog, req.mode, req.suggested)
-        except Exception:
-            path = None  # tkinter 不可の環境ではフロント側でパス手入力にフォールバック
-    return {"path": path}
+async def dialog(req: DialogReq, request: Request):
+    """OS のファイルダイアログ。`{"path": …, "reason": …}` を返す。
+
+    `reason` は UI の分岐用（`filedialog.pick` を参照）。**例外にはしない**。
+    出せないことは異常ではなく、手入力に落ちるだけの通常経路。
+    """
+    if not _is_local_client(request):
+        return {"path": None, "reason": "unavailable"}
+    try:
+        await asyncio.wait_for(_dialog_lock.acquire(), _DIALOG_QUEUE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"path": None, "reason": "timeout"}
+    try:
+        path, reason = await filedialog.pick(req.mode, req.suggested)
+    finally:
+        _dialog_lock.release()
+    return {"path": path, "reason": reason}
 
 
 # ------------------------------------------------------------------ モデル・シミュレーション
@@ -515,8 +519,7 @@ async def export(req: ExportReq):
     params = dict(STATE.paramset.values)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    base = Path(req.out_dir) if req.out_dir else \
-        Path(STATE.settings.get("export_root", str(Path.home() / "Documents" / "SaxSketch")))
+    base = Path(req.out_dir) if req.out_dir else STATE.export_root()
     out_dir = base / f"{_safe_name(proj.name)}-{stamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
 

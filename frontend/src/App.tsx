@@ -11,6 +11,7 @@ import {
 } from "./components/Dialogs";
 import { ManualEditDialog } from "./components/ManualEdit";
 import { SurveyDialog } from "./components/SurveyPanel";
+import { usePathPicker } from "./pathPicker";
 
 type DialogKind = null | "new" | "goalseek" | "export" | "settings" | "manual" | "survey";
 
@@ -34,6 +35,8 @@ export default function App() {
   // 追随する。非 null の間は 3D を作り直さない（1回のビルドが数秒かかるので、
   // ドラッグ中に走らせると GIL を奪われて断面まで固まる）。
   const [preview, setPreview] = useState<Record<string, number> | null>(null);
+
+  const pickPath = usePathPicker();
 
   const paramTimer = useRef<number>(0);
   const modelTimer = useRef<number>(0);
@@ -170,15 +173,15 @@ export default function App() {
     if (!project) return;
     let path = project.path;
     if (saveAs || !path) {
-      const r = await api.dialog("save", `${project.name}.wproj`);
-      if (!r.path) return;
-      path = r.path;
+      const picked = await pickPath("save", `${project.name}.wproj`);
+      if (!picked) return;
+      path = picked;
     }
     try {
       const res = await api.save(path);
       setProject({ ...project, path: res.path });
     } catch (e) { setError(String((e as Error).message)); }
-  }, [project]);
+  }, [project, pickPath]);
 
   // 参照マウスピースの差替え（リード/リガチャーのみ）。寸法が変わるので形状も作り直す
   const setReference = useCallback(async (path: string | null) => {
@@ -195,9 +198,9 @@ export default function App() {
   }, [project]);
 
   const pickReference = useCallback(async () => {
-    const r = await api.dialog("open");
-    if (r.path) setReference(r.path);
-  }, [setReference]);
+    const path = await pickPath("open");
+    if (path) setReference(path);
+  }, [setReference, pickPath]);
 
   const applyProposal = useCallback((proposal: Record<string, number>) => {
     setParams((prev) => ({ ...prev, ...proposal }));

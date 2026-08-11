@@ -176,6 +176,19 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+export type DialogMode = "save" | "open" | "open_model" | "dir";
+/** `reason` はフォールバックの分岐用。詳細は `saxsketch/server/filedialog.py`。
+ *  `cancelled` は利用者の意思なので、UI は代わりの入力欄を出してはいけない。 */
+export type DialogReason = "ok" | "cancelled" | "unavailable" | "timeout";
+export interface DialogResult { path: string | null; reason: DialogReason }
+/** この稼働環境で UI が使ってよい機能。`native_dialogs` が false なら
+ *  OS のダイアログは利用者に見えない（リモート稼働など）ので手入力に落とす。 */
+export interface Capabilities {
+  native_dialogs: boolean;
+  host: "wsl" | "windows" | "linux";
+  export_root: string;
+}
+
 const json = (body: unknown): RequestInit => ({
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
@@ -202,8 +215,9 @@ export const api = {
   surveyClear: () => req<ProjectData>("/api/survey/clear", json({})),
   surveyMeasure: (path: string) =>
     req<SurveyMeasure>("/api/survey/measure", json({ path })),
-  dialog: (mode: string, suggested = "") =>
-    req<{ path: string | null }>("/api/dialog", json({ mode, suggested })),
+  capabilities: () => req<Capabilities>("/api/capabilities"),
+  dialog: (mode: DialogMode, suggested = "") =>
+    req<DialogResult>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),
   /** override を渡すと「もしこの値にしたら」の断面を返す（プロジェクトは変えない）。
    *  画面が持っているパラメータをそのまま渡せば、PUT の完了を待たずに常に
