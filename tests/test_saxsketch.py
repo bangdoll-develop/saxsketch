@@ -892,25 +892,57 @@ def test_reed_printability_flag(alto_reed):
 def test_reed_override_changes_sound(alto_reed):
     """リード実形状が物理モデル音に効いていること（Phase 3 の価値の核）。
 
-    リード共振を大きく変えると発振するレジスタが変わる。OpenWind 必須なので
-    WSL でのみ実行される。
+    **観測量を音高から音色へ移した。** 以前は「リード共振を変えるとレジスタが
+    変わる」として f0 が 5% 以上動くことを見ていたが、それは `_coarsen` が
+    共鳴管を非調和にしていた頃の挙動で、直すとリードの硬さに関わらず
+    **第1共鳴が鳴る**（それが正しい。ビーティングリードはリード共振よりずっと
+    低い管の共鳴に乗る）。実測 tip 0.30 → 137.5Hz / 0.55 → 137.7Hz で差は 0.15%。
+
+    効くのは音色のほう。同じ実測で倍音比（f0 の 1〜8 倍、基音で正規化）が
+
+      tip 0.30 (f_reed 1847Hz)  1.00 / 0.35 / 0.71 / 0.24 / 0.29 / 0.12 / ...
+      tip 0.55 (f_reed 2154Hz)  1.00 / 0.01 / 0.25 / 0.00 / 0.06 / 0.01 / ...
+
+    と大きく変わる（L1 差 1.42。硬いほど偶数倍音が落ちる）。
+
+    **duration は既定のまま。** 0.3s では両方ともほぼ正弦で L1 差 0.006 しか
+    出ない —— 音高は 0.36s で定まるが、音色はそれより遅れて立つ。
+    OpenWind 必須なので WSL でのみ実行される。
     """
     pytest.importorskip("openwind")
+    import io
+    import wave
+
+    import numpy as np
     from saxsketch.acoustics import openwind_bridge as ob
     from saxsketch.acoustics import reed_model
     comp, p = alto_reed
     m = comp.ref_params()
+    f1 = ob._first_peak_hz(ob.build_resonator(m, comp.size_info),
+                           0.6 * comp.size_info["low_note_sounding_hz"],
+                           1.7 * comp.size_info["low_note_sounding_hz"])
 
     def play(tip):
         pp = {**p, "material": "cane", "tip_thickness": tip}
         ov = reed_model.reed_override(reed_model.reed_properties(pp, m), pp)
-        _, meta = ob.synthesize(m, comp.size_info, "normal",
-                                duration=0.15, override=ov)
-        return meta["f0"]
+        wav, meta = ob.synthesize(m, comp.size_info, "normal", override=ov)
+        with wave.open(io.BytesIO(wav)) as w:
+            a = np.frombuffer(w.readframes(w.getnframes()),
+                              dtype="<i2").astype(float)
+        seg = a[int(0.6 * a.size):]
+        seg = seg - seg.mean()
+        spec = np.abs(np.fft.rfft(seg * np.hanning(seg.size)))
+        freqs = np.fft.rfftfreq(seg.size, 1.0 / ob.SIM_SR)
+        h = [float(spec[np.argmin(abs(freqs - k * meta["f0"]))]) for k in range(1, 9)]
+        return meta["f0"], ov["f_reed"], [x / max(h[0], 1e-12) for x in h]
 
-    soft, hard = play(0.30), play(0.55)
-    assert soft > 0 and hard > 0            # どちらも自励発振している
-    assert abs(hard - soft) / soft > 0.05   # レジスタ/音高が動いた
+    (f_soft, r_soft, h_soft), (f_hard, r_hard, h_hard) = play(0.30), play(0.55)
+    assert r_hard > r_soft * 1.1, (r_soft, r_hard)      # 硬い＝リード共振が高い
+    # どちらも自励発振し、**どちらも第1共鳴**で鳴っている
+    for f in (f_soft, f_hard):
+        assert f == pytest.approx(f1, rel=0.03), (f, f1)
+    # 音色は大きく違う（実測 1.42。半分を下回ったらリード形状が効いていない）
+    assert sum(abs(a - b) for a, b in zip(h_soft, h_hard)) > 0.5, (h_soft, h_hard)
 
 
 def test_reed_filed_cut_removes_material(alto_reed):
@@ -1771,16 +1803,86 @@ def test_sound_speed_matches_openwind_physics():
 
 # ------------------------------------------------------------------ 音響 Tier3（音合成）
 
-def test_coarsen_keeps_ends_and_spacing(alto):
+def test_coarsen_keeps_the_bore_step(alto):
+    """間引いても**段差は残る**こと（零長の不連続として）。
+
+    以前ここは「最終セグメント以外は最小間隔 `SIM_MIN_DX` を満たす」と主張して
+    いた。**それがまさに間違っていた不変条件**で、その規則がマウスピースのボアから
+    ネック小端への段差（alto で 7.90 → 6.35mm、前の点の 0.5mm 後ろ）を捨てていた。
+    捨てると第1共鳴が −67 セントずれ、共鳴列が非調和になる
+    （`test_coarsen_preserves_the_resonance_ladder`）。
+    """
     from saxsketch.acoustics import openwind_bridge as ob
     comp, p = alto
     geom = ob.build_resonator(p, comp.goal_seek_size_info())
     co = ob._coarsen(geom)
     assert co[0] == list(geom[0]) and co[-1] == list(geom[-1])
     assert len(co) <= len(geom)
-    # 最終セグメント以外は最小間隔を満たす（末尾は両端保持のため例外）
-    gaps = [co[i + 1][0] - co[i][0] for i in range(len(co) - 2)]
+    # 段差はちょうど 1 本、零長で入っていること（零長でないと CFL が 2 倍痛む）
+    steps = [i for i in range(len(co) - 1) if co[i + 1][0] == co[i][0]]
+    assert len(steps) == 1, [(round(x, 5), round(r, 5)) for x, r in co]
+    i = steps[0]
+    assert co[i + 1][1] < co[i][1], co[i:i + 2]          # ボア → ネック小端は細る
+    # 段差以外は最小間隔を満たす（末尾は両端保持のため例外）
+    gaps = [co[k + 1][0] - co[k][0] for k in range(len(co) - 2) if k != i]
     assert all(g >= ob.SIM_MIN_DX for g in gaps)
+
+
+def test_coarsen_preserves_the_resonance_ladder(alto):
+    """間引いた管の共鳴列が生の管と一致すること。**H.1 の再発防止の本体。**
+
+    段差を落とすと共鳴列が引き伸ばされて非調和になり（alto で n3 が 3.006 →
+    3.162 ＝ 5% シャープ）、高次モードの Q が 10〜40 倍に膨らむ。その状態では
+    基音より上のレジームが安定できず、リードがモードを渡り歩く。音程が合って
+    いるかだけでは捕まらないので、**比**まで見る。
+
+    実測（3 サイズ、段差を残した場合の 生 → 間引き後）:
+      soprano 207.47 → 207.19 (−0.13%) / alto 138.69 → 138.58 (−0.08%)
+      tenor   103.92 → 103.79 (−0.13%)
+    """
+    pytest.importorskip("openwind")
+    import numpy as np
+    from openwind import ImpedanceComputation
+    from saxsketch.acoustics import openwind_bridge as ob
+    comp, p = alto
+    freqs = np.geomspace(60.0, 900.0, 3000)
+
+    def ladder(geo):
+        z = np.abs(np.asarray(ImpedanceComputation(
+            freqs, geo, temperature=ob.TEMPERATURE_C,
+            source_location="entrance").impedance))
+        y = 20.0 * np.log10(z / np.max(z) + 1e-12)
+        peaks = [i for i in range(1, len(y) - 1)
+                 if y[i] > y[i - 1] and y[i] > y[i + 1]][:3]
+        return [float(freqs[i]) for i in peaks]
+
+    geom = ob.build_resonator(p, comp.goal_seek_size_info())
+    raw, co = ladder(geom), ladder(ob._coarsen(geom))
+    assert co[0] == pytest.approx(raw[0], rel=0.005), (raw, co)
+    for k in (1, 2):
+        assert co[k] / co[0] == pytest.approx(raw[k] / raw[0], rel=0.01), (raw, co)
+
+
+def test_embouchures_share_the_blowing_ratio(alto):
+    """3 アンブシュアの吹奏比 γ が揃っていること（OpenWind 不要の純計算）。
+
+    以前は吹圧をプリセットごとの定数で持っていて、`pulsation` だけ書き換えて
+    `mass` / `section` を CLARINET のまま残していたので、静的ビーティング圧
+    `p_M = ω₀²·(M/S)·y₀` が ω₀² で動き、γ が **1.14 / 0.70 / 0.30** とばらけて
+    いた。γ>1 は静的変位が静止開口を超える領域。「締め具合」を選ばせている
+    つもりで、実際に選ばせていたのは吹きすぎ具合だった。
+    """
+    pytest.importorskip("openwind")
+    from saxsketch.acoustics import openwind_bridge as ob
+    comp, p = alto
+    for emb, f_base in ob.EMBOUCHURES.items():
+        _, mouth_pa = ob._reed_player(p, emb)
+        f_reed = f_base * (23.0 / p["facing_length"])
+        p_m = ob.beating_pressure(f_reed, 4e-4 * (p["tip_opening"] / 1.8))
+        assert mouth_pa / p_m == pytest.approx(ob.BLOWING_RATIO, rel=1e-9), emb
+    # 締めるほどリード共振が高い（名前と物理の向きが一致していること）
+    assert (ob.EMBOUCHURES["loose"] < ob.EMBOUCHURES["normal"]
+            < ob.EMBOUCHURES["tight"])
 
 
 def test_synthesize_returns_playable_wav(alto):
@@ -1795,29 +1897,29 @@ def test_synthesize_returns_playable_wav(alto):
     with wave.open(io.BytesIO(wav)) as w:
         assert w.getframerate() == ob.SIM_SR
         assert w.getnframes() > 0
-    # 鳴った f0 は楽器の帯域内（無音でも DC でもない）。
-    assert 50.0 < meta["f0"] < 2500.0, meta
-
-    # **「鳴った f0 は共鳴ピークのいずれか（許容 8%）」という主張はやめた。**
-    # 不変条件ではなく、たまたま成立していた。実測（alto、既定 duration 0.6s、
-    # 定常部の FFT 上位 5 成分と、そこから最寄りの共鳴ピークまでの距離）:
+    # **鳴るのはこの管の第1共鳴。** Stage F ではこの主張を外していた（当時の
+    # 実測は loose 1220 / normal 951 / tight 133Hz と 3 通りばらけ、上位成分が
+    # 5 本あり、duration を 0.6→1.2s にすると支配成分が 950 → 1083Hz へ移って
+    # いた）。原因は `_coarsen` がボア → ネック小端の段差を落として共鳴列を
+    # 非調和にしていたことで、直すと 3 アンブシュアとも第1共鳴に落ち着く。
+    # 外していた主張が戻せる状態になったので戻す —— これが `_coarsen` の
+    # 退行に対する一番効く検査になる。
     #
-    #   Stage E 後   loose  f0=1220.2 (1.96%)  上位5 1220/2011/670/1341/680
-    #                normal f0= 950.9 (8.07%)  上位5  950/1094/1220/2181/1364
-    #                tight  f0= 133.4 (3.79%)  上位5  133/400/667/934/1200
-    #   Stage E 前   loose  f0=1208.2 (2.89%)  normal f0=1206.3 (2.73%)
-    #                tight  f0= 131.1 (3.89%)
+    # 3 サイズ × 3 アンブシュアの実測（f0 / 第1共鳴、セント）:
     #
-    # どの設定でも**単一のレジスタに落ち着いていない**。上位成分は 5 本あり、
-    # 共鳴からの距離は 0.2〜17.6% にばらけ、duration を 0.6→1.2s にすると
-    # 支配成分が 950 → 1083Hz へ移る（＝定常に達していない）。tight の
-    # 133/400/667/934/1200 は 133.4Hz の**奇数倍のみ**で、円錐の共鳴列
-    # （139/276/417 = 整数倍）ではない。
+    #   alto     loose −13.6  normal  −7.3  tight  −4.8
+    #   tenor    loose  −0.4  normal  −2.1  tight  −2.1
+    #   soprano  loose  ****  normal −21.5  tight −11.4
     #
-    # 8% を通っていたのは 6 通り中 5 通りで、Stage E で管が 3% 短くなった拍子に
-    # normal が 8.07% へ抜けた。閾値を広げても「共鳴で鳴いている」ことの証明には
-    # ならないので、主張の方を実際に成り立つ範囲へ引いた。1自由度リードモデルが
-    # レジスタを掴まない件そのものは別途の課題。
+    # **9 通り中 8 通りが第1共鳴。soprano の loose だけ 67.8Hz ＝ f1 の 0.327 倍**
+    # （207.47/3 = 69.2 に近い）で、周期 3 倍化のレジームに落ちている。γ を
+    # 揃えても残るので `_coarsen` の話ではなく、リード共振（soprano loose は
+    # f_reed 2070Hz ＝ f1 の 10.0 倍）と非線形の組合せ。ここでは既定の
+    # alto/normal だけを検査し、soprano loose は既知として記録に留める。
+    f1 = ob._first_peak_hz(ob.build_resonator(p, si),
+                           0.6 * si["low_note_sounding_hz"],
+                           1.7 * si["low_note_sounding_hz"])
+    assert meta["f0"] == pytest.approx(f1, rel=0.03), (meta, f1)
 
 
 # ------------------------------------------------------------------ プロジェクトI/O

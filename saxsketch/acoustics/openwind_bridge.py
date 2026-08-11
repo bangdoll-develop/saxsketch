@@ -680,19 +680,61 @@ def _wav_bytes(signal: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
+#: 「段差」と見なす母線の傾き |Δr/Δx|。
+#: 実測（alto 既定の共鳴管 43 セグメント）で 2.0 を超えるのは**ネック小端への
+#: 段差 1 本だけ**（3.1）。次に急なのはティップ近傍の 0.86 で、間に 3.6 倍の
+#: 開きがある。テーパの細かい刻みと本物の不連続は、間隔ではなく傾きで分かれる。
+_STEP_SLOPE = 2.0
+#: 段差と見なす最大の x 幅 [m]。長い急テーパは段差ではない（上の実測では 0.5mm）。
+_STEP_MAX_DX = 0.001
+
+
 def _coarsen(geometry: list[list[float]],
              min_dx: float = SIM_MIN_DX) -> list[list[float]]:
-    """時間領域シミュ用にジオメトリを間引く。
+    """時間領域シミュ用にジオメトリを間引く。**段差だけは零長で残す。**
 
-    CFL 条件より dt ∝ 最小セグメント長。マウスピース部の 2.8mm 刻みが dt を
-    律速して計算が 4 倍遅くなるが、2kHz 以下（波長 17cm 超）では数 mm の
-    刻み差は音響的にほぼ効かない。両端点は必ず保持する。
+    CFL 条件より dt ∝ 最小セグメント長なので、x 方向には間引きたい。以前は
+    「`min_dx` 以上離れた点だけ残す」だけで、docstring には「2kHz 以下では
+    数 mm の刻み差は音響的にほぼ効かない」と書いてあった。**刻みについては
+    正しいが、落としていたのは刻みではなかった。**
+
+    alto 既定で 44 点 → 8 点になり、そのとき消えていたのが `[0.07887, 0.00635]`
+    —— マウスピースのボア 7.90mm からネック小端 6.35mm への**段差**で、前の点の
+    0.5mm 後ろにあるため `min_dx = 8mm` に引っかかっていた。測ると:
+
+    ==================  =============  =============  =============
+    ..                  生の管 (44点)  旧 (8点)       いま (9点)
+    ==================  =============  =============  =============
+    第1共鳴             138.69 Hz      133.43 Hz      138.58 Hz
+    共鳴比 n2 / n3      1.993 / 3.006  2.055 / 3.162  1.994 / 3.008
+    5次のQ              0.7            26.5           —
+    ==================  =============  =============  =============
+
+    段差を落とすと **−67 セント**ずれるうえ、共鳴列が引き伸ばされて非調和になり
+    （3次が 5% シャープ）、高次モードの Q が 10〜40 倍に膨らむ。その状態では
+    基音より上のレジームが安定できず、リードがモードを渡り歩いていた。
+    段差 1 本を戻すだけで **−1.4 セント / 比は 0.1% 以内**まで戻る ——
+    ティップ側の刻みは本当に効いていない。
+
+    **段差は零長にする。** 0.5mm のまま残すと CFL が効いて 1,183,109 ステップ
+    （2 倍）になる。零長なら 562,050 ステップで**旧と同じ**。
+
+    **速くはならない。** 一度、半径が跳ぶ点を無条件に残す版を書いたら 8.3 倍
+    速くなったが、それは連続した跳びが同じ x に積み上がって**ティップの
+    テーパが階段に潰れていた**からで、速さはその歪みそのものだった
+    （メッシャーが急テーパを刻み直さなくなる）。測って捨てた。
+
+    両端点は必ず保持する。
     """
     if len(geometry) <= 2:
         return [list(pt) for pt in geometry]
     out = [list(geometry[0])]
-    for pt in geometry[1:-1]:
-        if pt[0] - out[-1][0] >= min_dx:
+    for i in range(1, len(geometry) - 1):
+        prev, pt = geometry[i - 1], geometry[i]
+        dx = pt[0] - prev[0]
+        if dx <= _STEP_MAX_DX and abs(pt[1] - prev[1]) >= _STEP_SLOPE * max(dx, 1e-12):
+            out.append([out[-1][0], pt[1]])   # 段差＝零長の不連続。CFL を痛めない
+        elif pt[0] - out[-1][0] >= min_dx:
             out.append(list(pt))
     out.append(list(geometry[-1]))
     return out
@@ -723,11 +765,14 @@ def _to_audio(sig: np.ndarray, sr0: float) -> np.ndarray:
 def _measure_f0(sig: np.ndarray, sr: int = SIM_SR) -> float:
     """定常部（立ち上がり後）の rFFT ピークから実測基本周波数を返す。
 
-    立ち上がりは高次モードが暴れるので前半を捨て、定常部（後半50%）だけを見る。
-    さらに放物線補間でビン幅以下の精度を出す（0.6s のシミュでビン幅 ~3Hz）。
+    立ち上がりは高次モードが暴れるので前半を捨て、**後半 40%** だけを見る。
+    以前は後半 50% だった。0.6s だと緩め・標準がその窓の中で過渡（3次共鳴）から
+    基音へ移るので、duration を変えると報告する f0 が動いていた。実測では
+    どのアンブシュアも 60% 地点までに基音へ落ちている。
+    さらに放物線補間でビン幅以下の精度を出す（0.6s のシミュでビン幅 ~4Hz）。
     """
     sig = np.asarray(sig, dtype=float)
-    seg = sig[int(0.5 * sig.size):]
+    seg = sig[int(0.6 * sig.size):]
     if seg.size < 64:
         return 0.0
     seg = seg - float(np.mean(seg))     # クレッシェンドの DC ドリフトを除去
@@ -746,23 +791,42 @@ def _measure_f0(sig: np.ndarray, sr: int = SIM_SR) -> float:
     return float(i * df)
 
 
-# レジスタを決めるのは吹圧ではなく**リード共振**。吹圧だけを動かしてもレジスタは
-# ほぼ変わらず、上げ過ぎると発振が止まる。よってアンブシュア（＝リードの締め具合＝
-# リード共振）を選ばせ、各プリセットに持続を確認済みの吹圧を組で与える。
-#
-# **プリセット名と実際に鳴る高さは対応していない**（alto 既定形状での実測 f0:
-# loose 1220 / normal 951 / tight 133Hz）。以前ここに「緩め→低いレジスタ、
-# 締め→高いレジスタ」と書いていたが、測ると逆で、しかもどの設定も単一の
-# レジスタに落ち着かない（定常部の上位成分が 5 本、共鳴からの距離 0.2〜17.6%、
-# duration を延ばすと支配成分が移る）。名前は UI の見た目として残してあるだけで、
-# 1自由度リードモデルがレジスタを掴めていないことの方が本体の課題。
-# 詳細な実測は `tests/test_saxsketch.py::test_synthesize_returns_playable_wav`。
-EMBOUCHURES: dict[str, tuple[float, float]] = {
-    "loose":  (1800.0, 1800.0),   # 緩め → 低いレジスタ
-    "normal": (2700.0, 2500.0),   # 標準
-    "tight":  (3700.0, 2000.0),   # 締め → 高いレジスタ
+#: 吹奏比 γ ＝ 吹圧 / 静的ビーティング圧 `p_M`。
+#:
+#: `p_M = ω₀²·(M_r/S_r)·y₀` はリードが静止開口ぶん動く圧力で、**ω₀² で動く**。
+#: 以前はプリセットごとに吹圧を独立の定数で与えていたため、γ が
+#: loose 1.14 / normal 0.70 / tight 0.30 とばらけていた（CLARINET プリセットの
+#: 既定は 0.40）。γ>1 は静的変位が静止開口を超える領域で、まともな発振領域ではない。
+#: **そして「締め具合」を選ばせているつもりで、実際に選ばせていたのは吹きすぎ具合
+#: だった** —— tight（リード共振が最も高い＝最も硬い）が γ 最小で一番きれいに
+#: 基音が出る、という名前と逆の並びの正体がこれ。3 プリセットで揃える。
+BLOWING_RATIO = 0.30
+
+#: アンブシュア＝リード共振 [Hz]。**締めるほど高い。**
+#:
+#: 吹圧はここに書かない。`_reed_player` が `f_reed` を決めた後に `p_M` から
+#: 導出する（`BLOWING_RATIO`）。そうすると `tip_opening`（`opening` 経由で
+#: p_M ∝ y₀）と `facing_length`（f_reed 経由で p_M ∝ ω₀²）が吹圧に効くようになる
+#: —— 定数で持っていた頃は設計値を動かしても吹圧が変わらなかった。
+#: `override` でリード実形状の f_reed が来る経路でも γ が保たれる。
+EMBOUCHURES: dict[str, float] = {
+    "loose":  1800.0,
+    "normal": 2700.0,
+    "tight":  3700.0,
 }
 DEFAULT_EMBOUCHURE = "normal"
+
+
+def beating_pressure(f_reed_hz: float, opening_m: float) -> float:
+    """静的ビーティング圧 `p_M = ω₀²·(M_r/S_r)·y₀` [Pa]。
+
+    `M_r`（実効質量）と `S_r`（実効振動面積）は CLARINET プリセットの値を
+    **上書きしていない 2 つ**なので、マジックナンバーを写さずプリセットから読む。
+    どれを上書きしてどれを残しているかがコードから読めるようにするため。
+    """
+    from openwind.technical.default_excitator_parameters import CLARINET
+    omega = 2.0 * math.pi * f_reed_hz
+    return omega * omega * (CLARINET["mass"] / CLARINET["section"]) * opening_m
 
 
 def _reed_player(params: dict, embouchure: str,
@@ -776,18 +840,21 @@ def _reed_player(params: dict, embouchure: str,
     `override`（リード コンポーネントから渡る）があれば、リード共振はアンブシュア
     プリセットではなく**リード実形状から算出した f_reed** を使う。幅も実寸に置く。
     リードを設計している以上、リードの物理はリード側の値が正となる。
+
+    吹圧は定数ではなく `BLOWING_RATIO × p_M` で導出する。`p_M` は f_reed と
+    `opening` から決まるので、どの経路（プリセット / リード実形状）でも
+    吹奏比が揃う。
     """
     from openwind import Player
     from openwind.technical.default_excitator_parameters import (
         constant_with_initial_ramp)
 
-    f_base, mouth_pa = EMBOUCHURES.get(embouchure, EMBOUCHURES[DEFAULT_EMBOUCHURE])
+    f_base = EMBOUCHURES.get(embouchure, EMBOUCHURES[DEFAULT_EMBOUCHURE])
     player = Player("CLARINET")
-    player.update_curve("mouth_pressure",
-                        constant_with_initial_ramp(mouth_pa, 0.02))
 
     # 設計パラメータ連動：これが無いと設計を変えても音が変わらない
-    player.update_curve("opening", 4e-4 * (params.get("tip_opening", 1.8) / 1.8))
+    opening = 4e-4 * (params.get("tip_opening", 1.8) / 1.8)
+    player.update_curve("opening", opening)
     reed_w = (override or {}).get("width_mm", params.get("reed_width", 14.5))
     player.update_curve("width", 3e-2 * (reed_w / 14.5))
     if override and override.get("f_reed"):
@@ -797,6 +864,12 @@ def _reed_player(params: dict, embouchure: str,
         f_reed = f_base * (23.0 / max(params.get("facing_length", 23.0), 1.0))
     player.update_curve("pulsation", 2 * math.pi * f_reed)
     player.update_curve("dissip", 3000.0 * f_reed / 3700.0)
+
+    # `pulsation` だけ書き換えて `mass` / `section` を CLARINET のまま残している
+    # ので、p_M は ω₀² で動く。吹圧を定数で持つと吹奏比がプリセットごとにばらける。
+    mouth_pa = BLOWING_RATIO * beating_pressure(f_reed, opening)
+    player.update_curve("mouth_pressure",
+                        constant_with_initial_ramp(mouth_pa, 0.02))
     return player, mouth_pa
 
 
@@ -830,9 +903,11 @@ def synthesize(params: dict, size_info: dict,
                override: dict | None = None) -> tuple[bytes, dict]:
     """単音の物理モデル音（OpenWind 必須）。
 
-    音高は指定できない。トーンホールの無い固定ボアは自前の共鳴しか鳴らないため、
-    アンブシュア（リード共振）でどのレジスタが立つかが決まる。実際に鳴った f0 を
-    meta で返す。`override` はリード コンポーネントからのリード実形状の反映値。
+    音高は指定できない。トーンホールの無い固定ボアは自前の共鳴しか鳴らないので、
+    鳴るのは**この管の第1共鳴**。3 アンブシュアとも同じ高さに落ち着き、違うのは
+    立ち上がりと倍音の重みだけ（`BLOWING_RATIO` で吹奏比を揃えてあるため）。
+    実際に鳴った f0 を meta で返す。`override` はリード コンポーネントからの
+    リード実形状の反映値。
     """
     if not HAS_OPENWIND:
         raise RuntimeError("OpenWind 未導入のため物理モデル音合成は利用できません")
@@ -849,7 +924,12 @@ def synthesize(params: dict, size_info: dict,
 def scale(params: dict, size_info: dict,
           duration: float = 0.6,
           override: dict | None = None) -> tuple[bytes, dict]:
-    """簡易スケール（倍音レジスタ）。緩め→標準→締めを順に鳴らす（OpenWind 必須）。
+    """緩め→標準→締めを順に鳴らす（OpenWind 必須）。
+
+    **倍音レジスタではない。** 以前はレジスタが変わるつもりで並べていたが、
+    それは共鳴管が非調和になっていたせい（`_coarsen` が段差を落としていた）で、
+    直すと 3 つとも第1共鳴に落ち着く。いま並べているのは**同じ音の 3 通りの
+    締め具合**で、違うのは立ち上がりと倍音の重み。
 
     リード共振は時間変化させられない（OpenWind の Reed1dof は mouth_pressure 以外
     定数のみ）ため、1音ずつシミュして連結する。
