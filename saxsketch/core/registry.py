@@ -67,6 +67,19 @@ class Component(ABC):
         """
         return self.build(params)
 
+    def params_error(self, params: dict) -> str | None:
+        """パラメータの組が形状として成立しないときに理由を返す。既定は常に `None`。
+
+        `ParamSpec` は**パラメータを 1 本ずつしか見ない**（`validate` は範囲外を
+        黙ってクランプする）ので、各自のレンジ内なのに組み合わせると成立しない
+        値の組が作れる。それを見つけられるのは部品側だけなので、ここで問う。
+
+        コアは楽器を知らないままでよい: 返るのは表示用の 1 文だけで、コアはそれを
+        そのままユーザーへ渡す。**成立しない値は保存しない**（保存すると次の
+        `simulate` も `build` も同じ理由で落ち、セッションが戻せなくなる）。
+        """
+        return None
+
     @abstractmethod
     def simulate(self, params: dict) -> dict:
         """設計時シミュレーション結果（Tier1/2、感度、倍音列）を返す。"""

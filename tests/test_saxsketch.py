@@ -301,6 +301,90 @@ def test_cavity_inside_shell():
                 assert _breaches(p) == [], (tid, k, v, _breaches(p))
 
 
+def test_every_slider_end_still_builds_stations():
+    """どのスライダーを片端まで振ってもステーション生成が落ちないこと。
+
+    `_station_zs` は最後に `keep = [out[0]]` を書く。刻む区間が空だと
+    `IndexError: list index out of range` になり、理由がどこにも出ない。
+    上の `test_cavity_inside_shell` は 8 個のキーだけを見ているので、
+    ここは **`param_specs()` にある全部の数値パラメータ × min/max** を舐める。
+    """
+    for tid in SIZES:
+        comp = get_registry().get("saxophone").make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        for spec in comp.param_specs():
+            if spec.min is None or spec.max is None:
+                continue
+            for end, v in (("min", spec.min), ("max", spec.max)):
+                p = dict(base, **{spec.key: v})
+                assert profiles.cavity_layout_error(p) is None, (tid, spec.key, end)
+                assert profiles.cavity_stations(p), (tid, spec.key, end)
+
+
+def test_impossible_layout_says_why_instead_of_crashing():
+    """成立しないパラメータの**組**を、理由付きで弾くこと。
+
+    `ParamSpec` はパラメータを 1 本ずつしか見ないので、各自のレンジ内なのに
+    組み合わせると潰れる値の組が作れる。`overall_length` を下限 60.0、
+    `bore_length` を上限 60.0 にすると `bore_start_z = 0` で窓が残らず、
+    以前はここが `IndexError: list index out of range` だった。**UI の
+    2 本のスライダから到達できる**ので、理由の無い例外にしてはいけない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        # ボアが全長をほぼ食い切る＝窓の残らない組。`ParamSpec.validate` は
+        # 範囲外を黙ってクランプするだけなので、幾何の側で弾けないといけない。
+        bad = dict(base, bore_length=base["overall_length"] - 1.0)
+        why = profiles.cavity_layout_error(bad)
+        assert why and "窓" in why and "ボア長" in why, (tid, why)
+        # 部品からも同じ理由が取れる（サーバはこれを見て値を保存せずに弾く）
+        assert comp.params_error(bad) == why, tid
+        with pytest.raises(ValueError, match="成立しません"):
+            profiles.cavity_stations(bad)
+        # 既定は当然成立する。成立するのに弾いていたら誤検出。
+        assert comp.params_error(base) is None, tid
+
+
+def test_slider_ranges_alone_cannot_close_the_hole():
+    """レンジを実測基準にしても、2 本の組合せまでは塞がらないこと。
+
+    `overall_length` / `bore_length` のレンジをテンプレート比（±25% / −50〜+25%）に
+    したことで**単独のスライダーでは潰せなくなった**（以前はテナーの全長を下限
+    60.0 にするだけで潰れた）。それでもソプラノは下限の全長 × 上限のボア長で
+    まだ届く —— レンジは 1 本ずつしか効かないので、**組の検査は別に要る**。
+    このテストが落ちるようになったら `cavity_layout_error` の呼び出しを外して
+    よいか判断できる。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "soprano")
+    specs = {s.key: s for s in comp.param_specs()}
+    bad = dict(_template_params("mouthpiece", "soprano"),
+               overall_length=specs["overall_length"].min,
+               bore_length=specs["bore_length"].max)
+    assert profiles.cavity_layout_error(bad) is not None
+
+
+def test_impossible_params_are_not_saved():
+    """成立しない値は保存しないこと。保存するとセッションが戻せなくなる。
+
+    `simulate` も `build` も同じ空洞から作るので、潰れた値を保存すると以後の
+    描画が全部同じ理由で落ちる —— スライダーを戻すための画面ごと出せなくなる。
+    """
+    from saxsketch.server.state import STATE
+    # ソプラノを使うのは、レンジを実測基準にした後も**スライダーだけで**到達
+    # できる唯一のサイズだから（`test_slider_ranges_alone_cannot_close_the_hole`）。
+    STATE.new_project("saxophone", "soprano", "mouthpiece")
+    before = dict(STATE.paramset.values)
+    specs = {s.key: s for s in STATE.component.param_specs()}
+    with pytest.raises(ValueError, match="成立しません"):
+        STATE.apply_params({"overall_length": specs["overall_length"].min,
+                            "bore_length": specs["bore_length"].max})
+    assert dict(STATE.paramset.values) == before      # 1 つも動いていない
+    assert STATE.project.params == before             # 保存側も動いていない
+    STATE.simulate()                                   # まだ描ける
+
+
 def test_template_values_survive_the_schema_unclamped():
     """テンプレートに書いた数値がスキーマ範囲で黙って書き換えられないこと。
 

@@ -102,7 +102,13 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- ボア ---
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
           "ネックコルクとの適合寸法。音程の基準に直結", advanced=True),
-        f("bore_length", "ボア長", "ボア", "mm", 18.0, 60.0, 1.0,
+        # レンジをテンプレート基準にするのは `bore_dia` と同じ理由に加えて、
+        # **絶対値の 18〜60 が 3 サイズ共通だと単独で形状を潰せる**ため。
+        # ボアの始まり = 全長 − ボア長 で、これが窓の手前へ来ると空洞が消える
+        # （`profiles.cavity_layout_error`）。テナー既定 57.5 に対し上限 60 は
+        # 全長 107.5 なら無害だが、全長側の下限 60 と組むと成立しない。
+        f("bore_length", "ボア長", "ボア", "mm",
+          round(0.5 * t["bore_length"]), round(1.25 * t["bore_length"]), 1.0,
           "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True),
         f("cork_depth", "コーク挿入深さ", "ボア", "mm", 12.0, 32.0, 1.0,
           "ネックの標準挿入量。音程チェックの基準位置"),
@@ -133,7 +139,12 @@ def _specs(t: dict) -> list[ParamSpec]:
           "最大径からシャンク径へ絞る肩の長さ（最大径位置に対する比）。"
           "最大径の位置は 全長 −（シャンク長 ＋ 肩）で決まるので、"
           "シャンク長とこの比の組が最大径の位置を決める。テナー実測 0.139", advanced=True),
-        f("overall_length", "全長", "外形", "mm", 60.0, 130.0, 0.5,
+        # ここも実測基準の ±25%。以前は 3 サイズ共通の 60〜130 で、**テナーを
+        # 下限 60 にするだけで空洞が消えた**（既定ボア長 57.5 が全長を食い切る）。
+        # サイズを跨いだ絶対レンジは「ソプラノの長さのテナー」を許してしまう。
+        f("overall_length", "全長", "外形", "mm",
+          round(0.75 * t["overall_length"] * 2) / 2,
+          round(1.25 * t["overall_length"] * 2) / 2, 0.5,
           "マウスピース全長", advanced=True),
         # --- 製造 ---
         f("min_wall", "最小肉厚", "製造", "mm", 1.2, 4.0, 0.1,
@@ -267,6 +278,10 @@ class MouthpieceComponent(Component):
         return part - loft_spline_sections(secs)
 
     # ------------------------------------------------------------ シミュレーション
+
+    def params_error(self, params: dict) -> str | None:
+        """空洞の並びが成立するか。全長・ボア長・ウィンドウ長の**組**で決まる。"""
+        return profiles.cavity_layout_error(params)
 
     def simulate(self, params: dict) -> dict:
         with profiles.params_scope(params):

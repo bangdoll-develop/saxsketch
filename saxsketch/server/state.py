@@ -197,8 +197,20 @@ class AppState:
         }
 
     def apply_params(self, values: dict) -> dict:
+        """スライダーの値を適用する。成立しない組は**保存せずに弾く**。
+
+        `ParamSpec.validate` はパラメータを 1 本ずつしか見ないので、各自のレンジ内
+        なのに組み合わせると形状が潰れる値の組が作れる（`Component.params_error`）。
+        保存してしまうと以後の `simulate` も `build` も同じ理由で落ち、スライダーを
+        戻すための画面ごと出せなくなる。試した値を捨てて `ValueError` を上げる。
+        """
         assert self.paramset is not None and self.project is not None
+        keep = dict(self.paramset.values)
         applied = self.paramset.apply(values)
+        bad = self.component.params_error(applied) if self.component else None
+        if bad:
+            self.paramset.apply(keep)
+            raise ValueError(bad)
         self.project.params = dict(applied)
         return applied
 

@@ -127,7 +127,19 @@ export default function App() {
         const prev = manualEditRef.current;
         if (prev && r.stale && !prev.stale) setStaleWarn(true);  // 陳腐化した瞬間に警告
         if (prev && prev.stale !== r.stale) setManualEdit({ ...prev, stale: r.stale });
-      } catch (e) { setError(String((e as Error).message)); }
+      } catch (e) {
+        setError(String((e as Error).message));
+        // 値の組が成立せずサーバが弾いた場合、サーバ側は前の値のまま。楽観更新した
+        // ぶんを**送ったキーだけ**戻す。戻さないと画面の値とサーバの値が食い違い、
+        // 断面リクエスト（画面の値をクエリで渡す）が同じ理由で落ち続ける。
+        try {
+          const p = await api.getProject();
+          setParams((prev) => ({
+            ...prev,
+            ...Object.fromEntries(Object.keys(payload).map((k) => [k, p.params[k]])),
+          }));
+        } catch { /* 取り直せないときは楽観値のまま。次の操作で復帰する */ }
+      }
     }, 250);
     // 形状再生成のデバウンスは PUT と**並行**に数える。await の後ろに置くと
     // 「250ms + PUT の往復 + 500ms」が直列に積算して、連続操作のたびに伸びる。
