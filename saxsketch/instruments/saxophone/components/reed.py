@@ -94,7 +94,10 @@ class ReedComponent(Component):
             return []
         return [
             ("テーブル幅（リード幅）", f"{m['reed_width']:.1f} mm"),
-            ("ウィンドウ長", f"{m['window_length']:.1f} mm"),
+            # 指定値ではなく**実際に開く長さ**。`window_length` はボアの始まりで
+            # 頭打ちになることがある（`profiles.window_length_effective`）。
+            # リードが合わせる相手は形であって、スライダの値ではない。
+            ("ウィンドウ長", f"{profiles.window_length_effective(m):.1f} mm"),
             ("フェイシング長", f"{m['facing_length']:.1f} mm"),
             ("ティップ開き", f"{m['tip_opening']:.2f} mm"),
         ]
@@ -176,8 +179,8 @@ class ReedComponent(Component):
         rows.append(["マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"])
         rows.append(["幅の差", f"{dw:+.2f} mm"])
         zv = rp.vamp_start_z(p)
-        rows.append(["ヴァンプ長 / ウィンドウ長",
-                     f"{zv:.1f} / {m['window_length']:.1f} mm"])
+        win = profiles.window_length_effective(m)
+        rows.append(["ヴァンプ長 / ウィンドウ長", f"{zv:.1f} / {win:.1f} mm"])
         seat0, seat1 = profiles.ligature_seat_range(m)
         rows.append(["踵位置 / リガチャー座",
                      f"{p['reed_length']:.1f} / {seat0:.1f}〜{seat1:.1f} mm"])
@@ -187,7 +190,7 @@ class ReedComponent(Component):
             advice = (f"幅が {abs(dw):.2f}mm {'広い' if dw > 0 else '狭い'}です。"
                       f"{'サイドレールからはみ出します。' if dw > 0 else '脇から息が漏れます。'}"
                       f"先端幅を {m['reed_width']:.1f}mm に合わせてください。")
-        elif zv < m["window_length"] * 0.75:
+        elif zv < win * 0.75:
             status = "warn"
             advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
                       "振動部が硬くなり鳴りにくくなります。")

@@ -84,7 +84,7 @@ STEP 出力のときだけ使う（`build()` は対話用に多角形のまま�
 | サイズ | ソリッド体積 mm³ | ソリッド数 | simulate | is_valid |
 |---|---|---|---|---|
 | tenor | 29024 | 1 | True | True |
-| alto | 21909 | 1 | True | True |
+| alto | 21635 | 1 | True | True |
 | soprano | 12970 | 1 | True | True |
 
 ## 断面法則の連続性（診断・合否なし）
