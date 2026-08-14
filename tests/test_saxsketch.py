@@ -919,6 +919,40 @@ def test_table_reaches_reed_heel():
                 SOPRANO_TABLE_END_MEASURED_MM, abs=0.5), tid
 
 
+#: アルトのテーブル平坦部の終端 [mm]。**実測ではなく実測 2 件から出る量**
+#: （最大径の位置 21.4 と傾斜テーブルの構成式）。どちらの実測にも直接は現れない。
+ALTO_TABLE_END_MM = 73.0
+
+
+def test_alto_needed_both_measurements_to_stay_in_spec():
+    """片方の実測だけでは実在しない不足を記録してしまうこと。
+
+    2026-08-15 にアルトの実測が 2 件同時に届いた（最大径の位置 21.4 / リード全長
+    70.2〜71.1）。**リード側だけを入れると**テーブル終端 70.3 が域の上端に 0.8mm
+    足りず「軽微」が出る。だがこれは実在しない不足で、原因はモデルのテーブルでは
+    なく**テナーから借りたシャンク比**のほう —— 踵を 2.9mm 手前に置いていた。
+    最大径の位置が入ると終端は 73.0 になり「一致」へ戻る。
+
+    ここが warn に戻ったら `shank_length` が借り物へ差し戻された疑いがある。
+    未実測の借り物が判定を汚す 3 例目（コルク帯 26.0→33.7、挿し込み限界
+    33.7→27.1 に続く）を、逆戻りしないように固定する。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    si = _size_info("alto")
+    p = _template_params("mouthpiece", "alto")
+    assert reference_check.reed_length_is_measured(si)
+    _, reed_hi = reference_check.reed_length_range(si)
+
+    assert profiles.table_cut_end_z(p) == pytest.approx(ALTO_TABLE_END_MM, abs=0.1)
+    assert profiles.table_cut_end_z(p) > reed_hi
+    assert reference_check.mouthpiece_card(p, si)["status"] == "ok"
+
+    # 借り物（テナー比 0.1628 × 全長 91.7 = 14.93）に戻すと軽微が出る
+    borrowed = dict(p, shank_length=14.93)
+    assert profiles.table_cut_end_z(borrowed) < reed_hi
+    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "warn"
+
+
 def test_bore_clears_corked_tenon():
     """ボアがコルクを巻いたテノンに嵌まること。
 
@@ -975,14 +1009,24 @@ def test_undersized_bore_is_rejected_not_excused():
 #:
 #:   - tenor  +1.0 … 座の後端が踵より 1.0mm 後ろ（実測マウスピース × 未実測リード）
 #:   - soprano −2.0（ケーン 59.1）〜 −4.9（樹脂 62.0）… **踵が座の後端より後ろへ出る**
-#:   - alto   −4.1 … 同じく反転（実測マウスピース × 未実測リード、2026-08-13）
+#:   - alto   −0.8〜+0.1 … **ほぼ 0**（マウスピースもリードも実測、2026-08-15）
 #:
-#: **アルトの実物（Wood Stone PHROX、全長 91.7mm）が入って符号が 2 例目の反転**を
-#: した。以前の +0.9 は全長 98.54mm という 7.5% 過大なスケール値から出ていた。
-#: いま正のままなのはテナーだけで、そのテナーもリードは未実測の代表値。
+#: **アルトだけが「実測マウスピース × 実測リード」の組**で、そこでは差がほぼ 0 に
+#: なる。ただしこれを設計則の証拠と読んではいけない —— ソプラノも同じく両方実測で、
+#: そちらは −2.0〜−4.9 と大きく外れる。正のままなのはテナーだけで、そのテナーは
+#: リードが未実測の代表値。
+#:
+#: この行は途中で 2 度動いた。B.1 のスケール値（全長 98.54mm）では +0.9、Stage I で
+#: 実物 PHROX（91.7mm）に替えて −4.1、最大径の位置を実測して踵が 2.9mm 後ろへ
+#: 動いて −0.8〜+0.1。**借り物の定数が入っているあいだは符号すら当てにならない。**
 #: 判定はこの等値では出さず、`reference_check` の 2 本（テーブル終端 vs 座の後端 /
 #: vs リード全長域）が持つ。後者はリード全長が実測のサイズでしか判定しない。
-SEAT_MINUS_REED_MM = {"soprano": (-4.9, -2.0), "alto": (-4.10, -4.10), "tenor": (1.02, 1.02)}
+SEAT_MINUS_REED_MM = {"soprano": (-4.9, -2.0), "alto": (-0.80, 0.10), "tenor": (1.02, 1.02)}
+
+#: 最大径の位置（シャンク端から）[mm]。**ノギスでの実測**。
+#: soprano ヤナギサワ刻印4（2026-08-10）/ alto Wood Stone PHROX（2026-08-15）。
+#: テナーは基準の WindyCity を STEP から測ってあり、テンプレートがその値そのもの。
+MAX_DIA_FROM_SHANK_MM = {"soprano": 14.3, "alto": 21.4}
 
 
 def test_ligature_seat_matches_reed_heel():
@@ -995,10 +1039,39 @@ def test_ligature_seat_matches_reed_heel():
         want_lo, want_hi = SEAT_MINUS_REED_MM[tid]
         assert seat1 - reed_hi == pytest.approx(want_lo, abs=0.5), (tid, seat1)
         assert seat1 - reed_lo == pytest.approx(want_hi, abs=0.5), (tid, seat1)
-    # ソプラノの座の後端は実測（最大径がシャンク端から 14.3mm）。ここが動いたら
-    # 実測を書き換えたということなので、テンプレート側を疑うこと。
-    assert profiles.ligature_seat_range(
-        _template_params("mouthpiece", "soprano"))[1] == pytest.approx(57.1, abs=0.5)
+
+
+def test_max_diameter_position_matches_the_caliper():
+    """最大径の位置が実測に一致すること（実測してあるサイズ）。
+
+    `heel_z` は最大径＝リード踵＝テーブル平面が胴に接する z で、外形・リガチャー座・
+    `table_cut_end_z` が全部ここに乗る。実測は「シャンク端から」なので全長から引く。
+
+    **`shank_length` はここからの逆算でしか決まらない。** 実測 1 点では
+    `shank_length` と `shoulder_ratio` の組が一意にならないので（`profiles` の
+    `_SHOULDER_RATIO` のコメント）、比を固定して長さの側を解いている。ここが動いたら
+    実測を書き換えたということなので、テンプレート側を疑うこと。
+    """
+    for tid, want in MAX_DIA_FROM_SHANK_MM.items():
+        p = _template_params("mouthpiece", tid)
+        got = p["overall_length"] - profiles.heel_z(p)
+        assert got == pytest.approx(want, abs=0.1), (tid, got)
+
+
+def test_shank_fraction_is_not_constant_across_sizes():
+    """`shank_length / overall_length` はサイズ間で移らないこと。
+
+    3 サイズとも最大径の位置が実測になり、比が 0.089 / 0.127 / 0.163 と**一定で
+    ないことが確定した**。テナーの 0.163 をアルトに当てた借り物は 14.93 で、実測から
+    解いた 11.63 に対し 28% 過大だった。**「サイズ間で比が移る」を書き戻さないため
+    の番人**で、移ると踵が数 mm ずれて `table_cut_end_z` とリガチャー座が一緒に動く。
+    """
+    fr = {tid: _template_params("mouthpiece", tid)["shank_length"]
+          / _template_params("mouthpiece", tid)["overall_length"] for tid in SIZES}
+    assert fr["soprano"] < fr["alto"] < fr["tenor"], fr
+    # いちばん近い 2 つでも 25% 以上違う（誤差ではなくサイズごとの性質）
+    assert fr["tenor"] / fr["alto"] > 1.25, fr
+    assert fr["alto"] / fr["soprano"] > 1.25, fr
 
 
 def test_cavity_station_roles():
