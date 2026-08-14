@@ -948,6 +948,28 @@ def window_end_z(p: dict) -> float:
     return min(window_front_z(p) + p["window_length"], zb - 4.0)
 
 
+def window_length_effective(p: dict) -> float:
+    """実際に開く窓の長さ [mm]。指定した `window_length` とは限らない。
+
+    `window_end_z` は `zb − 4.0` 側でも頭打ちになる。そちらが効くと
+    **`window_length` を上げても形が一切変わらない**。`cavity_layout_error` は
+    窓が `_MIN_WINDOW_SPAN_MM` を割るまで黙っているので、その手前に
+    「落ちないし壊れてもいないが、スライダが効いていない」帯がある。
+
+    既定値で測ると soprano は可動域 24〜44mm のうち **28.6mm 以上が丸ごと死んでいる**
+    （alto は 41.1mm 以上、tenor は全域が効く）。全長側から入っても同じで、
+    既定の窓長が届かなくなるのは soprano 70.1 / alto 95.0 / tenor 103.3mm 以下。
+    `ParamSpec.validate` の黙ったクランプ（Stage F）と同じ種類だが、こちらは
+    **導出側で起きるのでレンジを見ても分からない**。だから量として公開する。
+    """
+    return window_end_z(p) - window_front_z(p)
+
+
+def window_length_shortfall(p: dict) -> float:
+    """指定した窓長のうち届かなかった分 [mm]。届いていれば 0。"""
+    return max(p["window_length"] - window_length_effective(p), 0.0)
+
+
 def window_open_z(p: dict) -> float:
     """窓が実際に開き始める z（クラウン x=0）。天井がリード面を横切る点。
 
@@ -2041,8 +2063,13 @@ def baffle_handles(p: dict) -> list[dict]:
 
 
 @_scoped
-def baffle_warnings(p: dict) -> list[str]:
-    """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。"""
+def cavity_warnings(p: dict) -> list[str]:
+    """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。
+
+    バッフルだけの話ではない（窓の前縁も後端もここで見る）ので `cavity_`。
+    共通しているのは「スライダの値と実際の形が食い違っていて、しかも
+    エラーにはならない」という 1 点だけ。
+    """
     out: list[str] = []
     zb = bore_start_z(p)
     rb = bore_radius(p)
@@ -2062,6 +2089,17 @@ def baffle_warnings(p: dict) -> list[str]:
     if abs(d) > 0.15:
         out.append(f"窓の開き始めが設計値より {d:+.2f}mm ずれています"
                    "（ティップレール幅が指定どおりになりません）")
+    # 窓の後端側。`window_length` を上げても形が変わらない帯があり、しかも
+    # スライダの可動域から到達できる（`window_length_effective` を見ること）。
+    short = window_length_shortfall(p)
+    if short > 0.05:
+        out.append(f"ウィンドウ長が {short:.1f}mm 届いていません"
+                   f"（指定 {p['window_length']:.1f} → 実際 "
+                   f"{window_length_effective(p):.1f}mm）。窓の後端は"
+                   f"チェンバー→ボアの遷移区間を残すため「ボアの始まり "
+                   f"{bore_start_z(p):.1f} − 4.0mm」で頭打ちになります。"
+                   f"ここから先へ伸ばすには全長を長く / ボア長を短くしてください"
+                   f"（ウィンドウ長を上げても形は変わりません）")
     return out
 
 

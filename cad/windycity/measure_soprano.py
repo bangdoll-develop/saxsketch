@@ -152,7 +152,9 @@ def side_view(p: dict, s: float, cy: float) -> tuple[str, float]:
     base = y_bot + 12.0
     rows = [
         (0.0, p["facing_length"], f"facing_length {p['facing_length']:.1f}"),
-        (z_wf, z_we, f"window_length {p['window_length']:.2f}"),
+        # 引いている線は z_wf→z_we（実際に開く窓）なので、数字も実効値で出す。
+        # 指定値はボアの始まりで頭打ちになることがある（window_length_effective）。
+        (z_wf, z_we, f"window_length {profiles.window_length_effective(p):.2f}"),
         (zb, L, f"bore_length {p['bore_length']:.1f}"),
         (L - p["cork_depth"], L, f"cork_depth {p['cork_depth']:.1f}"),
         (L - profiles.shank_length(p), L,

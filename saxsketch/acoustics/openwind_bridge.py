@@ -516,7 +516,8 @@ def first_resonance_cents(params: dict, size_info: dict) -> float:
     return _cents(f, f1)
 
 
-#: 挿し込み量の探索下限 [mm]。これより浅いとコルクが噛まない。
+#: **コルクが噛むのに要る長さ** [mm]。挿し込み量の探索下限はこれ単体ではなく、
+#: フェルール長を足したもの（下の `usable_insertion_range`）。
 _CORK_MIN_MM = 3.0
 #: ボアの奥に残す余裕 [mm]。ネックは円筒ボアが終わる段で止まるが、コルクは
 #: 潰れながら効くので実際はその手前で噛む。
@@ -533,6 +534,56 @@ _TUNE_SLOPE_MM = 1.0
 #: 0.03mm → 1.87mm、テナーの感度が 0.271 → 0.378 セント/mm）。共鳴の山が広いので
 #: 格子を細かくすると放物線あてはめに使う 3 点がほぼ一直線になり、条件が悪くなる。
 #: 「細かい格子ほど正確」はここでは成り立たない。測って不採用にした。
+
+
+def _ferrule_mm(size_info: dict) -> float:
+    """ネック端面からコルクが始まるまで [mm]。未実測のサイズは 0（＝従来どおり）。
+
+    実物の先端は真鍮のフェルール（補強リング）で、そこにはコルクが無い。
+    **3 サイズとも同じ作り**（ユーザー確認、2026-08-13）だが、実測してあるのは
+    ソプラノの 2.7mm だけ。未実測のサイズに推定値を入れると、いま入っている
+    値がどこから来たのか分からなくなるので 0 のまま置く。
+    """
+    return float(size_info.get("neck_ferrule_length_mm", 0.0))
+
+
+def usable_insertion_range(params: dict, size_info: dict,
+                           cork_max_mm: float | None = None) -> tuple[float, float]:
+    """マウスピースを挿せる範囲 [mm]（ネック端面から測る）。
+
+    浅い側 = フェルール長 ＋ コルクが噛むのに要る長さ。フェルールの上には
+    コルクが無いので、そこを足さないと「3mm 挿してある」が実際には
+    0.3mm しか噛んでいない、という状態を域の内側と数えてしまう。
+
+    深い側は **実測（`insertion_limit_mm`）があればそれを採る**。無いサイズだけ
+    フェルール長 ＋ コルク帯長から推す。**推定は当てにならない** —— 3 サイズとも
+    実測してみると推定と食い違い、しかも向きが揃っていない:
+
+      soprano  推定 33.7（＝ボア 38.3 側でもない）に対し **実測 27.1**
+      alto     推定 30.0 に対し **実測 36.4**
+      tenor    推定 32.0 に対し **実測 36.0**
+
+    ソプラノがコルクの 6.6mm 手前で止まるのは、コルク帯でもボアでもない何か
+    （一体型ネックのテーパ）が噛んでいるため。**計算では出せないので押して測る。**
+
+    **この上限は硬いしきい値ではない。** 実測そのものが「これ以上押し込んだら
+    まずい」という演奏者の判断で、コルク帯も厳しい公差の掛かった部位ではない
+    （幅は周方向でも一定でない。descriptor の `neck_cork_length_source`）。
+    境目に近い判定を出すときは、数字の精度ではなく**実物で確かめること**を言う。
+
+    `cork_max_mm` を渡した場合はコルク帯長として扱い、実測より優先する
+    （掃引・テストで上限を仮定して振るための入口）。
+    """
+    ferrule = _ferrule_mm(size_info)
+    lo = ferrule + _CORK_MIN_MM
+    hi = float(params["bore_length"]) - _CORK_BORE_MARGIN_MM
+    if cork_max_mm is not None:
+        hi = min(hi, ferrule + float(cork_max_mm))
+    elif size_info.get("insertion_limit_mm") is not None:
+        hi = min(hi, float(size_info["insertion_limit_mm"]))
+    elif size_info.get("neck_cork_length_mm") is not None:
+        hi = min(hi, ferrule + float(size_info["neck_cork_length_mm"]))
+    return lo, max(hi, lo + 1.0)
 
 
 def tuning_position(params: dict, size_info: dict,
@@ -559,9 +610,10 @@ def tuning_position(params: dict, size_info: dict,
       reachable       in_tune_mm が実用域に入っているか
       headroom_mm     [抜ける余裕, 押し込める余裕]
 
-    深い側の上限はボアではなく**ネックのコルク帯**で決まることが多い
-    （ソプラノはボア 38.3mm に対しコルク 26.0mm）。`cork_max_mm` を渡さない
-    場合は `size_info["neck_cork_length_mm"]` を使う。
+    実用域は `usable_insertion_range` が決める。深い側の上限は**3 サイズとも実測**
+    （`insertion_limit_mm` = 27.1 / 36.4 / 36.0）で、ボアでもコルク帯でもない。
+    しかも**硬いしきい値ではない**（実測自体が演奏者の「これ以上はまずい」の判断）。
+    `cork_max_mm` を渡した場合だけコルク帯長からの推定に戻る。
 
     **既定の経路は共鳴を 2 回しか解かない。** `simulate` の予算は 50ms
     （`cad/perf/bench_ui_latency.BUDGET`）で、`simulate` 自体が既に 20〜31ms
@@ -576,12 +628,7 @@ def tuning_position(params: dict, size_info: dict,
     ここではキャッシュしない —— 引数が dict でキーにできず、
     `server.state.simulate` が `_params_key()` で同じ粒度のキャッシュを既に持つ。
     """
-    lo = _CORK_MIN_MM
-    hi = float(params["bore_length"]) - _CORK_BORE_MARGIN_MM
-    cap = cork_max_mm if cork_max_mm is not None else size_info.get("neck_cork_length_mm")
-    if cap is not None:
-        hi = min(hi, float(cap))
-    hi = max(hi, lo + 1.0)
+    lo, hi = usable_insertion_range(params, size_info, cork_max_mm)
 
     # 空洞部は挿し込み量に依らないので 1 回だけ組む（1 回 6〜9ms）。
     cavity = _cavity_points(params)

@@ -349,7 +349,7 @@ class MouthpieceComponent(Component):
             "z_range": [0.0, params["overall_length"]],
             "curves": profiles.section_curves(params),
             "handles": profiles.baffle_handles(params),
-            "warnings": profiles.baffle_warnings(params),
+            "warnings": profiles.cavity_warnings(params),
             "baffle_type": params.get("baffle_type", "step"),
             "title": "側面断面（中央面）— バッフルの丸ポチをドラッグ",
         }
@@ -529,8 +529,15 @@ class MouthpieceComponent(Component):
             ("フェイシング長", f"{p['facing_length']:.1f} mm"),
             ("ボア径", f"φ{p['bore_dia']:.2f} mm"),
             ("ボディ径（リガチャー座）", f"φ{p['body_dia']:.1f} mm"),
+            # 実効値で出す。`window_length` は「ボアの始まり −4.0mm」で頭打ちに
+            # なることがあり、その帯では指定値が形に出ない。仕様書は納品物なので、
+            # 部品が持っていない寸法を書いてはいけない（`window_length_effective`）。
             ("ウィンドウ長 × 窓幅",
-             f"{p['window_length']:.1f} × {profiles.window_width(p):.1f} mm"),
+             f"{profiles.window_length_effective(p):.1f} × "
+             f"{profiles.window_width(p):.1f} mm"
+             + (f"（指定 {p['window_length']:.1f}mm はボアの始まりに阻まれて "
+                f"{profiles.window_length_shortfall(p):.1f}mm 届いていません）"
+                if profiles.window_length_shortfall(p) > 0.05 else "")),
             ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
             # コーク挿入深さは寸法ではなくチューニング量。設計値として意味があるのは
             # 「目標音で鳴らせる挿し込み量が実際に届く範囲にあるか」の方。
