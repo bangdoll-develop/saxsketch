@@ -818,7 +818,7 @@ def test_template_values_survive_the_schema_unclamped():
     from saxsketch.core.schema import ParamSet
     reg = get_registry().get("saxophone")
     for tid in SIZES:
-        for cid in ("mouthpiece", "reed", "ligature", "neck"):
+        for cid in ("mouthpiece", "reed", "ligature", "neck", "body"):
             comp = reg.make_component(cid, tid)
             specs = {s.key: s for s in comp.param_specs()}
             applied = ParamSet(comp.param_specs(), comp.template.get(cid, {})).values
@@ -1776,7 +1776,7 @@ def alto_part_cad(alto):
     return comp.build_cad(params)
 
 
-def test_body_segments_cover_and_join(alto):
+def test_mp_body_segments_cover_and_join(alto):
     """胴の母線区間が端点を共有して全長を覆い、C1 の折れ目で切れていること。
 
     区間の切れ目がずれるとスプライン母線が折れ目をまたいでうねる（実測で
@@ -1800,7 +1800,7 @@ def test_body_segments_cover_and_join(alto):
             assert r == pytest.approx(profiles.outer_radius(p, z), abs=1e-9)
 
 
-def test_body_spline_stays_on_the_law(alto):
+def test_mp_body_spline_stays_on_the_law(alto):
     """区間ごとのスプライン母線が、サンプル点の**間**でも法則から外れないこと。
 
     全区間を1本のスプラインで内挿していた試作では、ティップ面取りの折れ目で
@@ -2717,13 +2717,24 @@ def test_api_flow(tmp_path):
     r = c.put("/api/project/params", json={"params": {"tip_opening": 99.0}})
     assert r.json()["params"]["tip_opening"] == 3.2  # 上限にクランプ
 
+    # 知らないコンポーネントは 400。`available()` が False のものも同じ経路を通る
+    # （4-B.2a で `body` が実装され、いま `_Planned` のコンポーネントは 1 つも無い）。
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
-        "component_id": "body"})
-    assert r.status_code == 400  # 未実装コンポーネント（Phase 4-B.2）
+        "component_id": "keywork"})
+    assert r.status_code == 400
 
     r = c.get("/api/model.stl?quality=preview")
     assert r.status_code == 200 and len(r.content) > 10000
+
+    # `body` は 4-B.2a で `_Planned` を卒業した。STL を取ったあとに置いてあるのは、
+    # ここでプロジェクトを差し替えると上の model.stl が管体のビルド（アルトで 12 秒）
+    # になってしまうため。
+    r = c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "body"})
+    assert r.status_code == 200
+    assert r.json()["simulation"]["kind"] == "body"
 
 
 # ------------------------------------------------------------------ ポート競合
@@ -3344,3 +3355,212 @@ def test_mp_baffle_handles_move_tone_metrics():
     cv = dict(base, baffle_type="curve")
     assert (br.tone_metrics(dict(cv, baffle_curvature=1.0))["brightness"]
             > br.tone_metrics(dict(cv, baffle_curvature=-1.0))["brightness"] + 0.4)
+
+
+# ============================================================ 管体（Phase 4-B.2a）
+
+#: 3 サイズの円錐リーチ [mm]（スロート＝ネック小端からベル出口まで）。
+#: `openwind_bridge._calibrate_extension` が「低音がその音で鳴る」長さとして解いた値で、
+#: Tier1 の延長円錐と**同じもの**。ここがずれたら管体と音響が違う楽器になっている。
+CONE_REACH_MM = {"soprano": 652.6, "alto": 997.3, "tenor": 1378.0}
+#: ネックを省いて詰めたときのセント（＝(B) の落とし穴の大きさ）。頂点距離を含めた比。
+NECK_DROPPED_CENTS = {"soprano": 355.0, "alto": 346.0, "tenor": 289.0}
+
+
+def _body(tid, **override):
+    """(comp, params, neck_params)。"""
+    from saxsketch.core.schema import ParamSet
+    comp = get_registry().get("saxophone").make_component("body", tid)
+    vals = dict(ParamSet(comp.param_specs(), comp.template["body"]).values)
+    vals.update(override)
+    return comp, dict(ParamSet(comp.param_specs(), vals).values), comp._neck()
+
+
+def test_body_template_has_every_param_and_is_available():
+    from saxsketch.instruments.saxophone.components import BodyComponent
+    assert BodyComponent.available() is True
+    for tid in SIZES:
+        comp = get_registry().get("saxophone").make_component("body", tid)
+        missing = {s.key for s in comp.param_specs()} - set(comp.template["body"].keys())
+        assert not missing, f"{tid} テンプレート欠落キー: {missing}"
+
+
+def test_body_cone_reaches_the_calibrated_length():
+    """管体の円錐が、音響が使っている延長円錐と同じ長さに届いていること。
+
+    別に持つと「管体は届いているのに Tier1 は別の長さで解いている」状態になり、
+    どちらが正しいのか誰にも分からなくなる。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid, want in CONE_REACH_MM.items():
+        comp, p, n = _body(tid)
+        assert bpf.cone_reach_mm(p, n) == pytest.approx(want, abs=0.1), tid
+        assert comp._target_cone_mm() == pytest.approx(want, abs=0.5), tid
+        assert comp._cone_card(p)["status"] == "ok", tid
+
+
+def test_body_integrated_and_separate_are_the_same_instrument():
+    """一体型（ネックまで1部品）と別体で**気柱が完全に一致**すること。
+
+    継ぎ目もテノンも音響モデルに入っていない（共鳴管はマウスピース→円筒ボア→
+    欠損円錐で、「ネック」という区間を持たない）。だから一体化しても音程は
+    動かない。**「一体型のほうが音が良い/悪い」とは言えない**という主張を、
+    ここで固定する。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        comp, sep, n = _body(tid, neck_joint="separate")
+        _c, integ, _n = _body(tid, neck_joint="integrated")
+        si = comp.size_info
+        assert (bpf.acoustic_geometry(sep, si, n)
+                == bpf.acoustic_geometry(integ, si, n)), tid
+        # 部品の弧長だけが違う（一体型はネックのぶん長い）
+        assert bpf.part_arc(integ, n) - bpf.part_arc(sep, n) == pytest.approx(
+            float(n["neck_length"]), abs=1e-9), tid
+        # 円錐は同じ位置から始まる
+        assert bpf.cone_reach_mm(sep, n) == bpf.cone_reach_mm(integ, n), tid
+
+
+def test_body_integrated_starts_at_the_throat_bore():
+    """一体型の管はスロート（ネック小端）のボア径から始まること。
+
+    ここが `neck_bore_id_mm` でなくなると、それは「ネックを省いた」形で、
+    円錐の先端側が消えて別の楽器になる。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        comp, p, n = _body(tid, neck_joint="integrated")
+        si = comp.size_info
+        assert (2.0 * bpf.bore_radius_at(0.0, p, si, n)
+                == pytest.approx(si["neck_bore_id_mm"], abs=1e-6)), tid
+        assert bpf.neck_throat_gap_mm(n, si) == pytest.approx(0.0, abs=0.05), tid
+
+
+def test_body_dropping_the_neck_is_caught_as_a_short_cone():
+    """(B)「ネックを外して詰める」は**弾かれない。形としては成立するから。**
+
+    成立しないのではなく**別の楽器になる**（円錐の先端側が消えて高くなる）ので、
+    `params_error` ではなくカードの warn で出す。`params_error` で弾くと
+    「成立しない値は保存しない」規約に引っかかって実験そのものができなくなる。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        # ボウは畳んだままだと短くした管に収まらず、**別の理由**で弾かれてしまう。
+        # ここで見たいのは円錐の長さだけなので、ストレートにして切り分ける。
+        comp, p, n = _body(tid, neck_joint="integrated", bow_angle=0.0)
+        dropped = dict(p, body_arc_length=p["body_arc_length"] - float(n["neck_length"]))
+        assert comp.params_error(dropped) is None, tid       # 形としては作れる
+        card = comp._cone_card(dropped)
+        assert card["status"] == "warn" and card["big"] == "円錐が短い", tid
+        reach = bpf.cone_reach_mm(dropped, n)
+        assert comp._cents_for(reach, comp._target_cone_mm()) == pytest.approx(
+            NECK_DROPPED_CENTS[tid], abs=2.0), tid
+
+
+def test_body_cents_include_the_apex_distance():
+    """セント換算が**頂点距離を足してから**比を取っていること。
+
+    鳴っている管は「マウスピースが代替する欠損円錐（頂点〜スロート）＋実物の管」。
+    リーチだけの比で出すと頂点のぶんを落として過大になる（アルトのネック省略で
+    +431 と出るが、正しくは +346）。
+    """
+    import math
+
+    from saxsketch.acoustics import volume as ac_volume
+    comp, _p, n = _body("alto")
+    target = comp._target_cone_mm()
+    dropped = target - float(n["neck_length"])
+    apex = ac_volume.missing_cone(comp.size_info)["apex_distance_mm"]
+    naive = -1200.0 * math.log2(dropped / target)
+    assert naive == pytest.approx(431.0, abs=3.0)            # 頂点を落とした値
+    assert comp._cents_for(dropped, target) == pytest.approx(346.0, abs=2.0)
+    assert comp._cents_for(dropped, target) == pytest.approx(
+        -1200.0 * math.log2((apex + dropped) / (apex + target)), abs=1e-9)
+
+
+def test_body_bow_angle_does_not_change_the_air_column():
+    """曲げても弧長が同じなら気柱は動かないこと（弧長近似の裏返し）。
+
+    「折り位置を自由にできる」と言えるのはこの範囲まで。**曲げが音程に与える
+    実際の影響はモデルに入っていない**ので、モデルが動かないことは
+    「実物でも動かない」という意味ではない。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    comp, straight, n = _body("alto", bow_angle=0.0)
+    _c, bent, _n = _body("alto", bow_angle=180.0)
+    si = comp.size_info
+    assert bpf.part_arc(straight, n) == bpf.part_arc(bent, n)
+    assert bpf.acoustic_geometry(straight, si, n) == bpf.acoustic_geometry(bent, si, n)
+    # 曲げたぶん、実際の背丈（z 方向）は縮む
+    z_straight = bpf.centerline_point(bpf.part_end(straight, n), straight, n)[0][2]
+    z_bent = bpf.centerline_point(bpf.part_end(bent, n), bent, n)[0][2]
+    assert z_bent < z_straight - 100.0
+
+
+def test_body_layout_errors_instead_of_clamping():
+    """成立しない組は**理由を返して弾く**こと（黙って頭打ちにしない）。
+
+    `ParamSpec` はパラメータを 1 本ずつしか見ないので、各自のレンジ内なのに
+    組み合わせると成立しない値が作れる。黙ってクランプするとスライダを動かしても
+    形が変わらない死んだ帯ができる（Stage I の `window_length` がそれだった）。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    comp, p, n = _body("alto")
+    assert comp.params_error(p) is None
+    # ボウが本体管に収まらない
+    err = comp.params_error(dict(p, bow_start=750.0))
+    assert err is not None and "ボウが本体管に収まりません" in err
+    # ベルがボウと重なる
+    err = comp.params_error(dict(p, bell_length=320.0))
+    assert err is not None and "ベルがボウと重なります" in err
+    # ベルが円錐より細い（実物のベルは細らない）
+    end_dia = bpf.cone_end_dia(p, comp.size_info, n)
+    err = comp.params_error(dict(p, bell_exit_dia=end_dia - 5.0))
+    assert err is not None and "細くなっています" in err
+    assert comp.params_error(dict(p, bell_exit_dia=end_dia + 0.5)) is None
+    # 曲げ半径が管の外半径以下 → 断面が内側で折り返して自己交差する。
+    # **これを弾かずに OCCT へ渡すと返ってこず、WSL の VM ごと落ちた。**
+    # `ParamSpec` の下限（15.0）では表せない（成立する下限がサイズと肉厚で変わる）
+    # ので、スライダの範囲内なのに成立しない値が作れる。組で見るしかない。
+    err = comp.params_error(dict(p, bow_radius=15.0))
+    assert err is not None and "折り返して自己交差" in err
+    # 半径を上げるだけでは通らない。上げると弧長が伸びてベルと重なり、
+    # さらに脚の間隔（2×半径）とベルの太さの兼ね合いも効く（下のテスト）。
+    # ここは 3 つとも満たす組で「通る」ことを見る。
+    assert comp.params_error(dict(p, bow_radius=50.0, bow_start=400.0)) is None
+
+
+def test_body_folded_tube_does_not_hit_itself():
+    """180° のボウで、ベルが行きの脚に当たる組を弾くこと。
+
+    ロフトは通るのに `is_valid` が False のソリッドになる（掃引で
+    `bell_exit_dia=max(220)` が実際にそうなった）。行きと帰りの脚は
+    **2×曲率半径**しか離れないので、ベルを広げると当たる。
+
+    **既定のアルトは 3mm しか余裕が無い**（軸間 90mm に対し外半径の和 87mm）。
+    実機はベルを外へ振って逃がしているが、モデルはベルを帰りの脚と同軸に
+    置いているので、ここは実機より不利な形になっている。
+    """
+    comp, p, _n = _body("alto")
+    assert comp.params_error(p) is None                      # 既定（φ120）は通る
+    err = comp.params_error(dict(p, bell_exit_dia=150.0))
+    assert err is not None and "折り返した管が自分に当たっています" in err
+    # 曲率半径を上げれば脚が離れるので通る
+    assert comp.params_error(dict(p, bell_exit_dia=150.0, bow_radius=60.0,
+                                  bow_start=400.0)) is None
+    # ストレートは折り返さないので、いくら広げても当たらない
+    comp_s, ps, _ns = _body("soprano")
+    assert comp_s.params_error(dict(ps, bell_exit_dia=220.0)) is None
+
+
+def test_body_print_card_counts_segments_for_both_joints():
+    """分割が要るのは一体型のせいではないこと（別体でも要る）を数で示す。"""
+    from saxsketch.instruments.saxophone.components.neck import BED_HINT_MM
+    for tid in SIZES:
+        comp, sep, n = _body(tid, neck_joint="separate")
+        _c, integ, _n = _body(tid, neck_joint="integrated")
+        for p in (sep, integ):
+            rows = dict(tuple(r) for r in comp._print_card(p)["rows"])
+            segs = int(rows["分割の見込み"].replace(" 分割", ""))
+            assert segs >= 2, (tid, p["neck_joint"], rows)   # どの構成でも 1 枚では出ない
+        assert float(sep["body_arc_length"]) > BED_HINT_MM

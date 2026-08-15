@@ -27,7 +27,7 @@ export interface Suggestion {
   param: string; label: string; direction: string; per_step: number;
   step: number; unit: string;
 }
-/** 汎用シミュレーション カード（リード/リガチャー） */
+/** 汎用シミュレーション カード（リード/リガチャー/ネック/管体） */
 export interface SimCard {
   title: string; big: string | null; status: "ok" | "warn" | "bad";
   rows: [string, string][]; advice: string;
@@ -40,7 +40,7 @@ export interface MouthpieceSimulation {
   cards?: SimCard[];
 }
 export interface CardSimulation {
-  kind: "reed" | "ligature" | "neck";
+  kind: "reed" | "ligature" | "neck" | "body";
   cards: SimCard[];
   /** リードのみ。音プレビュー（印象合成）用 */
   harmonics?: Harmonics;
