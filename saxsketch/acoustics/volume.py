@@ -63,10 +63,21 @@ def missing_cone(size_info: dict) -> dict:
     文献値（ソプラノ 1.74° / テナー 1.52°）、ネック小端内径はユーザーがノギスで
     測れる量なので、どちらも後から実測で置き換えられる。
 
-    公表実測の頂点距離が `missing_cone_length_mm` にあればそれを優先する。導出は
-    半頂角とネック内径の推定に二重に依存し、アルトでは実測 217.5mm に対し 241.7mm と
-    11% 長く出る。実測がある箇所だけ差し替え、無い箇所は導出のまま残して食い違いを表示する
-    （無い箇所を実測に合わせて逆算すると、どの量が間違っていたのか分からなくなる）。
+    頂点距離が `missing_cone_length_mm` にあればそれを優先する。導出は半頂角と
+    ネック内径の推定に二重に依存し、アルトでは 217.5mm に対し 227.3mm と 4.5% 長く出る。
+    値がある箇所だけ差し替え、無い箇所は導出のまま残して食い違いを表示する
+    （無い箇所を合わせて逆算すると、どの量が間違っていたのか分からなくなる）。
+
+    **アルトの 217.5 は「実測」と呼べない。** 出所を追うと descriptor の一文で
+    終わり、文献名も測定者も日付も残っていない（`missing_cone_length_source` に
+    追跡結果がある）。代わりの半頂角 1.6° も補間なので、これは**借り物 A と
+    借り物 B の選択**であって測定の質では決まらない。落としても判定は動かない
+    （アルトの `in_tune_mm` が 13.58 → 11.58mm、実用域の内側で status は ok のまま）
+    ことを測ってあるので、値は動かさずに出所の弱さだけ記録してある。
+
+    ここが返す `tan_theta` は `neck_profiles.bore_large_id` と
+    `body_profiles.cone_tan` も読む。**1 つの楽器に円錐は 1 本**で、ネックも管体も
+    Tier1 も同じ円錐でなければならない。
 
     Returns: {"cc", "apex_distance_mm", "throat_radius_mm", "tan_theta", "source",
               "derived_apex_mm"}
@@ -185,11 +196,15 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
                f"容積差はそのまま音程差にはならない。）")
 
     if cone["source"] == "measured":
-        origin = (f"欠損円錐長は公表実測 {cone['apex_distance_mm']:.1f}mm を採用"
+        # 「実測」と書かない。出所を追うと descriptor の一文で終わり、文献名も
+        # 測定者も日付も残っていない（descriptor の missing_cone_length_source）。
+        origin = (f"欠損円錐長は descriptor の {cone['apex_distance_mm']:.1f}mm を採用"
                   f"（同じネック内径 {size_info['neck_bore_id_mm']}mm と半頂角 "
                   f"{size_info['cone_half_angle_deg']}° から導出すると "
-                  f"{cone['derived_apex_mm']:.0f}mm で "
-                  f"{(cone['apex_distance_mm'] / cone['derived_apex_mm'] - 1) * 100:+.0f}% ずれる）。")
+                  f"{cone['derived_apex_mm']:.1f}mm で "
+                  f"{(cone['apex_distance_mm'] / cone['derived_apex_mm'] - 1) * 100:+.1f}% ずれる）。"
+                  f"**この値は出典未記録の借り物**で、代わりの半頂角も補間なので"
+                  f"どちらも実測ではない。落としても判定は動かないことは確認済み。")
     else:
         origin = (f"欠損円錐長は半頂角 {size_info['cone_half_angle_deg']}°・ネック小端内径 "
                   f"{size_info['neck_bore_id_mm']}mm から導出（頂点まで "
