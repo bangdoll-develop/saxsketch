@@ -157,9 +157,9 @@ class BodyComponent(Component):
             # 完全なストレート（ストレートソプラノ等）。回転体のほうが軽い。
             s0 = bpf.part_start(p, n)
             outer = revolve_profile([(s - s0, bpf.outer_radius_at(s, p, si, n))
-                                     for s in bpf.stations(p, n)])
+                                     for s in bpf.stations(p, si, n)])
             bore = revolve_profile([(s - s0, bpf.wall_inner_radius_at(s, p, si, n))
-                                    for s in bpf.stations(p, n)])
+                                    for s in bpf.stations(p, si, n)])
         else:
             outer = loft_3d_rings(bpf.outer_rings(p, si, n))
             bore = loft_3d_rings(bpf.bore_rings(p, si, n))
@@ -234,10 +234,6 @@ class BodyComponent(Component):
         ]
         if abs(gap) > 0.05:
             rows.append(["参照ネックの小端ボアのずれ", f"{gap:+.2f} mm（スロート基準）"])
-        nt, bt = bpf.neck_cone_tan(si), bpf.cone_tan(si)
-        if abs(bt / nt - 1.0) > 0.005:
-            rows.append(["ネック側テーパとの食い違い",
-                         f"{100.0 * (bt / nt - 1.0):+.2f}%（頂点距離の実測を優先しているため）"])
         note = ("**ベルは音響へ接続していません。** フレアは 3 サイズとも未実測で、"
                 "入れると全閉の第1共鳴が +38〜+106 セント動きます。未実測の仮定で音程の"
                 "記録値を動かさないため、共鳴管は校正済みの直線円錐のままにしてあります。"

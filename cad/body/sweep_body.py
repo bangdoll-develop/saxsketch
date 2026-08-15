@@ -88,7 +88,7 @@ def main(argv: list[str]) -> int:
                 skipped += 1
                 print("  %-30s   ---   弾いた: %s" % (label, err[:60]), flush=True)
                 continue
-            rings = len(bpf.stations(p, neck))
+            rings = len(bpf.stations(p, comp.size_info, neck))
             t0 = time.time()
             try:
                 part = comp.build(p)

@@ -20,12 +20,10 @@
 スピゴットが内側に入るので、内面はスピゴットを受けるぶん広いが、気柱は
 ネックのボアのまま連続している。混ぜると音響が受け口のぶん太くなる。
 
-**円錐の傾きは `volume.missing_cone` と同じ値を使う**（`neck_profiles` は
-`cone_half_angle_deg` の生値を使っており、アルトだけ 4.52% 食い違う ——
-アルトには頂点距離の実測 217.5 があって `missing_cone` はそちらを優先するため）。
-管体が Tier1 と違う円錐を持つと別の楽器になるので、こちらを採る。一体型では
-ネック区間のテーパを本体の円錐に合わせて張り直す（`_fused_neck`）ので継ぎ目に
-折れは出ない。食い違いそのものは `body.py` の接続カードが数字で出す。
+**円錐の傾きは `volume.missing_cone` と同じ値を使う。** 管体が Tier1 と違う円錐を
+持つと別の楽器になる。`neck_profiles.bore_large_id` も同じ関数を読むので、
+**1 つの楽器に円錐は 1 本**（以前はネックだけ `cone_half_angle_deg` の生値を使っており、
+頂点距離の値を持つアルトだけ 4.52% 食い違っていた）。
 """
 from __future__ import annotations
 
@@ -53,13 +51,11 @@ _STEP_BELL_MM = 5.0
 # --------------------------------------------------------------------------- 円錐
 
 def cone_tan(si: dict) -> float:
-    """本体円錐の tanθ。`volume.missing_cone` と**同じ値**を使う。"""
+    """本体円錐の tanθ。`volume.missing_cone` と**同じ値**を使う。
+
+    `neck_profiles.bore_large_id` も同じ値から大端径を出す（テストで固定してある）。
+    """
     return ac_volume.missing_cone(si)["tan_theta"]
-
-
-def neck_cone_tan(si: dict) -> float:
-    """`neck_profiles` が使っている tanθ。比較して食い違いを出すためだけの値。"""
-    return math.tan(math.radians(si["cone_half_angle_deg"]))
 
 
 def throat_radius(si: dict) -> float:
@@ -118,10 +114,14 @@ def _fused_neck(p: dict, si: dict, np_: dict) -> dict:
 
     3 点だけ差し替える。
       - テーパ: 本体の円錐にちょうど乗るよう大端径を与えて `taper_from_cone` を off に
-        する。生の半頂角のままだとアルトで 4.52% 食い違い、継ぎ目に折れが出る。
+        する。傾き自体はネック側も同じ `missing_cone` を読むので今は一致するが、
+        **ユーザーが小端ボアを動かすとずれる**（ネックは自分の小端から、本体は
+        スロートから広げるため）。ここを固定しておかないと継ぎ目に折れが出る。
       - 肉厚: 1 個の印刷部品なので本体側に揃える。別々だと外形に段差が出る。
       - 本体挿入部: 一体型に継手は無い。`neck_profiles.outer_radius_at` は
         `L - body_tenon_length` 以降を細くするので、**負値**を渡して区間ごと消す。
+        `neck_profiles.shoulder_zs` もこれを見るので、消えた段のステーションは
+        置かれない（半径の同じリングが 1μm 間隔で 2 枚並ぶのを避ける）。
     """
     neck_len = float(np_["neck_length"])
     return dict(np_,
@@ -283,7 +283,7 @@ def _ring(center, a, b, r: float, n: int = _RING_N):
 
 # --------------------------------------------------------------------------- ステーション
 
-def stations(p: dict, np_: dict) -> list[float]:
+def stations(p: dict, si: dict, np_: dict) -> list[float]:
     """リングを置く弧長の列（スロート基準）。曲げとベルだけ細かい。"""
     s_lo = part_start(p, np_)
     s_hi = part_end(p, np_)
@@ -300,15 +300,10 @@ def stations(p: dict, np_: dict) -> list[float]:
 
     if is_integrated(p):
         # ネック区間は**ネック自身と同じ列**に置く。別に刻むと同じはずの形が 2 通りできる。
-        zs.update(npf.stations(np_))
-        # テノン（コルク座）の肩を立てる。`npf.stations` は等間隔なので段差の位置を
-        # 持っておらず、そのまま使うと肩が 1 区間ぶん寝る。ネック単体のストレート経路は
-        # `npf._straight_zs` が同じ 2 点を足している（曲げ経路は足していない ——
-        # ネック単体の曲げでは肩が寝たままで、そちらは管体の話ではないので直していない）。
-        tl = float(np_["tenon_length"])
-        for zb in (tl, tl + 1e-3):
-            if 0.0 < zb < float(np_["neck_length"]):
-                zs.add(zb)
+        # 渡すのは `_fused_neck` —— 半径を出すのに使っているのと同じパラメータでないと、
+        # 一体型では消えている本体挿入部の肩にステーションが 2 枚置かれる（半径の同じ
+        # リングが 1μm 間隔で並ぶ＝スライバ面のもと）。
+        zs.update(npf.stations(_fused_neck(p, si, np_)))
 
     b_s0, b_arc, b_rb, _ang = _bow(p)
     bow_a = body0 + b_s0
@@ -331,12 +326,12 @@ def stations(p: dict, np_: dict) -> list[float]:
 
 def outer_rings(p: dict, si: dict, np_: dict) -> list[list[tuple[float, float, float]]]:
     return [_ring(*_cab(s, p, np_), outer_radius_at(s, p, si, np_))
-            for s in stations(p, np_)]
+            for s in stations(p, si, np_)]
 
 
 def bore_rings(p: dict, si: dict, np_: dict) -> list[list[tuple[float, float, float]]]:
     return [_ring(*_cab(s, p, np_), wall_inner_radius_at(s, p, si, np_))
-            for s in stations(p, np_)]
+            for s in stations(p, si, np_)]
 
 
 # --------------------------------------------------------------------------- 音響
@@ -429,7 +424,7 @@ def _self_collision_error(p: dict, si: dict, np_: dict) -> str | None:
     _s0, arc, rb, _ang = _bow(p)
     if rb is None or arc <= 0.0:
         return None
-    ss = stations(p, np_)
+    ss = stations(p, si, np_)
     pts = [(centerline_point(s, p, np_)[0], outer_radius_at(s, p, si, np_)) for s in ss]
     worst = None
     for i, (pi, ri) in enumerate(pts):
@@ -518,7 +513,7 @@ def param_regions(p: dict, np_: dict) -> dict:
 def side_profile_polylines(p: dict, si: dict, np_: dict) -> dict:
     """曲げ平面(XZ)での外形・ボア母線。座標は (z, x)（横長に読める向き）。"""
     ot, ob, it, ib = [], [], [], []
-    for s in stations(p, np_):
+    for s in stations(p, si, np_):
         (cx, _cy, cz), _t, a = centerline_point(s, p, np_)
         ro = outer_radius_at(s, p, si, np_)
         ri = wall_inner_radius_at(s, p, si, np_)
