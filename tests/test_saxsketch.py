@@ -35,11 +35,14 @@ def test_missing_cone_derived_not_constant():
         assert "missing_cone_volume_cc" not in si     # 定数は廃止
         cone = ac_volume.missing_cone(si)
         assert cone["cc"] > 0 and cone["apex_distance_mm"] > 0
-    # アルトだけ公表実測（SBA 217.5mm）があるのでそれを採る。実測ネック内径 12.7mm から
+    # アルトだけ頂点距離 217.5mm が入っているのでそれを採る。実測ネック内径 12.7mm から
     # 導出すると 227.3mm で 4.5% 長い。内径をテノン外径からの一律規則で推定していた頃は
     # 241.7mm ＝ 11% だったので、ネックを実測したぶんだけ食い違いが縮んだ。
-    # 実測がある箇所だけ差し替え、無い箇所は導出のまま残す方針は変えない。導出値を
+    # 値がある箇所だけ差し替え、無い箇所は導出のまま残す方針は変えない。導出値を
     # 217.5 へ合わせに行かない（合わせると半頂角が実測の顔をした逆算値になる）。
+    # **217.5 自体は出典未記録の借り物**（2026-08-15 に出所を追跡）。代わりの半頂角も
+    # 補間なのでどちらも実測ではなく、落としても判定は動かない（アルトの in_tune_mm は
+    # 13.58 → 11.58mm で実用域の内側、status は ok のまま）。だから値は動かさない。
     alto_cone = ac_volume.missing_cone(_size_info("alto"))
     assert alto_cone["source"] == "measured"
     assert alto_cone["apex_distance_mm"] == pytest.approx(217.5)
@@ -3087,6 +3090,84 @@ def test_neck_param_roundtrip_and_wall():
         assert wall == pytest.approx(p["wall_thickness"], abs=1e-6)
 
 
+#: ネックの大端ボア内径 [mm]（`taper_from_cone = "on"` の導出値）。
+#: アルトだけ 24.990 から動いた —— 頂点距離の値を持つのがアルトだけで、そこだけ
+#: `missing_cone` の tanθ が生の半頂角と食い違っていたため。
+NECK_LARGE_ID_MM = {"soprano": 18.613, "alto": 25.546, "tenor": 26.368}
+
+
+def test_neck_taper_is_the_same_cone_as_the_body():
+    """ネックと管体が**同じ円錐**を使うこと（1 つの楽器に円錐は 1 本）。
+
+    以前はネックだけ `cone_half_angle_deg` の生値を使っており、頂点距離の値を持つ
+    アルトだけ 4.52% 食い違って、別体では継ぎ目の気柱に φ0.56 の段ができていた。
+    まずいのは「アルトが急なこと」ではなく、**食い違いが物理ではなくデータの有無で
+    決まっていた**こと —— ソプラノに頂点距離が入った日に、ソプラノも黙って
+    食い違い始める規則だった。UI の表示行ではなくここで見張る。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    from saxsketch.instruments.saxophone.components import neck_profiles as npf
+    for tid in SIZES:
+        comp, p = _neck_params(tid)
+        si = comp.size_info
+        large = npf.bore_large_id(p, si)
+        slope = (large - p["bore_small_id"]) / 2.0 / p["neck_length"]
+        assert slope == pytest.approx(bpf.cone_tan(si), abs=1e-12), tid
+        assert large == pytest.approx(NECK_LARGE_ID_MM[tid], abs=0.001), tid
+    # 別体でも継ぎ目の気柱が連続すること（ネック大端の半径＝本体円錐の同じ位置の半径）
+    for tid in SIZES:
+        comp, p = _neck_params(tid)
+        bc = get_registry().get("saxophone").make_component("body", tid)
+        n = bc._neck()
+        bp = dict(ParamSet(bc.param_specs(), bc.template["body"]).values)
+        assert (npf.bore_radius_at(p["neck_length"], p, comp.size_info)
+                == pytest.approx(bpf.cone_radius_at(float(n["neck_length"]), bp,
+                                                    bc.size_info, n), abs=1e-9)), tid
+
+
+def test_neck_taper_toggle_does_not_jump_the_shape():
+    """`taper_from_cone` を off にしても形が跳ばないこと。
+
+    on のとき `bore_large_id` パラメータは幾何に使われないが、**スライダはその値を
+    表示し、`survey_card` は実測をその値と比べる**。導出値とずれていると、実測が
+    「設計に一致」と出るのに作られる形は別、という状態になる。
+    """
+    from saxsketch.instruments.saxophone.components import neck_profiles as npf
+    for tid in SIZES:
+        comp, p = _neck_params(tid)
+        on = npf.bore_large_id(dict(p, taper_from_cone="on"), comp.size_info)
+        off = npf.bore_large_id(dict(p, taper_from_cone="off"), comp.size_info)
+        assert on == pytest.approx(off, abs=0.05), (tid, on, off)
+
+
+def test_neck_bent_shoulder_is_a_step_not_a_ramp():
+    """曲げネックでもテノン肩・本体挿入部の肩が**段**であること。
+
+    等間隔の `stations()` は段差の位置を持たないので、そのまま使うと肩が 1 区間ぶん
+    寝る。ストレート経路（`_straight_zs`）だけが肩を明示していたため、**同じ
+    パラメータで曲げ角 0 と 24° から違う形が出ていた**（alto で 5.6mm、tenor で
+    6.4mm のスロープ）。
+    """
+    from saxsketch.instruments.saxophone.components import neck_profiles as npf
+    for tid in ("alto", "tenor"):                    # 曲げのあるサイズ
+        comp, p = _neck_params(tid)
+        assert p["bend_angle"] > 0.0, tid
+        ss = npf.stations(p)
+        for z in npf.shoulder_zs(p):
+            assert any(s == pytest.approx(z, abs=1e-9) for s in ss), (tid, z)
+        # 肩の 2 点の間で半径が跳び、その幅は刻みではなく eps
+        tl = p["tenon_length"]
+        r0 = npf.outer_radius_at(tl, p, comp.size_info)
+        r1 = npf.outer_radius_at(tl + npf._SHOULDER_EPS_MM, p, comp.size_info)
+        assert abs(r1 - r0) > 0.5, (tid, r0, r1)
+        assert npf._SHOULDER_EPS_MM < 0.01
+        # ストレート経路と同じ肩を持つ（片方だけが肩を持っている状態に戻さない）
+        zs = npf._straight_zs(p)
+        for z in npf.shoulder_zs(p):
+            assert any(s == pytest.approx(z, abs=1e-9) for s in zs), (tid, z)
+
+
 def test_neck_available_not_planned():
     from saxsketch.instruments.saxophone.components import NeckComponent
     assert NeckComponent.available() is True
@@ -3551,6 +3632,24 @@ def test_body_folded_tube_does_not_hit_itself():
     # ストレートは折り返さないので、いくら広げても当たらない
     comp_s, ps, _ns = _body("soprano")
     assert comp_s.params_error(dict(ps, bell_exit_dia=220.0)) is None
+
+
+def test_body_integrated_has_no_phantom_tenon_shoulder():
+    """一体型に**消えた段のステーション**が置かれていないこと。
+
+    一体型のネック区間は `_fused_neck`（`body_tenon_length = -1.0`）で作るので、
+    別体なら段になる `neck_length - body_tenon_length` に段は無い。生のネック
+    パラメータで `npf.stations` を呼ぶと、そこに**半径の同じリングが 1μm 間隔で
+    2 枚**並ぶ（スライバ面のもと）。テノン肩のほうは一体型にも在るので置かれる。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        comp, p, n = _body(tid, neck_joint="integrated")
+        ss = bpf.stations(p, comp.size_info, n)
+        phantom = float(n["neck_length"]) - float(n["body_tenon_length"])
+        assert not any(abs(s - phantom) < 0.01 for s in ss), (tid, phantom)
+        tl = float(n["tenon_length"])
+        assert sum(1 for s in ss if abs(s - tl) < 0.01) == 2, tid   # 肩は残る
 
 
 def test_body_print_card_counts_segments_for_both_joints():

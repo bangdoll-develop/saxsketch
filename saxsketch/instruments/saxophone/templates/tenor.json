@@ -63,6 +63,7 @@
   "material": "petg",
   "min_wall": 1.6
  },
+ "neck_note": "**bore_large_id 26.4 は控えの値**で、`taper_from_cone` を off にしたときにだけ使われる。on のときの導出値（小端 13.1 ＋ 2×250×tanθ = 26.368）と一致させてあるので、切り替えで形が跳ばない。tanθ は `volume.missing_cone` が返す値で、Tier1 の欠損円錐・`openwind_bridge` の延長円錐・管体の円錐と**同じ** —— 1 つの楽器に円錐は 1 本。テナーは頂点距離の値を持たないので tanθ = tan(1.52°) で、**この整合を取っても値は動かなかった**（動いたのはアルトだけ）。以前ここに置いていた 28.7 は導出値より 2.33mm 太く、UI のスライダと採寸照合はそのずれた値を指していた。**このサイズだけ外部照合がある**: 実測ネック（Selmer SA80 II Jubilee）の大端内径は **26.0mm** で、導出 26.37 との差は 0.37mm（descriptor の neck_dimensions_source）。ただし neck_length 250.0 は設計側の値で実物の長さではないので、この一致は「同じ楽器の同じ場所を測った」比較ではない。tenon_od 15.0 と cork_thickness 1.1 は実測。",
  "neck": {
   "neck_length": 250.0,
   "bore_small_id": 13.1,
@@ -72,7 +73,7 @@
   "cork_thickness": 1.1,
   "body_tenon_length": 25.0,
   "taper_from_cone": "on",
-  "bore_large_id": 28.7,
+  "bore_large_id": 26.4,
   "bend_angle": 22.0,
   "bend_start": 60.0,
   "octave_vent": "on",
@@ -84,7 +85,7 @@
   "min_wall": 1.6,
   "material": "resin"
  },
- "body_note": "**body_arc_length 1128.0 は導出**（実測ではない）。低音 A♭2 103.83Hz が鳴る円錐の実長 1378.0mm から、ネックの弧長 250.0 を引いた値。1378.0 は `openwind_bridge._calibrate_extension` が解いた値そのもので、Tier1 が使っている延長円錐と**同じ**（別に持つと管体と音響が違う楽器になる）。ただし**テナーは円錐の頂点距離を実測していない** —— 半頂角 1.52° からの導出で、アルトでは同じ導出が公表実測 217.5 に対し 241.7 と 11% 長く出ている（`volume.missing_cone`）。同じ大きさの誤差がテナーにも乗っている可能性があり、**管体の長さはその誤差をそのまま引き継ぐ**。なおテナーは半頂角からの導出しか無いので `neck_profiles` の tanθ と一致する（食い違うのはアルトだけ）。**ベルは未実測**: bell_length 190 / bell_exit_dia 140 / flare_power 3.0 はどれも実物を測った値ではなく、実機の見た目に寄せた仮定。だから**音響へ接続していない** —— 接続すると全閉の第1共鳴が +38〜+106 セント動く（K.0 の測定、`cad/windycity/README.md`）。**ボウも未実測**: bow_start 700 / bow_radius 55 / bow_angle 180 は姿勢と印刷の都合で置いた値で、曲げが音程に与える影響はモデルに入っていない（弧長近似）。**neck_joint の既定は 3 サイズとも separate に揃えてある**（サイズごとに既定を変えると「1 サイズだけ挙動が違う」バグを見落とすため）。テナーを一体型にすると部品の弧長が 1378mm になり、ベッド目安 250mm では 6 分割になる —— ただし**別体でも 1128mm で 5 分割**なので、分割が要るのは一体型のせいではない。bore_small_id 13.1 / bore_large_id 86.2 は taper_from_cone を off にしたとき用の控えで、on のときの導出値と一致させてある（切り替えで形が跳ばないように）。",
+ "body_note": "**body_arc_length 1128.0 は導出**（実測ではない）。低音 A♭2 103.83Hz が鳴る円錐の実長 1378.0mm から、ネックの弧長 250.0 を引いた値。1378.0 は `openwind_bridge._calibrate_extension` が解いた値そのもので、Tier1 が使っている延長円錐と**同じ**（別に持つと管体と音響が違う楽器になる）。ただし**テナーは円錐の頂点距離を持っていない** —— 半頂角 1.52° からの導出で、アルトでは同じ導出が descriptor の 217.5 に対し 227.3 と 4.5% 長く出ている（`volume.missing_cone`）。同じ大きさの誤差がテナーにも乗っている可能性があり、**管体の長さはその誤差をそのまま引き継ぐ**。ただし**アルトの 217.5 も出典未記録の借り物**なので（descriptor の missing_cone_length_source）、どちらも実測ではない。tanθ は `neck_profiles` も `body_profiles` も同じ `volume.missing_cone` から取るので、ネックと管体で円錐が食い違うことはない。**ベルは未実測**: bell_length 190 / bell_exit_dia 140 / flare_power 3.0 はどれも実物を測った値ではなく、実機の見た目に寄せた仮定。だから**音響へ接続していない** —— 接続すると全閉の第1共鳴が +38〜+106 セント動く（K.0 の測定、`cad/windycity/README.md`）。**ボウも未実測**: bow_start 700 / bow_radius 55 / bow_angle 180 は姿勢と印刷の都合で置いた値で、曲げが音程に与える影響はモデルに入っていない（弧長近似）。**neck_joint の既定は 3 サイズとも separate に揃えてある**（サイズごとに既定を変えると「1 サイズだけ挙動が違う」バグを見落とすため）。テナーを一体型にすると部品の弧長が 1378mm になり、ベッド目安 250mm では 6 分割になる —— ただし**別体でも 1128mm で 5 分割**なので、分割が要るのは一体型のせいではない。bore_small_id 13.1 / bore_large_id 86.2 は taper_from_cone を off にしたとき用の控えで、on のときの導出値と一致させてある（切り替えで形が跳ばないように）。",
  "body": {
   "body_arc_length": 1128.0,
   "wall_thickness": 2.0,

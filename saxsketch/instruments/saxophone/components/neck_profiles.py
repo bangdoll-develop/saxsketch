@@ -13,17 +13,37 @@ from __future__ import annotations
 
 import math
 
+from saxsketch.acoustics import volume as ac_volume
+
 _RING_N = 48       # 断面リングの点数（全リング一定＝ロフト堅牢性）
 _STATIONS = 40     # ベンド時のロフト断面数
+#: 段差を立てるための 2 点の間隔 [mm]。ステーションをこれだけ離して置くと、
+#: 母線が寝ずに肩が立つ。曲げ（ロフト）でも 44 リングで水密ソリッドになることを
+#: 実測してある。
+_SHOULDER_EPS_MM = 1e-3
 
 
 # --------------------------------------------------------------------------- 寸法
 
 def bore_large_id(p: dict, si: dict) -> float:
-    """ボディ側（大端）ボア内径 [mm]。"""
+    """ボディ側（大端）ボア内径 [mm]。
+
+    **傾きは `volume.missing_cone` と同じ値を使う。** 管体（`body_profiles.cone_tan`）も
+    Tier1 も `openwind_bridge` の延長円錐も同じ関数を読んでいる —— **1 つの楽器に
+    円錐は 1 本**で、ネックはその頂点側の一部でしかない。
+
+    以前はここだけ `cone_half_angle_deg` の生値を使っていた。そのせいで**頂点距離の
+    値を持つサイズ（アルト）だけ 4.52% 食い違い**、別体では継ぎ目の気柱に φ0.56 の
+    段ができていた。食い違いの出方が*物理ではなくデータの有無*で決まるのがまずい ——
+    ソプラノに頂点距離が入った日に、ソプラノも黙って食い違い始める規則だった。
+
+    小端は `p["bore_small_id"]`（ユーザーの値）のまま。傾きは円錐の性質、スロートは
+    設計の自由度で、別の量。スロートが descriptor からずれていることは
+    `body_profiles.neck_throat_gap_mm` が別に報告する。
+    """
     if p["taper_from_cone"] == "on":
-        half = math.radians(si["cone_half_angle_deg"])
-        return p["bore_small_id"] + 2.0 * p["neck_length"] * math.tan(half)
+        tan = ac_volume.missing_cone(si)["tan_theta"]
+        return p["bore_small_id"] + 2.0 * p["neck_length"] * tan
     return p["bore_large_id"]
 
 
@@ -101,6 +121,20 @@ def _ring(center, a, b, r: float, n: int = _RING_N):
     return out
 
 
+def shoulder_zs(p: dict) -> list[float]:
+    """外形が段になる弧長 [mm]。テノン（コルク座）の端と、本体挿入部の始まり。
+
+    `outer_radius_at` はこの 2 か所で不連続に跳ぶ。ステーションがここを跨ぐと
+    母線が寝て、**段のはずの肩が数 mm のスロープになる**。ストレート経路と
+    ベンド経路の両方がこの関数を使う（片方だけが肩を持っていると、曲げ角 0 と
+    24° で同じパラメータから違う形が出る）。
+    """
+    L, tl = p["neck_length"], p["tenon_length"]
+    b0 = L - p["body_tenon_length"]
+    e = _SHOULDER_EPS_MM
+    return [z for z in (tl, tl + e, b0 - e, b0) if 0.0 <= z <= L]
+
+
 def stations(p: dict) -> list[float]:
     """リングを置く弧長の列。
 
@@ -109,7 +143,9 @@ def stations(p: dict) -> list[float]:
     になる。別に刻むと、同じはずの形が 2 通りできる。
     """
     L = p["neck_length"]
-    return [L * i / (_STATIONS - 1) for i in range(_STATIONS)]
+    zs = {L * i / (_STATIONS - 1) for i in range(_STATIONS)}
+    zs.update(shoulder_zs(p))
+    return sorted(zs)
 
 
 # --------------------------------------------------------------------------- ベンド用リング列
@@ -126,12 +162,8 @@ def bore_rings(p: dict, si: dict) -> list[list[tuple[float, float, float]]]:
 
 def _straight_zs(p: dict) -> list[float]:
     L = p["neck_length"]
-    tl = p["tenon_length"]
-    body0 = L - p["body_tenon_length"]
     zs = {L * i / 24.0 for i in range(25)}
-    for zb in (tl, tl + 1e-3, body0 - 1e-3, body0):   # 段差を明示（肩を立てる）
-        if 0.0 <= zb <= L:
-            zs.add(zb)
+    zs.update(shoulder_zs(p))                          # 段差を明示（肩を立てる）
     return sorted(zs)
 
 
