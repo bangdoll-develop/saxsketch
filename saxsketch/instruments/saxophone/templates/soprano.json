@@ -83,5 +83,24 @@
   "key_mount_bosses": "off",
   "min_wall": 1.4,
   "material": "resin"
+ },
+ "body_note": "**body_arc_length 502.6 は導出**（実測ではない）。低音 A♭3 207.65Hz が鳴る円錐の実長 652.6mm から、ネックの弧長 150.0 を引いた値。652.6 は `openwind_bridge._calibrate_extension` が解いた値そのもので、Tier1 が使っている延長円錐と**同じ**（別に持つと管体と音響が違う楽器になる）。ただし**ソプラノは円錐の頂点距離を実測していない** —— 半頂角 1.74° からの導出で、アルトでは同じ導出が公表実測 217.5 に対し 241.7 と 11% 長く出ている（`volume.missing_cone`）。同じ大きさの誤差がソプラノにも乗っている可能性があり、**管体の長さはその誤差をそのまま引き継ぐ**。頂点距離の実測が無いぶん、アルトより出所が弱い。なおソプラノは半頂角からの導出しか無いので `neck_profiles` の tanθ と一致する（食い違うのはアルトだけ）。**ベルは未実測**: bell_length 110 / bell_exit_dia 76 / flare_power 3.0 はどれも実物を測った値ではなく、実機の見た目に寄せた仮定。だから**音響へ接続していない** —— 接続すると全閉の第1共鳴が +38〜+106 セント動く（K.0 の測定、`cad/windycity/README.md`）。bow_angle 0.0 は**ストレート**（実機のストレートソプラノに合わせた）。曲げが無いので bow_start / bow_radius は形に効かない。**neck_joint の既定は separate**: 実機のソプラノは一体型（ネックが本体に固定）の機種が多数あり、このサイズこそ一体型が自然だが、3 サイズで既定を揃えておかないと「ソプラノだけ挙動が違う」種類のバグを見落とすので既定は揃えてある。一体型に切り替えても**音響は動かない**（継ぎ目はモデルに入っていない）。bore_small_id 9.5 / bore_large_id 49.1 は taper_from_cone を off にしたとき用の控えで、on のときの導出値と一致させてある（切り替えで形が跳ばないように）。",
+ "body": {
+  "body_arc_length": 502.6,
+  "wall_thickness": 1.8,
+  "neck_joint": "separate",
+  "socket_length": 22.0,
+  "socket_clearance": 0.15,
+  "taper_from_cone": "on",
+  "bore_small_id": 9.5,
+  "bore_large_id": 49.1,
+  "bow_angle": 0.0,
+  "bow_start": 300.0,
+  "bow_radius": 40.0,
+  "bell_length": 110.0,
+  "bell_exit_dia": 76.0,
+  "flare_power": 3.0,
+  "min_wall": 1.4,
+  "material": "resin"
  }
 }

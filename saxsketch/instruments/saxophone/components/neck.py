@@ -82,12 +82,14 @@ def _specs(t: dict) -> list[ParamSpec]:
     ]
 
 
-_MAT_LABELS = {"resin": "レジン(光造形)", "pla": "PLA", "petg": "PETG",
-               "nylon_sls": "ナイロンPA12(SLS)"}
+#: 材料の表示名・密度・ベッド長の目安。**`body.py` と共有する**（同じ楽器の
+#: 部品どうしで質量の見積りが食い違うと BOM が読めなくなる）ので公開名にしてある。
+MAT_LABELS = {"resin": "レジン(光造形)", "pla": "PLA", "petg": "PETG",
+              "nylon_sls": "ナイロンPA12(SLS)"}
 #: 材料密度 [g/cc]（質量概算用）。
-_MAT_DENSITY = {"resin": 1.15, "pla": 1.24, "petg": 1.27, "nylon_sls": 1.01}
+MAT_DENSITY = {"resin": 1.15, "pla": 1.24, "petg": 1.27, "nylon_sls": 1.01}
 #: 実用ベッド長の目安 [mm]（超過で自動分割の案内を出す。4-B.3）。
-_BED_HINT_MM = 250.0
+BED_HINT_MM = 250.0
 
 
 class NeckComponent(Component):
@@ -226,7 +228,7 @@ class NeckComponent(Component):
     def _print_card(self, params: dict) -> dict:
         p = params
         vol_cc = npf.neck_volume_mm3(p, self.size_info) / 1000.0
-        dens = _MAT_DENSITY.get(p["material"], 1.15)
+        dens = MAT_DENSITY.get(p["material"], 1.15)
         rows = [
             ["肉厚", f"{p['wall_thickness']:.1f} mm"],
             ["最小肉厚（下限）", f"{p['min_wall']:.1f} mm"],
@@ -240,8 +242,8 @@ class NeckComponent(Component):
                                "出ません。肉厚を上げてください。")}
         advice = ("管体は層間の気密が要ります。FDM では層間ポロシティで漏れやすいので、"
                   "レジン（光造形）か、印刷後のシーリングを推奨します。")
-        if p["neck_length"] > _BED_HINT_MM:
-            advice += (f" 全長が実用ベッド目安 {_BED_HINT_MM:.0f}mm を超えています。"
+        if p["neck_length"] > BED_HINT_MM:
+            advice += (f" 全長が実用ベッド目安 {BED_HINT_MM:.0f}mm を超えています。"
                        "造形サイズ自動分割（後段 4-B.3）で対応予定です。")
         return {"title": "印刷・肉厚・気密", "big": "造形可", "status": "ok",
                 "rows": rows, "advice": advice}
@@ -343,7 +345,7 @@ class NeckComponent(Component):
         vol_cc = npf.neck_volume_mm3(p, self.size_info) / 1000.0
         rows = [
             {"type": "3Dプリント", "name": f"ネック本体（{size_label}）", "qty": 1,
-             "material": _MAT_LABELS.get(p["material"], p["material"]),
+             "material": MAT_LABELS.get(p["material"], p["material"]),
              "note": f"材料体積 約{vol_cc:.1f}cc。気密のためレジン/シーリング推奨"},
             {"type": "市販品", "name": "テノン コルクストリップ", "qty": 1,
              "material": "コルク", "note": f"厚 {p['cork_thickness']:.1f}mm（マウスピース勘合）"},

@@ -101,7 +101,13 @@ def _ring(center, a, b, r: float, n: int = _RING_N):
     return out
 
 
-def _stations(p: dict) -> list[float]:
+def stations(p: dict) -> list[float]:
+    """リングを置く弧長の列。
+
+    公開しているのは `body_profiles` が一体型（ネック直結）でこの列をそのまま
+    使うため。同じ列を使うので、一体型のネック区間は別体のネックと**同じリング**
+    になる。別に刻むと、同じはずの形が 2 通りできる。
+    """
     L = p["neck_length"]
     return [L * i / (_STATIONS - 1) for i in range(_STATIONS)]
 
@@ -109,11 +115,11 @@ def _stations(p: dict) -> list[float]:
 # --------------------------------------------------------------------------- ベンド用リング列
 
 def outer_rings(p: dict, si: dict) -> list[list[tuple[float, float, float]]]:
-    return [_ring(*_cab(s, p), outer_radius_at(s, p, si)) for s in _stations(p)]
+    return [_ring(*_cab(s, p), outer_radius_at(s, p, si)) for s in stations(p)]
 
 
 def bore_rings(p: dict, si: dict) -> list[list[tuple[float, float, float]]]:
-    return [_ring(*_cab(s, p), bore_radius_at(s, p, si)) for s in _stations(p)]
+    return [_ring(*_cab(s, p), bore_radius_at(s, p, si)) for s in stations(p)]
 
 
 # --------------------------------------------------------------------------- ストレート用 (z,r)
