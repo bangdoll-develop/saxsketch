@@ -30,6 +30,8 @@
   "shank_dia": 21.08,
   "shank_length": 11.63,
   "shoulder_ratio": 0.139,
+  "body_waist": 0.0,
+  "shoulder_fullness": 0.0,
   "overall_length": 91.7,
   "min_wall": 1.8,
   "material": "resin"

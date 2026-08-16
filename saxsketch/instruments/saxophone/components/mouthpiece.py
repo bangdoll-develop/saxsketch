@@ -132,13 +132,29 @@ def _specs(t: dict) -> list[ParamSpec]:
           "リガチャー適合寸法（最大径）", advanced=True),
         f("shank_dia", "シャンク径", "外形", "mm", 14.0, 28.0, 0.1,
           "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True),
-        f("shank_length", "シャンク長", "外形", "mm", 5.0, 30.0, 0.5,
-          "シャンク平行部の長さ。長いほどロングシャンク仕様。テーブル踵の位置は"
-          "全長からこれを引いて決まるので、リードの座りにも効く"),
-        f("shoulder_ratio", "肩の長さ比", "外形", "比", 0.02, 0.25, 0.005,
+        # 下限 0 は「平行部なし」＝最大径からシャンク端まで一直線の円錐シャンク。
+        # 肩比の上限 0.45 と組で初めて出せる（テナーは 0.3605 が要る）。
+        f("shank_length", "シャンク長", "外形", "mm", 0.0, 30.0, 0.5,
+          "シャンク平行部の長さ。長いほどロングシャンク仕様。0 で平行部が消えて"
+          "最大径から端まで円錐になる。テーブル踵の位置は全長からこれを引いて"
+          "決まるので、リードの座りにも効く"),
+        f("shoulder_ratio", "肩の長さ比", "外形", "比", 0.02, 0.45, 0.005,
           "最大径からシャンク径へ絞る肩の長さ（最大径位置に対する比）。"
           "最大径の位置は 全長 −（シャンク長 ＋ 肩）で決まるので、"
-          "シャンク長とこの比の組が最大径の位置を決める。テナー実測 0.139", advanced=True),
+          "シャンク長とこの比の組が最大径の位置を決める。テナー実測 0.139。"
+          "断面タブの「肩の終わり」ハンドルはこの 2 つを連動させて動かすので、"
+          "最大径の位置を保ったまま平行部だけ伸縮できる", advanced=True),
+        # --- 外形の曲がり具合（断面タブでドラッグする）---
+        # どちらも実測プロファイル（`profiles._BODY_PROFILE` / `_SHOULDER_PROFILE`）を
+        # 基準 0 として歪める。**最大径は頂点**で、この 2 つはそこを跨がない。
+        f("body_waist", "胴の膨らみ", "外形", "比", -0.06, 0.06, 0.005,
+          "ティップ〜最大径の胴をどれだけ膨らませるか。0 が実測形。両端は動かない"
+          "ので、ティップの立ち方と最大径は変わらない（アルトで中ほど ±0.77mm）",
+          advanced=True),
+        f("shoulder_fullness", "肩の張り", "外形", "比", -1.0, 1.0, 0.05,
+          "最大径からシャンクへ絞る肩の曲がり方。0 が実測形、+1 で母線が直線に"
+          "なり円錐、−1 で実測と逆向きに張る（アルトで中ほど ±0.92mm）。"
+          "+1 かつシャンク長 0 なら最大径から端まで完全な円錐", advanced=True),
         # ここも実測基準の ±25%。以前は 3 サイズ共通の 60〜130 で、**テナーを
         # 下限 60 にするだけで空洞が消えた**（既定ボア長 57.5 が全長を食い切る）。
         # サイズを跨いだ絶対レンジは「ソプラノの長さのテナー」を許してしまう。
@@ -280,8 +296,15 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ シミュレーション
 
     def params_error(self, params: dict) -> str | None:
-        """空洞の並びが成立するか。全長・ボア長・ウィンドウ長の**組**で決まる。"""
-        return profiles.cavity_layout_error(params)
+        """値の**組**で成立しなくなる 2 つを弾く。
+
+        - 空洞の並び（全長・ボア長・ウィンドウ長の組）
+        - 外形の並び（最大径 ≥ シャンク径。逆転するとソリッドが割れる）
+
+        どちらも `ParamSpec` は 1 本ずつしか見ないので到達できてしまう。
+        """
+        return (profiles.cavity_layout_error(params)
+                or profiles.outer_layout_error(params))
 
     def simulate(self, params: dict) -> dict:
         with profiles.params_scope(params):
@@ -338,20 +361,60 @@ class MouthpieceComponent(Component):
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
 
+    @staticmethod
+    def _outer_shape_dims(p: dict) -> list[tuple[str, str]]:
+        """外形が実測プロファイルから外れているときだけ仕様書に 1 行足す。
+
+        既定（歪み 0・平行部あり）は実測形そのものなので何も出さない —— 仕様書は
+        納品物なので、**設計者が動かしたところだけ**書く。逆に動かしてあるなら
+        必ず書く: 円錐シャンクは市販リガチャーやネックの噛み方が変わるし、胴の
+        膨らみは実測形との差そのものだから、読む側が知らないと合わせられない。
+        """
+        waist, full = profiles.body_waist(p), profiles.shoulder_fullness(p)
+        cone = profiles.shoulder_is_straight(p) and p["shank_length"] <= 1e-9
+        if abs(waist) < 1e-12 and abs(full) < 1e-12 and not cone:
+            return []
+        parts = []
+        if cone:
+            parts.append("最大径からシャンク端まで一直線（円錐・平行部なし）")
+        else:
+            parts.append(f"平行部 {p['shank_length']:.1f} mm / "
+                         f"肩 {profiles.shoulder_length(p):.1f} mm")
+            if abs(full) >= 1e-12:
+                parts.append(f"肩の張り {full:+.2f}"
+                             + ("（母線が直線）" if profiles.shoulder_is_straight(p) else ""))
+        if abs(waist) >= 1e-12:
+            parts.append(f"胴の膨らみ {waist:+.3f}")
+        return [("外形（実測形からの変更）", " / ".join(parts))]
+
+    def _handle_ranges(self) -> dict:
+        """外形ハンドルへ渡す {key: (min, max, step)}。
+
+        可動域の出所はスキーマ 1 か所にしておく。`profiles` 側にも書くと、
+        レンジを広げたときに片方だけ直してハンドルが途中で止まる。
+        """
+        return {s.key: (s.min, s.max, s.step) for s in self.param_specs()
+                if s.min is not None and s.max is not None}
+
     def section(self, params: dict) -> dict:
-        """中央面 x=0 の断面とバッフルのドラッグハンドル。
+        """中央面 x=0 の断面と、バッフル／外形のドラッグハンドル。
 
         バッフル種別ごとに `active` なハンドルが変わる（型の形状的特徴を壊す
         操作をそもそも出さない）。可動域は `profiles._PLATEAU_RANGE` などの
         法則側の実効範囲そのままで、UI に閾値を持たせない。
+
+        外形ハンドルは `group: "outer"` で返る。UI はズームのタブ
+        （バッフル / 全体）でそのまま出し分ける —— 外形は全体表示でないと
+        画面の外にある。
         """
         return {
             "z_range": [0.0, params["overall_length"]],
             "curves": profiles.section_curves(params),
-            "handles": profiles.baffle_handles(params),
+            "handles": (profiles.baffle_handles(params)
+                        + profiles.outer_handles(params, self._handle_ranges())),
             "warnings": profiles.cavity_warnings(params),
             "baffle_type": params.get("baffle_type", "step"),
-            "title": "側面断面（中央面）— バッフルの丸ポチをドラッグ",
+            "title": "側面断面（中央面）— 丸ポチをドラッグ",
         }
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
@@ -539,6 +602,7 @@ class MouthpieceComponent(Component):
                 f"{profiles.window_length_shortfall(p):.1f}mm 届いていません）"
                 if profiles.window_length_shortfall(p) > 0.05 else "")),
             ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
+            *self._outer_shape_dims(p),
             # コーク挿入深さは寸法ではなくチューニング量。設計値として意味があるのは
             # 「目標音で鳴らせる挿し込み量が実際に届く範囲にあるか」の方。
             # **基準条件での値**であって実演奏の位置の予測ではない（volume.py の

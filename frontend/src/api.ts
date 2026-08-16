@@ -109,12 +109,19 @@ export interface GoalSeekResult {
 export interface Region {
   z0: number; z1: number; side: "top" | "bottom" | "all"; label: string;
 }
+/** ハンドルが主パラメータと一緒に書く従属パラメータ。
+ *  主と**同じ t**（span 上の位置）で線形に決まる。step を持たないのは、
+ *  従属値が主から解いた値だから — 丸めると解が崩れる（サーバ側の注記を参照）。 */
+export interface HandleLinked { key: string; min: number; max: number }
 /** 断面エディタのドラッグハンドル。span はパラメータ min/max に対応する断面座標 */
 export interface SectionHandle {
   key: string; label: string; axis: "z" | "y";
   z: number; y: number;
   value: number; min: number; max: number; span: [number, number];
   unit: string; step: number; active: boolean;
+  /** どのタブで出すか。バッフルは拡大表示、外形は全体表示にしかない */
+  group: "baffle" | "outer";
+  also: HandleLinked[];
 }
 export interface SectionData {
   z_range: [number, number];

@@ -316,23 +316,67 @@ _SHOULDER_PROFILE = [
 ]
 
 
+#: 胴の膨らみの形。両端で厳密に 0 なので、ティップ（u=0）と最大径（u=1）を動かさない。
+def _waist_bump(u: float) -> float:
+    return math.sin(math.pi * min(max(u, 0.0), 1.0))
+
+
+def body_waist(p: dict) -> float:
+    return p.get("body_waist", 0.0)
+
+
+def shoulder_fullness(p: dict) -> float:
+    return p.get("shoulder_fullness", 0.0)
+
+
+def body_shape(p: dict, u: float) -> float:
+    """胴プロファイル r/r_max（u = z/heel_z）。実測形に両端 0 の膨らみを掛ける。
+
+    掛け算にするのは端点を**厳密に**保つため。実測形の 0.3457（u=0）は
+    「ティップがちょうど z=0 に立つ」値で、1.0（u=1）は最大径そのもの。
+    どちらかが動くとテーブル位置かリガチャー座が動く。
+    """
+    return _pchip(_BODY_PROFILE, u) * (1.0 + body_waist(p) * _waist_bump(u))
+
+
+def shoulder_shape(p: dict, s: float) -> float:
+    """肩プロファイル (r − r_shank)/(r_max − r_shank)。実測形と直線のブレンド。
+
+    端点 (0, 1) と (1, 0) はブレンド率に依らず保たれる（直線もそこを通るため）。
+    k=+1 で母線が**厳密な直線**＝最大径からシャンクまでが円錐になる。
+    """
+    k = shoulder_fullness(p)
+    return (1.0 - k) * _pchip(_SHOULDER_PROFILE, s) + k * (1.0 - s)
+
+
+def shoulder_is_straight(p: dict) -> bool:
+    """肩の母線が厳密な直線か（STEP で円錐面 1 枚にできる）。"""
+    return abs(shoulder_fullness(p) - 1.0) < 1e-12
+
+
 def outer_radius_nominal(p: dict, z: float) -> float:
     """胴の外半径（ティップ面取りを掛ける前）。ボア軸まわりの真円。
 
     テーブル位置やビーク稜線の**基準**はこちらで取る。面取りは仕上げの削り代で、
     基準を動かしてはいけない（`outer_radius` を使うと z=0 で 0.7mm ぶん
     テーブルごと下がってティップ開きが狂う）。
+
+    **最大径（`heel_z`）は頂点**で、前後は別々のプロファイルが持つ。形を歪める
+    パラメータもこの境を跨がない —— `body_waist` は z < heel_z だけ、
+    `shoulder_fullness` は z > heel_z だけを動かし、どちらも境の半径 `r_max` を
+    動かさない。動かすのは `body_dia` だけ。実物も滑らかな極大ではなく角で、
+    `_SHOULDER_PROFILE` の s=0 の傾きは胴側の傾きと一致しない。
     """
     r_max = p["body_dia"] / 2.0
     heel = heel_z(p)
     if z <= heel:
-        return r_max * _pchip(_BODY_PROFILE, max(z, 0.0) / heel)
+        return r_max * body_shape(p, max(z, 0.0) / heel)
     r_sh = shank_radius(p)
     sl = shoulder_length(p)
     s = (z - heel) / sl if sl > 0 else 1.0
     if s >= 1.0:
         return r_sh
-    return r_sh + (r_max - r_sh) * _pchip(_SHOULDER_PROFILE, s)
+    return r_sh + (r_max - r_sh) * shoulder_shape(p, s)
 
 
 # ティップ前縁の面取り
@@ -428,7 +472,11 @@ def body_segments(p: dict, n_chamfer: int = 5, n_nose: int = 30,
     mid |= {z for z in body_stations(p) if z_nose < z < heel}
     segs.append(sorted(mid) + [heel])
     if z_sh > heel + 1e-9:
-        segs.append([heel + (z_sh - heel) * i / n_shoulder
+        # 肩が厳密な直線なら 2 点だけ返す＝母線が線分＝CONICAL_SURFACE 1 面。
+        # 44 点のスプラインで通しても形は同じだが、FreeCAD で「円錐面」として
+        # 選べなくなる（`revolve_spline_profile` の 2 点規則）。
+        segs.append([heel, z_sh] if shoulder_is_straight(p) else
+                    [heel + (z_sh - heel) * i / n_shoulder
                      for i in range(n_shoulder + 1)])
     if length > z_sh + 1e-9:
         segs.append([z_sh, length])          # 2点＝直線母線＝CYLINDER 1面
@@ -1421,6 +1469,37 @@ def cavity_layout_error(p: dict) -> str | None:
             f"窓の後端は {zb:.2f} − 4.0 で頭打ちになっています）。")
 
 
+def outer_layout_error(p: dict) -> str | None:
+    """外形の並びが成立しないときに理由を返す。成立していれば `None`。
+
+    条件は 1 つだけ ——**最大径は本当に最大でなければならない**（`body_dia` ≥
+    `shank_dia`）。この 2 つは各自のレンジが独立していて、`ParamSpec` は 1 本ずつ
+    しか見ないので、**UI のスライダ 2 本から到達できる**。逆転すると:
+
+    - 肩プロファイルが内向きではなく**外向き**になる。`outer_radius_nominal` は
+      `r_sh + (r_max − r_sh)·shape` なので `r_max < r_sh` だと符号が反転し、
+      「最大径」の位置（`heel_z`）は最大でなくなる。
+    - テーブル面は「ティップがちょうど z=0 に立つ」ように `outer_radius_nominal(0)`
+      から引くので、胴が細るとテーブルごと上がり、傾いた平面が痩せた胴を
+      斜めに抜ける。**テナー既定 ＋ `body_dia` 下限 18.0 でソリッドが 2 個**に
+      割れる（掃引 `cad/windycity/sweep_outer.py` で発見。`is_valid` は True の
+      まま返るので、面数や体積を見ているだけでは気づけない）。
+
+    ソプラノとアルトはたまたま割れずに残るが、**3 サイズとも最大径がシャンク径を
+    下回っている**（下限 18.0 に対しシャンク径は 18.7 / 21.1 / 23.0）ので、
+    割れなかったほうが偶然。サイズで挙動が変わる組合せは弾く側に倒す。
+    """
+    r_max, r_sh = p["body_dia"] / 2.0, shank_radius(p)
+    if r_max >= r_sh:
+        return None
+    return (f"最大径がシャンク径より細くなっています: 最大径 "
+            f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
+            f"肩が最大径からシャンクへ**太る**向きになり、"
+            f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
+            f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
+            f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+
+
 def _station_zs(p: dict) -> list[float]:
     """空洞ステーションの z 列（ティップ→ボア）。
 
@@ -1854,6 +1933,9 @@ def param_regions(p: dict) -> dict:
         "shank_dia":       r(heel, length, "all", "シャンク"),
         "shank_length":    r(length - shank_length(p), length, "all", "シャンク平行部"),
         "shoulder_ratio":  r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
+        # 歪みの 2 つは最大径（頂点）を跨がない。領域もその境で切る。
+        "body_waist":      r(0.0, heel, "all", "胴（ティップ〜最大径）"),
+        "shoulder_fullness": r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
         "overall_length":  r(0.0, length, "all", "全体"),
         "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
     }
@@ -2004,6 +2086,103 @@ def _roof_at(p: dict, key: str, value, z: float) -> float:
     return cavity_roof_y({**p, key: value}, z)
 
 
+def _outer_at(p: dict, key: str, value, z: float) -> float:
+    return outer_radius({**p, key: value}, z)
+
+
+#: 胴の膨らみハンドルを置く u（= z/heel_z）。ビークが上面を切らなくなるのが
+#: `_BEAK_BLEND1` = 0.525 なので、それより後ろでないと**断面に描かれていない所を
+#: 掴む**ことになる。0.60 は離脱直後で、かつ振れ幅が最大に近い（実測 ±0.65〜0.80mm）。
+_WAIST_HANDLE_U = 0.60
+
+
+def shoulder_end_span(p: dict, ranges: dict) -> tuple[float, float]:
+    """「肩の終わり」ハンドルが動ける z*（＝平行部の始まり）の範囲 [mm]。
+
+    z* から 2 つのパラメータを解く:
+
+        shank_length   = overall_length − z*
+        shoulder_ratio = (z* − heel_z) / heel_z
+
+    **この組は `heel_z` を保つ。** `heel_z = (L − shank) / (1 + ratio)` に入れると
+    z* が約分されて heel_z に戻るため。片方だけ動かすと最大径の位置ごと動いて
+    前方の形まで相似に伸縮してしまうので、ハンドルは必ず 2 つを一緒に書く
+    （`outer_radius_nominal` の「頂点を跨がない」注記を参照）。
+
+    `ranges` は {key: (min, max, step)}。スキーマの可動域はコンポーネント側が
+    持っているので、ここでは受け取るだけにして値を二重に書かない。
+    """
+    length, heel = p["overall_length"], heel_z(p)
+    sl_lo, sl_hi, _ = ranges["shank_length"]
+    sr_lo, sr_hi, _ = ranges["shoulder_ratio"]
+    lo = max(length - sl_hi, heel * (1.0 + sr_lo))
+    hi = min(length - sl_lo, heel * (1.0 + sr_hi))
+    return lo, max(hi, lo)
+
+
+@_scoped
+def outer_handles(p: dict, ranges: dict) -> list[dict]:
+    """外形（胴・肩・シャンク）のドラッグハンドル。`baffle_handles` と同じ形。
+
+    **最大径を跨ぐハンドルは 1 つだけ**（最大径そのもの）。胴の膨らみは
+    z < heel_z、肩の張りとシャンク径は z > heel_z しか動かさない。
+
+    `also` は「同じ t で一緒に書くパラメータ」。**step を持たない** ——
+    従属側は主パラメータから解いた値なので、独立に丸めると解が崩れる（肩比を
+    0.005 刻みに丸めると最大径の位置が 0.13〜0.17mm 動く。実測）。フロントは
+    主キーだけ step へ丸め、丸めたあとの t から従属値を引き直すこと。
+    """
+    length, heel = p["overall_length"], heel_z(p)
+    z_sh = shank_start_z(p)
+    z_waist = _WAIST_HANDLE_U * heel
+    z_should = heel + 0.5 * shoulder_length(p)
+    z_shank = max(z_sh, length - 3.0)
+    lo, hi = shoulder_end_span(p, ranges)
+
+    def h(key, label, axis, z, unit, span, also=None, limits=None):
+        # `limits` を渡すのは、そのハンドルの可動域がスキーマの生レンジより狭い
+        # とき（連動ハンドル）。**span の両端と min/max は必ず同じ点を指すこと** ——
+        # 片方だけ生レンジのままにすると t が別の値へ写り、連動先が解と合わなくなる。
+        v_lo, v_hi = limits if limits else ranges[key][:2]
+        step = ranges[key][2]
+        return {
+            "key": key, "label": label, "axis": axis,
+            "z": round(z, 3), "y": round(outer_radius(p, z), 3),
+            "value": round(float(p[key]), 4),
+            # 表示用の `value` と違い、`min`/`max`/`span` は**フロントが t を
+            # 逆算する係数**。桁を落とすと連動先が解からずれる（4 桁だと
+            # 最大径の位置が 2.3e-5mm 動く）ので、丸めは浅くしておく。
+            "min": round(v_lo, 6), "max": round(v_hi, 6),
+            "span": [round(span[0], 6), round(span[1], 6)],
+            "unit": unit, "step": step, "active": True,
+            "group": "outer", "also": also or [],
+        }
+
+    def y_span(key, z):
+        """そのパラメータを可動域の端に振ったときの、この z での外半径。"""
+        v_lo, v_hi, _ = ranges[key]
+        return (_outer_at(p, key, v_lo, z), _outer_at(p, key, v_hi, z))
+
+    return [
+        h("body_waist", "胴の膨らみ", "y", z_waist, "比",
+          y_span("body_waist", z_waist)),
+        h("body_dia", "最大径", "y", heel, "mm", y_span("body_dia", heel)),
+        # t=0 が z*=hi（平行部が最短＝シャンク長が最小）、t=1 が z*=lo。
+        # **可動域は生レンジより狭い**: この外では肩比が域外になり heel_z を
+        # 保てない。全域を振りたければ左のスライダを使う（最大径の位置ごと動く）。
+        h("shank_length", "肩の終わり", "z", z_sh, "mm", (hi, lo),
+          limits=(length - hi, length - lo),
+          also=[{"key": "shoulder_ratio",
+                 # ここも解の係数。9 桁まで残すと残差は 1e-7mm 台に収まる。
+                 "min": round((hi - heel) / heel, 9),
+                 "max": round((lo - heel) / heel, 9)}]),
+        h("shoulder_fullness", "肩の張り", "y", z_should, "比",
+          y_span("shoulder_fullness", z_should)),
+        h("shank_dia", "シャンク径", "y", z_shank, "mm",
+          y_span("shank_dia", z_shank)),
+    ]
+
+
 @_scoped
 def baffle_handles(p: dict) -> list[dict]:
     """断面エディタのドラッグハンドル（断面座標つき）。
@@ -2015,6 +2194,8 @@ def baffle_handles(p: dict) -> list[dict]:
       value, min, max      パラメータの値と**この型での**実効範囲
       span                 [value=min のときの座標, value=max のときの座標]
       active               この型で有効か
+      group                UI がどのタブで出すか（"baffle" / "outer"）
+      also                 同じ t で一緒に書く従属パラメータ（`outer_handles` を参照）
 
     `span` を返すのは、フロントが線形補間するだけで値へ戻せるようにするため。
     形状の法則をフロントへ複製しないための仕掛けで、非線形（`_soft_min` が
@@ -2042,6 +2223,7 @@ def baffle_handles(p: dict) -> list[dict]:
             "span": [round(span[0], 3), round(span[1], 3)],
             "unit": unit, "step": step,
             "active": kind in _HANDLE_TYPES[key],
+            "group": "baffle", "also": [],
         }
 
     return [

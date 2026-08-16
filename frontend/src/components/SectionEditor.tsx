@@ -4,8 +4,9 @@ import { api, type SectionData, type SectionHandle } from "../api";
 interface Props {
   /** 画面が持っている現在のパラメータ。そのままサーバへ渡して断面を描く */
   params: Record<string, unknown>;
-  /** 確定時にパラメータへ反映する（App のデバウンス経路に乗る） */
-  onChange: (key: string, value: number) => void;
+  /** 確定時にパラメータへ反映する（App のデバウンス経路に乗る）。
+   *  1 本のハンドルが複数キーを書くことがあるので dict で渡す（`also`）。 */
+  onChange: (updates: Record<string, number>) => void;
   /** ドラッグ中の未確定値を App へ流す。null で解除。
    *  左のパラメータ欄がこれを重ねて表示するので、離す前から数値が追随する。 */
   onPreview: (updates: Record<string, number> | null) => void;
@@ -32,14 +33,27 @@ const band = (top: [number, number][], bot: [number, number][]) =>
   bot.slice().reverse().map(([z, y]) => `L${z.toFixed(3)},${(-y).toFixed(3)}`).join(" ") +
   " Z";
 
-/** 断面座標 → パラメータ値。span は [値が min のときの座標, max のときの座標] */
-function valueAt(h: SectionHandle, coord: number): number {
+/** 断面座標 → このハンドルが書くパラメータ一式。
+ *  span は [値が min のときの座標, max のときの座標]。
+ *
+ *  **主パラメータだけを step へ丸め、従属側は丸めた t から線形に引き直す。**
+ *  従属値は主から解いた値なので、独立に丸めると解が崩れる（肩の終わりハンドルで
+ *  肩比を 0.005 刻みに丸めると、保つはずの最大径の位置が 0.13〜0.17mm 動く）。 */
+function valuesAt(h: SectionHandle, coord: number): Record<string, number> {
   const [s0, s1] = h.span;
-  if (Math.abs(s1 - s0) < 1e-9) return h.value;
+  const span = h.max - h.min;
+  if (Math.abs(s1 - s0) < 1e-9 || Math.abs(span) < 1e-12) {
+    return { [h.key]: h.value };
+  }
   const t = Math.min(Math.max((coord - s0) / (s1 - s0), 0), 1);
-  const v = h.min + t * (h.max - h.min);
   const step = h.step || 0.01;
-  return Math.min(Math.max(Math.round(v / step) * step, h.min), h.max);
+  const v = Math.min(Math.max(Math.round((h.min + t * span) / step) * step,
+                              Math.min(h.min, h.max)),
+                     Math.max(h.min, h.max));
+  const out: Record<string, number> = { [h.key]: v };
+  const tt = (v - h.min) / span;          // 丸めたあとの実際の位置
+  for (const a of h.also) out[a.key] = a.min + tt * (a.max - a.min);
+  return out;
 }
 
 export default function SectionEditor({ params, onChange, onPreview, modelBusy }: Props) {
@@ -49,7 +63,8 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
   const [dragKey, setDragKey] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragging = useRef<SectionHandle | null>(null);
-  const pending = useRef<number | null>(null);   // ドラッグ中の未確定値
+  // ドラッグ中の未確定値。1 本のハンドルが複数キーを書くので dict で持つ。
+  const pending = useRef<Record<string, number> | null>(null);
   const inflight = useRef(false);
   const seq = useRef(0);
 
@@ -99,7 +114,7 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
     try { svgRef.current?.setPointerCapture(e.pointerId); } catch { /* noop */ }
     dragCtm.current = svgRef.current?.getScreenCTM()?.inverse() ?? null;
     dragging.current = h;
-    pending.current = h.value;
+    pending.current = { [h.key]: h.value };
     setDragKey(h.key);
     onPreview({ [h.key]: h.value });
   };
@@ -108,14 +123,14 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
     const h = dragging.current;
     if (!h) return;
     const pt = toMm(e);
-    const v = valueAt(h, h.axis === "z" ? pt.z : pt.y);
-    pending.current = v;
-    onPreview({ [h.key]: v });   // 左のパラメータ欄をその場で追随させる
+    const vals = valuesAt(h, h.axis === "z" ? pt.z : pt.y);
+    pending.current = vals;
+    onPreview(vals);   // 左のパラメータ欄をその場で追随させる（従属キーも含む）
     // プレビューは1本だけ飛ばす（応答待ちの間は間引く）。CAD ビルドを伴わない
     // エンドポイントなので、この間引きだけで十分追従する。
     if (!inflight.current) {
       inflight.current = true;
-      load({ [h.key]: v }).finally(() => { inflight.current = false; });
+      load(vals).finally(() => { inflight.current = false; });
     }
   };
 
@@ -127,9 +142,9 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
     dragCtm.current = null;
     setDragKey(null);
     // 先に確定してから未確定値を解除する。逆にすると 1 フレームだけ古い値へ
-    // 戻って数値がちらつく。
-    if (pending.current !== null && pending.current !== h.value) {
-      onChange(h.key, pending.current);
+    // 戻って数値がちらつく。主キーが動いていなければ従属キーも動いていない。
+    if (pending.current !== null && pending.current[h.key] !== h.value) {
+      onChange(pending.current);
     }
     pending.current = null;
     onPreview(null);
@@ -142,7 +157,10 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
   }
 
   const c = data.curves;
-  const handles = data.handles.filter((h) => h.active);
+  // ハンドルはズームと同じタブで出し分ける。外形のハンドル（最大径・肩・シャンク）は
+  // バッフル表示だと画面の外にあり、掴めないのに凡例だけ出ることになる。
+  const group = zoomAll ? "outer" : "baffle";
+  const handles = data.handles.filter((h) => h.active && h.group === group);
 
   // 表示範囲。既定はバッフル（ボア開始まで）に寄せる — 編集対象がそこだから。
   const zHi = zoomAll ? data.z_range[1] : (c.bore_top?.[0]?.[0] ?? data.z_range[1]);
@@ -192,7 +210,7 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
             バッフル
           </button>
           <button className={zoomAll ? "active" : ""} onClick={() => setZoomAll(true)}>
-            全体
+            外形（全体）
           </button>
         </div>
         {handles.map((h) => (
@@ -203,7 +221,11 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
           </span>
         ))}
         {handles.length === 0 && (
-          <span className="sec-chip">この種別に断面ハンドルはありません</span>
+          <span className="sec-chip">
+            {group === "baffle"
+              ? "このバッフル種別に断面ハンドルはありません"
+              : "この部品に外形ハンドルはありません"}
+          </span>
         )}
         {/* 断面と数値は即座に追随するが 3D は数秒遅れる。壊れているのではなく
             まだ計算中だと分かるように、断面タブからも見えるようにしておく。 */}

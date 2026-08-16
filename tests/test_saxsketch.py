@@ -1077,6 +1077,130 @@ def test_shank_fraction_is_not_constant_across_sizes():
     assert fr["alto"] / fr["soprano"] > 1.25, fr
 
 
+def test_outer_shape_handles_do_not_cross_the_max_diameter():
+    """外形を歪める 2 つが**最大径（頂点）を跨がない**こと。
+
+    `body_waist` は z < heel_z、`shoulder_fullness` は z > heel_z しか動かさない。
+    どちらも境の半径 `r_max` を動かさない（動かすのは `body_dia` だけ）。
+
+    **これが崩れると何が壊れるか**: 前方が動けばテーブル平面の基準
+    （`table_plane_y` は `outer_radius_nominal(0)` から引く）とリガチャー座が動き、
+    肩を触っただけでティップ開きと音程が変わる。後方が動けばシャンクのはめあいが
+    胴の膨らみに引きずられる。ビット一致で見るのは、この 2 つが**構造的に**
+    別の区間しか触っていないことの確認だから（誤差ではなく分離の主張）。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        heel, length = profiles.heel_z(p), p["overall_length"]
+        lo, hi = dict(p, shoulder_fullness=-1.0), dict(p, shoulder_fullness=1.0)
+        for i in range(201):                       # 頂点まで（肩を端から端まで振る）
+            z = heel * i / 200.0
+            assert (profiles.outer_radius_nominal(lo, z)
+                    == profiles.outer_radius_nominal(hi, z)), (tid, z)
+        thin, fat = dict(p, body_waist=-0.06), dict(p, body_waist=0.06)
+        for i in range(201):                       # 頂点から後ろ（胴を端から端まで振る）
+            z = heel + (length - heel) * i / 200.0
+            assert (profiles.outer_radius_nominal(thin, z)
+                    == profiles.outer_radius_nominal(fat, z)), (tid, z)
+        # 頂点そのものは 4 通りとも同じ（＝ r_max）
+        rs = {profiles.outer_radius_nominal(q, heel)
+              for q in (lo, hi, thin, fat)}
+        assert rs == {p["body_dia"] / 2.0}, (tid, rs)
+
+
+def test_max_diameter_must_actually_be_the_maximum():
+    """`body_dia` < `shank_dia` を組として弾き、成立する側では最大径が本当に最大なこと。
+
+    2 つは各自のレンジが独立していて `ParamSpec` は 1 本ずつしか見ないので、
+    **UI のスライダ 2 本から逆転に到達できる**。逆転すると肩が外向きに開き、
+    テーブル平面（`outer_radius_nominal(0)` から引く）が痩せた胴を斜めに抜けて
+    **テナー既定 ＋ `body_dia` 下限 18.0 でソリッドが 2 個に割れる**
+    （`cad/windycity/sweep_outer.py` で発見。`is_valid` は True のまま返るので
+    妥当性フラグだけ見ていても気づけない）。ソプラノとアルトは割れずに残るが、
+    3 サイズとも逆転自体は起きているので、割れなかったほうが偶然。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        p = _template_params("mouthpiece", tid)
+        assert comp.params_error(p) is None, tid
+
+        bad = dict(p, body_dia=p["shank_dia"] - 0.1)
+        msg = comp.params_error(bad)
+        assert msg is not None and "最大径" in msg, (tid, msg)
+
+        # 境界（等しい）は成立する側。肩の段差が 0 になるだけで形は壊れない。
+        edge = dict(p, body_dia=p["shank_dia"])
+        assert comp.params_error(edge) is None, tid
+
+        # 成立する側では heel_z が本当に外半径の最大を取る
+        for q in (p, edge):
+            heel, length = profiles.heel_z(q), q["overall_length"]
+            r_heel = profiles.outer_radius_nominal(q, heel)
+            for i in range(201):
+                z = length * i / 200.0
+                assert profiles.outer_radius_nominal(q, z) <= r_heel + 1e-9, (tid, z)
+
+
+def test_shoulder_end_handle_keeps_the_max_diameter_in_place():
+    """「肩の終わり」ハンドルは平行部だけ伸縮し、最大径の位置を動かさないこと。
+
+    `heel_z = (全長 − シャンク長) / (1 + 肩比)` は導出値なので、`shank_length` を
+    単独で動かすと**最大径ごと動いて前方の形まで相似に伸縮する**。ハンドルは
+    2 つを一緒に解いて（`profiles.shoulder_end_span` の式）これを防ぐ。
+
+    フロント（`SectionEditor.valuesAt`）と**同じ計算**をここでなぞる: 主キーだけ
+    step へ丸め、従属キーは丸めたあとの t から引き直す。**従属側も独立に step へ
+    丸めると最大径が 0.13〜0.17mm 動く**（実測）—— それを防いでいることの確認なので、
+    しきい値は残る誤差（ハンドル payload の丸めぶん、実測 1e-7mm 台）より少し上に置く。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        p = _template_params("mouthpiece", tid)
+        h = next(x for x in comp.section(p)["handles"]
+                 if x["key"] == "shank_length" and x["group"] == "outer")
+        heel, length = profiles.heel_z(p), p["overall_length"]
+        link = h["also"][0]
+        assert link["key"] == "shoulder_ratio", (tid, h["also"])
+        seen = []
+        for i in range(41):
+            t = i / 40.0
+            v = h["min"] + t * (h["max"] - h["min"])
+            v = min(max(round(v / h["step"]) * h["step"], h["min"]), h["max"])
+            tt = (v - h["min"]) / (h["max"] - h["min"])
+            q = dict(p, shank_length=v,
+                     shoulder_ratio=link["min"] + tt * (link["max"] - link["min"]))
+            assert profiles.heel_z(q) == pytest.approx(heel, abs=1e-5), (tid, v)
+            seen.append(length - profiles.shank_start_z(q))   # 平行部の長さ
+        # 端では平行部が消える＝最大径からシャンク端まで一続きの肩になる
+        assert min(seen) == pytest.approx(0.0, abs=1e-6), (tid, min(seen))
+        assert max(seen) > 10.0, (tid, max(seen))
+
+
+def test_shoulder_can_be_an_exact_cone_to_the_shank_end():
+    """肩の張り +1 ＋ 平行部 0 で、最大径からシャンク端まで**厳密な直線**になること。
+
+    「円錐シャンク」はブレンドの端がたまたま直線に近いのではなく、
+    `shoulder_shape` の直線項が k=1 で丸ごと残るという式の性質。残差を
+    浮動小数の桁で見るのはそのため。STEP 側も母線を 2 点で出す（＝円錐面 1 枚）。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        heel, length = profiles.heel_z(p), p["overall_length"]
+        q = dict(p, shank_length=0.0, shoulder_ratio=(length - heel) / heel,
+                 shoulder_fullness=1.0)
+        assert profiles.shoulder_is_straight(q)
+        r_max, r_sh = p["body_dia"] / 2.0, profiles.shank_radius(q)
+        for i in range(201):
+            t = i / 200.0
+            got = profiles.outer_radius_nominal(q, heel + (length - heel) * t)
+            assert got == pytest.approx(r_max + (r_sh - r_max) * t, abs=1e-9), (tid, t)
+        # 母線が線分なので STEP は 2 点で出す（44 点のスプラインにしない）
+        shoulder = profiles.body_segments(q)[-1]
+        assert len(shoulder) == 2, (tid, [len(s) for s in profiles.body_segments(q)])
+
+
 def test_cavity_station_roles():
     """空洞は 窓→チェンバー→スロート→ボア の順に並び、比 1.0 では単調にボアへ開く。
 
@@ -1121,14 +1245,24 @@ def test_cavity_station_roles():
         assert area(profiles.chamber_max_station(wide)) > area(chamber), tid
 
 
-def test_reference_card_all_match():
-    """規格照合カードが3サイズ×2部品すべてで「一致」になること。
+#: マウスピースの照合カードで「軽微」が出る行。**どちらも実物の性質であって
+#: モデルの粗さではない**ので、消さずに 1 行ずつ理由込みで記録する。
+#:
+#:   soprano  テーブル終端 60.0mm はケーン 59.1 を上回るが樹脂 62.0 に 2.0mm 足りない
+#:            （`SOPRANO_LONG_REED_OVERHANG_MM`）。長いリードの踵は実際にはみ出す。
+#:   tenor    基準機 WindyCity の最大径 30.8 が Jody Jazz Giant 6* の実測 30.0 を
+#:            0.8 超える。アルトと違い**市販リガチャーで入るか確認していない**ので、
+#:            上限を 30.8 へ緩めずに「軽微」で残す（緩めると根拠が「自分の基準機が
+#:            そうだから」になり実物照合が循環する。descriptor の
+#:            `ligature_max_dia_source`）。
+_MP_CARD_MINOR = {"soprano": "リード全長域", "tenor": "最大径"}
 
-    ソプラノのマウスピースだけ「テーブル終端 / リード全長域」が軽微になる。
-    **これはカードが仕事をしている状態で、消してはいけない。** テーブル終端 60.0mm が
-    ケーン 59.1 は上回るが樹脂 62.0 に 2.0mm 足りないことを言っている
-    （`SOPRANO_LONG_REED_OVERHANG_MM`）。**乖離は 1 行も出ないこと**、軽微は
-    その 1 行に閉じていることまで確かめる。
+
+def test_reference_card_all_match():
+    """規格照合カードの「軽微」が想定の 1 行に閉じ、乖離が 1 行も出ないこと。
+
+    **軽微はカードが仕事をしている状態で、消してはいけない**（理由は
+    `_MP_CARD_MINOR`）。アルトだけ全行一致になる。リード側は 3 サイズとも一致。
     """
     reg = get_registry().get("saxophone")
     for tid in SIZES:
@@ -1137,8 +1271,9 @@ def test_reference_card_all_match():
         card = next(c for c in cards if "照合" in c["title"])
         assert not [r for r in card["rows"] if "乖離" in r[1]], (tid, card["rows"])
         minor = [r for r in card["rows"] if "軽微" in r[1]]
-        if tid == "soprano":
-            assert len(minor) == 1 and "リード全長域" in minor[0][0], (tid, card["rows"])
+        want = _MP_CARD_MINOR.get(tid)
+        if want is not None:
+            assert len(minor) == 1 and want in minor[0][0], (tid, card["rows"])
             assert card["status"] == "warn", (tid, card["rows"])
         else:
             assert not minor and card["status"] == "ok", (tid, card["rows"])

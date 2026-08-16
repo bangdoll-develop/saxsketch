@@ -158,6 +158,13 @@ export default function App() {
     pushParams({ [key]: value });
   }, [pushParams]);
 
+  // 複数キーをまとめて確定する。断面ハンドルは 1 本で 2 つのパラメータを書くことが
+  // あり（`SectionHandle.also`）、ゴールシークの提案も同じ形なので経路を共有する。
+  const applyParams = useCallback((updates: Record<string, number>) => {
+    setParams((prev) => ({ ...prev, ...updates }));    // 楽観更新
+    pushParams(updates);
+  }, [pushParams]);
+
   // 断面ハンドルのドラッグ中。値は画面にだけ反映し、サーバへは送らない。
   const onPreview = useCallback((updates: Record<string, number> | null) => {
     previewRef.current = updates;
@@ -201,11 +208,6 @@ export default function App() {
     const path = await pickPath("open");
     if (path) setReference(path);
   }, [setReference, pickPath]);
-
-  const applyProposal = useCallback((proposal: Record<string, number>) => {
-    setParams((prev) => ({ ...prev, ...proposal }));
-    pushParams(proposal);
-  }, [pushParams]);
 
   return (
     <>
@@ -260,13 +262,13 @@ export default function App() {
             </div>
           )}
           {project && viewMode === "section" && (
-            <SectionEditor params={params} onChange={onParamChange}
+            <SectionEditor params={params} onChange={applyParams}
                            onPreview={onPreview} modelBusy={modelBusy} />
           )}
           <div className="badge">
             {project
               ? (viewMode === "section"
-                  ? `${project.component_label} — 丸ポチをドラッグしてバッフルを調整`
+                  ? `${project.component_label} — 丸ポチをドラッグ（タブでバッフル / 外形を切替）`
                   : viewDerived
                     ? (manualEdit?.derived?.kind === "external"
                         ? "外部取込モデル（整列後の形状）"
@@ -315,7 +317,7 @@ export default function App() {
       )}
       {dialog === "goalseek" && sim?.kind === "mouthpiece" && project && (
         <GoalSeekDialog tier2={sim.tier2} schema={project.schema}
-                        onApply={applyProposal} onClose={() => setDialog(null)} />
+                        onApply={applyParams} onClose={() => setDialog(null)} />
       )}
       {dialog === "export" && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
