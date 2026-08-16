@@ -1353,39 +1353,43 @@ def test_stations_monotonic_and_sane(alto):
 
 # ------------------------------------------------------------------ 汎用ビルダー
 
-def test_flat_bottom_rect_pts_is_flat():
+def test_reed_section_bottom_is_flat(alto_reed):
     """底面が厳密に平坦であること（リードのテーブル密着の前提）。"""
-    from saxsketch.geometry.builders import flat_bottom_rect_pts
-    pts = flat_bottom_rect_pts(w=13.0, h=2.0, y0=0.0, corner_r=0.5)
-    ys = [y for _, y in pts]
-    xs = [x for x, _ in pts]
-    assert min(ys) == 0.0
-    assert [y for y in ys if y == 0.0] == [0.0, 0.0]  # 底辺は2点ちょうど
-    assert max(ys) == pytest.approx(2.0)
-    assert min(xs) == pytest.approx(-6.5) and max(xs) == pytest.approx(6.5)
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    for s in rp.sections(p):
+        ys = [y for _, y in s["pts"]]
+        assert min(ys) == 0.0
+        assert [y for y in ys if y == 0.0] == [0.0, 0.0]  # 底辺は2点ちょうど
+        assert max(ys) == pytest.approx(rp.thickness(p, s["z"], 0.0))
+        xs = [x for x, _ in s["pts"]]
+        hw = rp.width(p, s["z"]) / 2.0
+        assert min(xs) == pytest.approx(-hw) and max(xs) == pytest.approx(hw)
 
 
-def test_flat_bottom_rect_pts_constant_vertex_count():
-    """点数が corner_r によらず一定であること。
+def test_reed_sections_keep_one_vertex_count_across_shapes():
+    """点数が形状パラメータによらず一定であること。
 
     `loft_sections` のルールドロフトはパラメータ対応で面を張るため、断面ごとに
     点数が変わると角の位置が辺の途中に写像されて面がねじれる。
     """
-    from saxsketch.geometry.builders import flat_bottom_rect_pts
-    counts = {len(flat_bottom_rect_pts(13.0, 2.0, 0.0, r))
-              for r in (0.0, 1e-9, 0.01, 0.5, 1.0, 5.0)}   # 5.0 は上限クランプ
-    assert len(counts) == 1
-    # 角丸ゼロ相当でも底面は平坦のまま、上端は h に届く
-    pts = flat_bottom_rect_pts(13.0, 2.0, 0.0, 0.0)
-    assert min(y for _, y in pts) == 0.0
-    assert max(y for _, y in pts) == pytest.approx(2.0, abs=0.01)
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+    counts = set()
+    for over in ({}, {"tip_curve_depth": 0.0}, {"tip_curve_depth": 2.5},
+                 {"heel_edge_thickness": 0.3}, {"heel_edge_thickness": 1.6},
+                 {"side_rail_thin": 0.20}, {"side_rail_thin": 1.00}):
+        counts |= {len(s["pts"]) for s in rp.sections({**base, **over})}
+    assert counts == {21}          # 底辺 2 ＋ 上面 19（中央の稜線を含む奇数個）
 
 
 def test_loft_sections_volume_and_watertight(tmp_path):
     """一定断面のロフト体積が解析値と一致し、水密であること。"""
-    from saxsketch.geometry.builders import flat_bottom_rect_pts, loft_sections
+    from saxsketch.geometry.builders import loft_sections
     from saxsketch.export.models import check_mesh, export_model
-    pts = flat_bottom_rect_pts(w=10.0, h=2.0, y0=0.0, corner_r=0.0)
+    pts = [(-5.0, 0.0), (5.0, 0.0), (5.0, 2.0), (0.0, 2.0), (-5.0, 2.0)]
     solid = loft_sections([{"z": 0.0, "pts": pts}, {"z": 20.0, "pts": pts}])
     assert solid.is_valid
     assert solid.volume == pytest.approx(10.0 * 2.0 * 20.0, rel=0.02)
@@ -1421,9 +1425,81 @@ def test_reed_profile_shape(alto_reed):
     assert rp.thickness(p, zv) == pytest.approx(p["heel_thickness"])
     for z in (0.0, zv * 0.5, zv * 0.99):
         assert rp.edge_thickness(p, z) <= rp.thickness(p, z, 0.0) + 1e-9
-    # バーク（未削部）は幅方向一定
-    zb = (zv + p["reed_length"]) / 2.0
-    assert rp.edge_thickness(p, zb) == pytest.approx(rp.thickness(p, zb, 0.0))
+
+
+def test_reed_bark_is_kamaboko_not_a_rectangle(alto_reed):
+    """バークは「全幅一定の長方形」ではなくケーンの円弧が残ったカマボコ。
+
+    旧実装はここで `heel_thickness` を全 x に返していた（踵の断面が 14.0×2.8 の
+    長方形）。実物は円筒のケーンから D 形に切り出すので上面に円弧が残る。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    zb = (rp.vamp_start_z(p) + p["reed_length"]) / 2.0
+    hw = p["heel_width"] / 2.0
+    assert rp.thickness(p, zb, 0.0) == pytest.approx(p["heel_thickness"])
+    assert rp.thickness(p, zb, hw) == pytest.approx(p["heel_edge_thickness"], abs=1e-9)
+    # 踵の端面では幅がちょうど `heel_width` なので、側端厚がそのまま出る
+    assert rp.edge_thickness(p, p["reed_length"]) == pytest.approx(
+        p["heel_edge_thickness"], abs=1e-9)
+    assert rp.edge_thickness(p, zb) < rp.thickness(p, zb, 0.0) - 1.0
+    # 中央から側端へ単調に下がる
+    ts = [rp.thickness(p, zb, hw * i / 12.0) for i in range(13)]
+    assert ts == sorted(ts, reverse=True)
+
+
+def test_reed_cane_arc_is_the_original_tube(alto_reed):
+    """上面の円弧は 3 つの規格量を厳密に通り、**z に依らない**（管はまっすぐ）。"""
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    hw = p["heel_width"] / 2.0
+    assert rp.cane_top(p, 0.0) == pytest.approx(p["heel_thickness"], abs=1e-9)
+    assert rp.cane_top(p, hw) == pytest.approx(p["heel_edge_thickness"], abs=1e-9)
+    # 半径は円の定義から一意。中央厚との差が小さいほど大きな管になる
+    thin = rp.cane_radius({**p, "heel_edge_thickness": 1.6})
+    thick = rp.cane_radius({**p, "heel_edge_thickness": 0.3})
+    assert thin > rp.cane_radius(p) > thick
+    # バーク側では厚み＝円弧そのもの（削り面が上に居ない）
+    for z in (rp.vamp_start_z(p) + 1.0, p["reed_length"]):
+        for x in (0.0, hw * 0.5, hw):
+            assert rp.thickness(p, z, x) == pytest.approx(rp.cane_top(p, x), abs=1e-9)
+
+
+def test_reed_blank_must_fit_in_the_cane_tube(alto_reed):
+    """管より広いブランクを弾くこと（掃引で見つけた組合せ）。
+
+    上面がケーンの円弧になったので、リードが管より広いと円弧がテーブル面より下へ
+    潜って断面が裏返る（`tip_width=18` で断面の最小 y = −0.45、`heel_width=9` で
+    −3.48、後者はソリッドが `is_valid=False`）。**2 つのパラメータの関係**なので
+    `ParamSpec` の範囲では表せない —— 幅を狭くしても側端厚を上げても成立する。
+    """
+    comp, p = alto_reed
+    assert comp.params_error(p) is None
+    assert comp.params_error({**p, "tip_width": 18.0}) is not None
+    assert comp.params_error({**p, "heel_width": 9.0}) is not None
+    # 側端厚を上げて円弧を浅くすれば**同じ幅のまま**成立する（幅だけの制限ではない）
+    assert comp.params_error({**p, "tip_width": 18.0,
+                              "heel_edge_thickness": 1.6}) is None
+
+
+def test_reed_sections_follow_the_thickness_law(alto_reed):
+    """断面ポリゴンの面積が厚みの法則の積分と一致すること。
+
+    旧実装は角丸長方形で近似していて、**先端断面で 15% 太かった**（印刷される形と
+    BOM・剛性が読む法則が別物だった）。断面はもう近似形を経由しない。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+
+    def poly_area(pts):
+        a = 0.0
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+            a += x0 * y1 - x1 * y0
+        return abs(a) / 2.0
+
+    for s in rp.sections(p):
+        law = rp._area(p, s["z"], samples=400)
+        assert poly_area(s["pts"]) == pytest.approx(law, rel=0.005), s["z"]
 
 
 def test_reed_solid_valid(alto_reed, tmp_path):
@@ -1479,6 +1555,86 @@ def test_reed_sections_uniform_vertex_count():
         p = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
         counts = {len(s["pts"]) for s in rp.sections(p)}
         assert len(counts) == 1, f"{tid}: 頂点数が不揃い {counts}"
+
+
+#: 前縁の円弧が参照マウスピースのティップ輪郭からどれだけ離れるか [mm]。
+#: **円弧では 0.1mm より近づけない** —— 実物の輪郭は真円ではないので、既定同士でも
+#: soprano 0.094 / alto 0.103 / tenor 0.118 残る。ここはその残差の上限。
+TIP_CONTOUR_ARC_RESIDUAL_MM = 0.15
+#: 前縁を直線にしたとき角がティップレールから前へ張り出す量 [mm]（実測 1.27〜1.57）。
+TIP_STRAIGHT_OVERHANG_MM = 1.2
+
+
+def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
+    """既定の前縁カーブがマウスピースのティップ輪郭に乗ること。
+
+    直線の前縁（`tip_curve_depth = 0`）だと角が 1.3〜1.6mm 前へ張り出す。これが
+    この パラメータが要る理由なので、両方向を固定する。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        m = _template_params("mouthpiece", tid)
+        p = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        z0 = profiles.tip_contour_z(m, 0.0)
+
+        def worst(pp):
+            out = 0.0
+            for i in range(41):
+                x = hw * i / 40.0
+                gap = rp.front_edge_z(pp, x) - (profiles.tip_contour_z(m, x) - z0)
+                out = gap if abs(gap) > abs(out) else out
+            return out
+
+        assert abs(worst(p)) < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
+        # 直線の前縁は角でレールより前へ出る（負＝張り出し）
+        assert worst({**p, "tip_curve_depth": 0.0}) < -TIP_STRAIGHT_OVERHANG_MM, tid
+
+
+def test_reed_tip_curve_zero_is_the_old_shape(alto_reed):
+    """`tip_curve_depth = 0` で幅が旧式とビット一致すること。
+
+    新しい特徴が既定の形を汚していないことの固定。角の丸みは前縁の角を基準に
+    効かせるようにしたので、カーブ 0 なら基準は z=0 に戻って旧式と同じ式になる。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    flat = {**p, "tip_curve_depth": 0.0}
+
+    def old_width(z):
+        t = min(max(z / p["reed_length"], 0.0), 1.0)
+        w = p["tip_width"] + (p["heel_width"] - p["tip_width"]) * t
+        r = p["tip_corner_r"]
+        if 0.0 < z < r:
+            w -= 2.0 * (r - math.sqrt(max(r * r - (r - z) ** 2, 0.0)))
+        elif z <= 0.0:
+            w -= 2.0 * r
+        return max(w, 0.5)
+
+    for i in range(201):
+        z = p["reed_length"] * i / 200.0
+        assert rp.width(flat, z) == old_width(z), z
+
+
+def test_reed_stiffness_does_not_depend_on_the_tip_curve(alto_reed):
+    """前縁カーブを入れても硬さ相当が跳ばないこと。
+
+    等分布荷重の幅を `width(p, 0.0)` で取っていたときは、カーブを入れると z=0 が
+    幅ゼロの尖点になって荷重が 1/27 に落ち、**硬さが上限 20.0 へ振り切れて**
+    推奨先端厚が 0.02mm になっていた。荷重幅は先端の実効幅で取る。
+    """
+    from saxsketch.acoustics import reed_model
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp, p = alto_reed
+    m = comp.ref_params()
+    flat = {**p, "tip_curve_depth": 0.0}
+    assert rp.tip_load_width(p) == rp.tip_load_width({**p, "tip_curve_depth": 2.5})
+    assert rp.tip_load_width(flat) == rp.width(flat, 0.0)
+    base = reed_model.reed_properties(flat, m)["strength_equiv"]
+    curved = reed_model.reed_properties(p, m)["strength_equiv"]
+    assert curved == pytest.approx(base, rel=0.05)
 
 
 def test_reed_heel_reaches_seat_end(alto_reed):
@@ -1803,7 +1959,9 @@ def test_export_all_components(tmp_path):
         assert e.status_code == 200, e.text
         assert e.json()["mesh_quality"]["watertight"]
         html = Path(e.json()["files"]["spec.html"]).read_text(encoding="utf-8")
-        assert html.count("<svg") == 1          # 断面図が1枚出ている
+        # 図の枚数は部品ごと。リードは厚みプロファイルに加えて踵の断面（カマボコ）
+        # を出す —— 上面がケーンの円弧であることは軸方向の図には現れないため。
+        assert html.count("<svg") == (2 if comp == "reed" else 1)
         heads = re.findall(r"<h2>(.*?)</h2>", html)
         assert any("音響予測" in h for h in heads) == (comp == "mouthpiece")
         assert any("シミュレーション" in h for h in heads)

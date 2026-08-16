@@ -9,7 +9,7 @@ from __future__ import annotations
 from saxsketch.acoustics import reed_model
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
-from saxsketch.geometry.builders import loft_sections, yz_profile_cut_solid
+from saxsketch.geometry.builders import extrude_arc_prism, loft_sections
 
 from . import profiles
 from . import reed_profiles as rp
@@ -18,6 +18,11 @@ from . import reference_check
 # 踵がリガチャー座の後端に届いているかの許容差 [mm]。**規格照合カードと同じ 1 個の値**
 # を使う（同じ幾何を判定しているので、しきい値が 2 つあると片方だけ厳しくなる）。
 SEAT_REACH_TOL = reference_check.SEAT_REACH_TOL
+
+#: 前縁とマウスピースのティップ輪郭のずれをどこから警告するか [mm]。
+#: **円弧では輪郭に 0.1mm より近づけない**（実物の輪郭は真円ではなく、既定同士でも
+#: 0.094〜0.118 残る）ので、その残差を警告にしない値にする。他のカードと同じ 0.3。
+TIP_CONTOUR_TOL = 0.3
 
 
 def _specs(t: dict) -> list[ParamSpec]:
@@ -40,6 +45,13 @@ def _specs(t: dict) -> list[ParamSpec]:
           "硬さへの影響が最大の要素。薄いほど軽く鳴るが潰れやすく、印刷下限もある"),
         f("heel_thickness", "踵厚", "プロファイル", "mm", 1.8, 3.6, 0.05,
           "バーク（未削部）の厚み。規格寸法。テーブル密着に効く", advanced=True),
+        # 上限 1.6 は `heel_thickness` の下限 1.8 より小さい。これで
+        # 中央厚 − 側端厚 ≥ 0.2 が構造的に保証され、`cane_radius` が発散する
+        # 組み合わせをそもそも作れない（`params_error` を足さずに済む）。
+        f("heel_edge_thickness", "踵の側端厚", "プロファイル", "mm", 0.3, 1.6, 0.05,
+          "元のケーン管の円弧を決める（断面がカマボコになる）。中央厚との差が"
+          "大きいほど深い円弧。未実測（実物の踵端面を 1 点測れば決まる）",
+          advanced=True),
         f("vamp_length", "ヴァンプ長", "プロファイル", "mm", 18.0, 48.0, 0.5,
           "削り始めの位置。長いほど柔軟で低音寄り、短いと抵抗が増す"),
         ParamSpec(key="profile_curve", label="プロファイル曲線", category="プロファイル",
@@ -56,6 +68,9 @@ def _specs(t: dict) -> list[ParamSpec]:
           "側端厚 ÷ 中央厚。小さいほど柔軟で鳴りやすいが耐久が落ちる"),
         f("tip_corner_r", "先端角の丸み", "レール", "mm", 0.3, 2.0, 0.1,
           "平面視の先端角。マウスピースのティップレール形状に合わせる", advanced=True),
+        f("tip_curve_depth", "先端カーブ", "レール", "mm", 0.0, 2.5, 0.1,
+          "前縁の落ち込み。角が中央よりどれだけ後ろに来るか。0 にすると前縁が"
+          "直線になり、マウスピースのティップレールから角が 1.3〜1.6mm 前へ出る"),
         # --- カット ---
         ParamSpec(key="file_cut", label="カット種別", category="カット",
                   type="choice", default=t["file_cut"],
@@ -86,6 +101,9 @@ class ReedComponent(Component):
     def param_specs(self) -> list[ParamSpec]:
         return _specs(self.template["reed"])
 
+    def params_error(self, params: dict) -> str | None:
+        return rp.cane_layout_error(params)
+
     # ------------------------------------------------------------ 参照
 
     def ref_dimensions(self) -> list[tuple[str, str]]:
@@ -100,23 +118,65 @@ class ReedComponent(Component):
             ("ウィンドウ長", f"{profiles.window_length_effective(m):.1f} mm"),
             ("フェイシング長", f"{m['facing_length']:.1f} mm"),
             ("ティップ開き", f"{m['tip_opening']:.2f} mm"),
+            # 前縁を合わせたい人がそのまま読める値。合わせるかどうかは設計者の判断
+            # なので、ここでリードのパラメータを書き換えたりはしない。
+            ("ティップ輪郭の落ち込み", f"{self._ref_contour_depth(m):.2f} mm"),
         ]
 
+    @staticmethod
+    def _ref_contour_depth(m: dict) -> float:
+        """参照マウスピースのティップ輪郭が中央から角までに落ち込む量 [mm]。"""
+        return (profiles.tip_contour_z(m, m["reed_width"] / 2.0)
+                - profiles.tip_contour_z(m, 0.0))
+
+    def _tip_contour_gap(self, p: dict, m: dict, samples: int = 40) -> float:
+        """リード前縁と参照マウスピースのティップ輪郭の最大ずれ [mm]（符号付き）。
+
+        正ならリードが後退（ティップレールが露出）、負なら前へ張り出す。
+        比べるのは共通の x 範囲だけ（幅そのものの差は「幅の差」の行が見ている）。
+        """
+        hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        z0 = profiles.tip_contour_z(m, 0.0)
+        worst = 0.0
+        for i in range(samples + 1):
+            x = hw * i / samples
+            gap = rp.front_edge_z(p, x) - (profiles.tip_contour_z(m, x) - z0)
+            if abs(gap) > abs(worst):
+                worst = gap
+        return worst
+
     # ------------------------------------------------------------ 形状生成
+
+    #: ファイルドカットの帯の半長 [mm]（バーク端の前後へ同じだけ広がる）。
+    FILE_CUT_HALF_SPAN = 1.2
 
     def build(self, params: dict):
         p = params
         part = loft_sections(rp.sections(p))
         if p.get("file_cut") == "filed":
-            # ファイルドカット: バーク端に横一文字の段差を入れる（上面のみ薄く削る）
-            zv = rp.vamp_start_z(p)
-            depth = min(0.25, p["heel_thickness"] * 0.12)
-            top = p["heel_thickness"] + 1.0
-            cut = [(zv - 1.2, top), (zv + 1.2, top),
-                   (zv + 1.2, p["heel_thickness"] - depth),
-                   (zv - 1.2, p["heel_thickness"] - depth)]
-            part = part - yz_profile_cut_solid(cut, half_width=p["heel_width"])
+            part = part - self._file_cut_solid(p)
         return part
+
+    @staticmethod
+    def _file_cut_solid(p: dict):
+        """ファイルドカット（バーク端の横一文字）を削る切除ソリッド。
+
+        **上面の円弧に沿わせる。** 水平な屋根で削ると中央の冠だけが平らに落ちて
+        （アルトで幅 5.2mm）、全幅に走る「横一文字」にならない。円弧を `depth` だけ
+        下げた曲線は**同じ半径の円**なので、3 点円弧で厳密に表せる。
+        """
+        zv = rp.vamp_start_z(p)
+        span = ReedComponent.FILE_CUT_HALF_SPAN
+        depth = min(0.25, p["heel_thickness"] * 0.12)
+        # リードの**最大**半幅より外まで届かせる（先端幅のほうが広い設定もある）。
+        # ただし円弧の外へは出られないので、管の半径で頭を打つ（そこが円弧の最下点）。
+        xe = min(max(p["tip_width"], p["heel_width"]) / 2.0 + 0.5, rp.cane_radius(p))
+        z0 = zv - span
+        arc = [(-xe, rp.cane_top(p, xe) - depth, z0),
+               (0.0, rp.cane_top(p, 0.0) - depth, z0),
+               (xe, rp.cane_top(p, xe) - depth, z0)]
+        return extrude_arc_prism(arc, cap_y=p["heel_thickness"] + 1.0,
+                                 direction=(0.0, 0.0, 1.0), length=2.0 * span)
 
     # ------------------------------------------------------------ シミュレーション
 
@@ -184,6 +244,10 @@ class ReedComponent(Component):
         seat0, seat1 = profiles.ligature_seat_range(m)
         rows.append(["踵位置 / リガチャー座",
                      f"{p['reed_length']:.1f} / {seat0:.1f}〜{seat1:.1f} mm"])
+        gap = self._tip_contour_gap(p, m)
+        rows.append(["先端カーブ / MPのティップ輪郭",
+                     f"{p['tip_curve_depth']:.2f} / "
+                     f"{self._ref_contour_depth(m):.2f} mm（最大ずれ {gap:+.2f}）"])
 
         if abs(dw) > 0.3:
             status = "warn"
@@ -199,6 +263,14 @@ class ReedComponent(Component):
             advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
                       f"リガチャーがリードの無い位置を締めることになり、固定できません。"
                       f"全長を伸ばしてください。")
+        elif abs(gap) > TIP_CONTOUR_TOL:
+            status = "warn"
+            advice = (
+                f"前縁がマウスピースのティップ輪郭から最大 {abs(gap):.2f}mm "
+                f"{'後退しています（レールが露出）' if gap > 0 else '前へ張り出します'}。"
+                f"先端カーブを {self._ref_contour_depth(m):.1f}mm 前後にすると揃います。"
+                f"ただし市販のリードは規格品でマウスピース個体に合わせて作られていない"
+                f"ので、揃えるかどうかは設計の判断です。")
         return {"title": "マウスピース適合", "big": None, "status": status,
                 "rows": rows, "advice": advice}
 
@@ -284,6 +356,18 @@ class ReedComponent(Component):
         ], "厚みプロファイル（実線=中央 / 青破線=側端 / 赤破線=テーブル面 / "
            "灰=ヴァンプ端） 単位:mm")
 
+    def _heel_section_svg(self, params: dict) -> str:
+        """踵の断面図（カマボコ）。上面に残る元のケーン管の円弧を示す。"""
+        from saxsketch.export.svg import polyline_svg
+        p = params
+        pts = rp.sections(p)[-1]["pts"]           # 最後のステーション＝踵の端面
+        return polyline_svg([
+            {"pts": list(pts) + [pts[0]], "stroke": "#222", "width": 1.5},
+            {"pts": [(-p["heel_width"] / 2.0, 0.0), (p["heel_width"] / 2.0, 0.0)],
+             "stroke": "#cc3300", "width": 0.8, "dash": "2 2"},
+        ], f"踵の断面（上面＝ケーン外径 φ{2.0 * rp.cane_radius(p):.1f} の円弧 / "
+           f"赤破線＝テーブル面） 単位:mm")
+
     def spec_extras(self, params: dict) -> dict:
         p = params
         dims = [
@@ -291,8 +375,14 @@ class ReedComponent(Component):
             ("先端幅 × 踵幅", f"{p['tip_width']:.1f} × {p['heel_width']:.1f} mm"),
             ("先端厚（中央/側端）",
              f"{p['tip_thickness']:.2f} / {rp.edge_thickness(p, 0.0):.2f} mm"),
-            ("踵厚", f"{p['heel_thickness']:.2f} mm"),
+            ("踵厚（中央/側端）",
+             f"{p['heel_thickness']:.2f} / {rp.heel_edge_thickness(p):.2f} mm"),
+            # 側端厚は未実測なので、そこから導いたケーン外径も未実測。実物の踵端面を
+            # 1 点測れば決まる（中央厚と踵幅は規格値なので、残りの自由度はこれだけ）。
+            ("ケーン外径（側端厚からの導出）",
+             f"φ{2.0 * rp.cane_radius(p):.1f} mm（側端厚は未実測）"),
             ("ヴァンプ長", f"{rp.vamp_start_z(p):.1f} mm"),
+            ("先端カーブ", f"{p['tip_curve_depth']:.2f} mm"),
             ("材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
         ]
         m = self.ref_params()
@@ -301,6 +391,10 @@ class ReedComponent(Component):
         dims.append(("リード共振 f_reed（推定）", f"{props['f_reed_hz']:.0f} Hz"))
         if m:
             dims.append(("参照マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"))
+            dims.append(("参照マウスピース ティップ輪郭の落ち込み",
+                         f"{self._ref_contour_depth(m):.2f} mm"))
         return {"dimensions": dims,
                 "sections": [{"title": "厚みプロファイル",
-                              "svg": self._section_svg(p)}]}
+                              "svg": self._section_svg(p)},
+                             {"title": "踵の断面（カマボコ）",
+                              "svg": self._heel_section_svg(p)}]}

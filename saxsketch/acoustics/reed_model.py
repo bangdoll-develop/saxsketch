@@ -45,6 +45,10 @@ _CALIB_STRENGTH = 3.0
 _CALIB_PARAMS = {
     "reed_length": 71.5, "tip_width": 14.5, "heel_width": 14.8,
     "tip_thickness": 0.11, "heel_thickness": 2.80, "vamp_length": 32.0,
+    # 校正基準は**実物のケーン**なので、上面の円弧も前縁カーブも持つ側が正しい。
+    # 値そのものは校正には効かない（`_strength_equiv` はこのリード自身のたわみとの
+    # 比なので、基準の 3.0 は定義上いつでも 3.0）。効くのは他のリードとの相対位置。
+    "heel_edge_thickness": 0.9, "tip_curve_depth": 1.3,
     "profile_curve": "parabolic", "spine_ratio": 1.15,
     "side_rail_thin": 0.55, "tip_corner_r": 0.8,
     "file_cut": "unfiled", "material": "cane", "min_layer": 0.08,
@@ -88,7 +92,9 @@ def _bending(p: dict, l_eff: float, e_mpa: float, samples: int = 48
     （共振周波数の算出と指標が同じ剛性を指すようにするため）。
     """
     rp = _rp()
-    w = 0.001 * rp.width(p, 0.0)      # 1kPa × 先端幅 [N/mm]
+    # 1kPa × 先端の実効幅 [N/mm]。**`width(p, 0.0)` ではない** —— 前縁カーブを
+    # 入れると z=0 は幅ゼロの尖点になり、荷重が 1/27 に落ちて硬さが振り切れる。
+    w = 0.001 * rp.tip_load_width(p)
     dz = l_eff / samples
     defl, area = 0.0, 0.0
     for i in range(samples):

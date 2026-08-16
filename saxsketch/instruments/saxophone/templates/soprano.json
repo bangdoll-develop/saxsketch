@@ -36,17 +36,20 @@
   "min_wall": 1.8,
   "material": "resin"
  },
+ "reed_note": "**heel_edge_thickness 0.9 は未実測**。踵の側端の厚みで、中央厚 2.6 と踵幅 13.5（どちらも規格値）と合わせて元のケーン管の外径 φ28.5 を決めている。断面がカマボコになるのはこの円弧のぶん。決着させる実測は 1 点だけ —— 実物のリードの踵端面で側端の厚みをノギスで測る。**この値はどの照合カードの判定にも入っていない**ので、外れていても判定は汚れない。動くのは材料体積（円弧で 16% 減る）と印刷時間だけ。**tip_curve_depth 1.4 も未実測**: 参照マウスピース（ヤナギサワ 刻印4）のティップ輪郭を `profiles.tip_contour_z` で解いた落ち込み 1.412 に 0.1mm 刻みで合わせた値で、実物のリードの前縁を測ったわけではない。市販のリードは規格品でマウスピース個体に合わせて作られていないので、**モデルもマウスピースへ自動追従はしない**（適合カードが最大ずれを数字で出すだけ）。円弧では輪郭に 0.1mm より近づけない（実物の輪郭は真円ではない）。",
  "reed": {
   "reed_length": 59.1,
   "tip_width": 12.9,
   "heel_width": 13.5,
   "tip_thickness": 0.38,
   "heel_thickness": 2.6,
+  "heel_edge_thickness": 0.9,
   "vamp_length": 27.0,
   "profile_curve": "parabolic",
   "spine_ratio": 1.15,
   "side_rail_thin": 0.55,
   "tip_corner_r": 0.7,
+  "tip_curve_depth": 1.4,
   "file_cut": "unfiled",
   "material": "pla",
   "min_layer": 0.08

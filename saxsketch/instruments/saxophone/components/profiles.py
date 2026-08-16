@@ -551,6 +551,41 @@ def cut_top_y(p: dict, z: float) -> float:
     return table_plane_y(p, z) + facing_rise(p, z)
 
 
+#: ティップ輪郭を探す z の上限 [mm]。実測の角は 1.3〜1.7 なので十分な余裕がある。
+_TIP_CONTOUR_MAX_Z = 8.0
+
+
+def tip_contour_z(p: dict, x: float) -> float:
+    """幅方向 x でティップレールの前縁が来る z [mm]。
+
+    胴（半径 `outer_radius`）をリード面（`cut_top_y`）で切った断面の縁で、x での
+    胴の下端 −√(r²−x²) がリード面に達する z を解く。中央（x=0）でも厳密に 0 では
+    ない —— ティップ前縁の面取りぶん後ろへ来る（実測 0.103 / 0.117 / 0.130）。
+    **角は中央より 1.27〜1.57mm 後ろ**で、これが実物のリードの前縁が直線ではなく
+    曲線である理由。リードの前縁（`reed_profiles.front_edge_z`）と突き合わせるために
+    公開している。
+
+    リードの座標系はテーブル面基準で軸が 4.18° 傾くが、比べる区間は 2mm 足らずなので
+    傾きの効きは 0.004mm。ここでは無視する。
+    """
+    def gap(z: float) -> float:
+        r = outer_radius(p, z)
+        return cut_top_y(p, z) + math.sqrt(max(r * r - x * x, 0.0))
+
+    lo, hi = 0.0, _TIP_CONTOUR_MAX_Z
+    if gap(lo) >= 0.0:
+        return lo
+    if gap(hi) < 0.0:
+        return hi              # この x には胴が無い（リード面の弦より外）
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if gap(mid) < 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 #: テーブルカット断面をティップより手前 / シャンクより奥へ出す量 [mm]。
 _FACING_CUT_LEAD = 3.0
 #: テーブルカット断面の深さ [mm]。胴を確実に下から抜く。
