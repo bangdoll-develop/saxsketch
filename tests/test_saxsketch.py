@@ -1561,14 +1561,27 @@ def test_reed_sections_uniform_vertex_count():
 #: **円弧では 0.1mm より近づけない** —— 実物の輪郭は真円ではないので、既定同士でも
 #: soprano 0.094 / alto 0.103 / tenor 0.118 残る。ここはその残差の上限。
 TIP_CONTOUR_ARC_RESIDUAL_MM = 0.15
-#: 前縁を直線にしたとき角がティップレールから前へ張り出す量 [mm]（実測 1.27〜1.57）。
-TIP_STRAIGHT_OVERHANG_MM = 1.2
+#: 前縁を直線にしたとき角がティップレールから前へ張り出す量 [mm]。
+#: 比べるのは**前縁アークが効く区間だけ**（角の丸みが効く所はリードが意図的に
+#: 逃げている）。実測 soprano 1.012 / alto 0.990 / tenor 1.202。
+TIP_STRAIGHT_OVERHANG_MM = 0.9
+
+
+def _tip_rail_gap(rp, pp, m, x_max, samples=40):
+    """リード前縁と参照MPのティップ輪郭の最大ずれ（負＝リードが前へ張り出す）。"""
+    z0 = profiles.tip_contour_z(m, 0.0)
+    out = 0.0
+    for i in range(samples + 1):
+        x = x_max * i / samples
+        gap = rp.front_edge_z(pp, x) - (profiles.tip_contour_z(m, x) - z0)
+        out = gap if abs(gap) > abs(out) else out
+    return out
 
 
 def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
     """既定の前縁カーブがマウスピースのティップ輪郭に乗ること。
 
-    直線の前縁（`tip_curve_depth = 0`）だと角が 1.3〜1.6mm 前へ張り出す。これが
+    直線の前縁（`tip_curve_depth = 0`）だと 1.0〜1.2mm 前へ張り出す。これが
     この パラメータが要る理由なので、両方向を固定する。
     """
     from saxsketch.core.schema import ParamSet
@@ -1578,26 +1591,22 @@ def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
         m = _template_params("mouthpiece", tid)
         p = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
         hw = min(p["tip_width"], m["reed_width"]) / 2.0
-        z0 = profiles.tip_contour_z(m, 0.0)
+        flat = {**p, "tip_curve_depth": 0.0}
 
-        def worst(pp):
-            out = 0.0
-            for i in range(41):
-                x = hw * i / 40.0
-                gap = rp.front_edge_z(pp, x) - (profiles.tip_contour_z(m, x) - z0)
-                out = gap if abs(gap) > abs(out) else out
-            return out
-
-        assert abs(worst(p)) < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
+        assert abs(_tip_rail_gap(rp, p, m, min(rp.arc_end_x(p), hw))) \
+            < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
         # 直線の前縁は角でレールより前へ出る（負＝張り出し）
-        assert worst({**p, "tip_curve_depth": 0.0}) < -TIP_STRAIGHT_OVERHANG_MM, tid
+        assert _tip_rail_gap(rp, flat, m, min(rp.arc_end_x(flat), hw)) \
+            < -TIP_STRAIGHT_OVERHANG_MM, tid
 
 
 def test_reed_tip_curve_zero_is_the_old_shape(alto_reed):
-    """`tip_curve_depth = 0` で幅が旧式とビット一致すること。
+    """`tip_curve_depth = 0` で**幅も断面もロフトのステーションも**旧式と一致すること。
 
-    新しい特徴が既定の形を汚していないことの固定。角の丸みは前縁の角を基準に
-    効かせるようにしたので、カーブ 0 なら基準は z=0 に戻って旧式と同じ式になる。
+    新しい特徴が既定の形を汚していないことの固定。輪郭を「前縁アーク → 角の
+    フィレット → 側面」の 1 本に書き直しても、カーブ 0 ならアークが消えて
+    フィレットが z=0 起点に戻り、旧式と**演算順まで**同じ式になる
+    （`(w − 2r) + 2s` へ整理すると 2 ULP ずれるので、そこは整理しないこと）。
     """
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     _, p = alto_reed
@@ -1613,9 +1622,90 @@ def test_reed_tip_curve_zero_is_the_old_shape(alto_reed):
             w -= 2.0 * r
         return max(w, 0.5)
 
-    for i in range(201):
-        z = p["reed_length"] * i / 200.0
+    for i in range(2001):
+        z = p["reed_length"] * i / 2000.0
         assert rp.width(flat, z) == old_width(z), z
+    # 先端ステーションを足すのはカーブがあるときだけ（旧形状はロフトも不変）
+    assert rp.nose_station_zs(flat) == []
+    assert rp.sections(flat) == [
+        {"z": z, "pts": [(-old_width(z) / 2.0, 0.0), (old_width(z) / 2.0, 0.0)]
+         + [(q * old_width(z) / 2.0, rp.thickness(flat, z, q * old_width(z) / 2.0))
+            for q in rp._TOP_QS]}
+        for z in rp.station_zs(flat)]
+
+
+def test_reed_outline_never_widens_toward_the_tip():
+    """平面視の輪郭が z について単調非減少であること。
+
+    4-C.2 は `if 0.0 < z < d` で **z=0 を円弧クランプから漏らして**いた。最先端の
+    断面だけ全幅（soprano 11.5 / alto 11.8 / tenor 13.0）のまま残り、次の
+    ステーションで 5.1〜5.9 まで絞られるので、前縁から厚さ 0.4mm の平たいヒレが
+    前へ張り出していた（輪郭の垂直ずれ 2.31〜2.68mm）。**掃引もテストも
+    `width(p, 0)` を depth>0 で評価していなかったので素通りした。**
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        for d in (0.0, 0.4, base["tip_curve_depth"], 2.5):
+            p = {**base, "tip_curve_depth": d}
+            prev = -1.0
+            for i in range(4001):
+                w = rp.width(p, base["reed_length"] * i / 4000.0)
+                assert w >= prev - 1e-12, (tid, d, i)
+                prev = w
+            if d > 0.0:      # カーブがあれば最先端は下限まで細る
+                assert rp.width(p, 0.0) == 0.5, (tid, d)
+
+
+def test_reed_outline_is_one_smooth_curve():
+    """輪郭の傾き dx/dz が跳ね上がらないこと（区間の継ぎ目に段や折れが無い）。
+
+    4-C.2 は角の丸みを円弧の**後ろに積んで**いたので、輪郭が
+    「円弧 → 平行帯 → 傾きの跳び → 2 つめの膨らみ」の 4 区間に割れていた
+    （alto で dx/dz が 0.004 から 5.57 へ跳ぶ）。跳ね上がる量の実測は
+    旧 +118〜+134 / 新 +0.0023〜+0.0044。上限は側面テーパー自身の傾き。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    h = 1e-4
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        taper = (base["heel_width"] - base["tip_width"]) / (2.0 * base["reed_length"])
+        for d in (0.0, 0.4, base["tip_curve_depth"], 2.5):
+            p = {**base, "tip_curve_depth": d}
+            zs = [0.02 + i * h for i in range(int((rp.tip_full_width_z(p) + 0.5) / h))]
+            slopes = [(rp.half_width(p, z + h) - rp.half_width(p, z)) / h for z in zs]
+            jump = max((slopes[i] - slopes[i - 1] for i in range(1, len(slopes))),
+                       default=0.0)
+            assert jump <= taper + 1e-3, (tid, d, jump)
+
+
+def test_reed_front_edge_matches_the_solid_outline():
+    """`front_edge_z(x)` が輪郭 `half_width(z)` の逆関数になっていること。
+
+    4-C.2 は前縁アークの閉形式だけを返していて、**角のフィレットを取りこぼして**
+    いた（角の近くで実際の輪郭と 0.28〜0.56mm 食い違い、適合カードの許容差
+    0.3mm より大きい）。カードはこの式で印刷される形を測るので、両者は同じ
+    曲線でなければならない。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        for d in (0.0, base["tip_curve_depth"], 2.5):
+            p = {**base, "tip_curve_depth": d}
+            for i in range(1, 200):
+                x = rp.taper_half_width(p, 0.0) * i / 200.0
+                z = rp.front_edge_z(p, x)
+                # その z ではもう幅が足りている
+                assert rp.half_width(p, z) >= x - 1e-9, (tid, d, x)
+                # かつ、それより前では足りていない（＝最小の z）
+                if z > 1e-9:
+                    assert rp.half_width(p, z - 1e-4) < x, (tid, d, x)
 
 
 def test_reed_stiffness_does_not_depend_on_the_tip_curve(alto_reed):
@@ -1635,6 +1725,37 @@ def test_reed_stiffness_does_not_depend_on_the_tip_curve(alto_reed):
     base = reed_model.reed_properties(flat, m)["strength_equiv"]
     curved = reed_model.reed_properties(p, m)["strength_equiv"]
     assert curved == pytest.approx(base, rel=0.05)
+
+
+def test_reed_flow_width_does_not_depend_on_the_tip_curve(alto_reed):
+    """物理モデル音へ渡す流路幅が前縁カーブで動かないこと。
+
+    **`_bending` と同じ代理変数の穴が `reed_override` にもあった。** `width_mm` は
+    OpenWind のリード流路の幅で、息が通るのは「先端がティップレールと向き合って
+    いる幅」。z=0 の断面の幅を渡すと、前縁カーブを入れたとたん下限 0.5mm へ潰れて
+    流れが線形域に落ち、**合成音が倍音を失って純正弦になる**
+    （`test_reed_override_changes_sound` の倍音比 L1 差が 1.42 → 0.0006）。
+
+    4-C.2 で見落としたのは、当時 `width(p, 0.0)` が z=0 を円弧クランプから漏らして
+    いて**たまたま `tip_load_width` と同じ値を返していた**から —— 1 つのバグが
+    もう 1 つのバグを覆い隠していた。
+    """
+    from saxsketch.acoustics import reed_model
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp, p = alto_reed
+    m = comp.ref_params()
+
+    def flow_width(depth):
+        pp = {**p, "tip_curve_depth": depth}
+        return reed_model.reed_override(
+            reed_model.reed_properties(pp, m), pp)["width_mm"]
+
+    assert flow_width(0.0) == flow_width(2.5) == rp.tip_load_width(p)
+    # リードそのものの幅を変えれば当然動く（定数に潰していないことの確認）
+    narrow = {**p, "tip_width": p["tip_width"] - 2.0}
+    assert reed_model.reed_override(
+        reed_model.reed_properties(narrow, m), narrow)["width_mm"] \
+        == pytest.approx(rp.tip_load_width(p) - 2.0)
 
 
 def test_reed_heel_reaches_seat_end(alto_reed):

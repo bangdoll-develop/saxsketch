@@ -15,6 +15,11 @@
 したがって端値の組合せを実際にビルドし、ソリッド 1 個・水密・winding 一致・
 バウンディングボックスが規格どおりであることまで見る。
 
+**4-C.2b で「平面視の輪郭そのもの」の検査（`_outline_defect`）を足した。**
+上の 4 つは全部通るのに、最先端の断面だけ全幅のまま残って前へ平たいヒレが
+張り出す不具合を**この掃引が素通りさせた**（ユーザーが 3D ビューで見つけた）。
+bbox は幅が正しい側の値を拾うので、形の破綻を bbox で見張るのには限界がある。
+
 実行（WSL2 の SaxSketch 環境。リポジトリ直下で）:
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto
@@ -67,7 +72,39 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
     return out
 
 
+def _outline_defect(p: dict) -> str | None:
+    """平面視の輪郭が単調非減少で、傾きが跳ね上がらないこと。
+
+    **この掃引が 4-C.2 のヒレを素通りさせた。** ソリッド数・水密・bbox・頂点数は
+    全部通るのに、最先端の断面だけ全幅のまま残って前へ板が張り出していた
+    （`width()` の円弧クランプが z=0 を含んでいなかった）。bbox は幅が正しい側の
+    値を拾うので気づけない。**輪郭そのものを見る検査を足す。**
+    """
+    h = 1e-4
+    z_hi = rp.tip_full_width_z(p) + 0.5
+    taper = (p["heel_width"] - p["tip_width"]) / (2.0 * p["reed_length"])
+    # 先端は 1µm 刻み、その先はテーパーの直線なので 0.5mm 刻みで足りる。
+    zs = [i * 0.001 for i in range(int(z_hi / 0.001) + 1)]
+    zs += [z_hi + i * 0.5 for i in range(int((p["reed_length"] - z_hi) / 0.5) + 1)]
+    zs.append(p["reed_length"])
+    prev_w, prev_slope, worst = -1.0, None, None
+    for z in zs:
+        w = rp.width(p, z)
+        if w < prev_w - 1e-9:
+            return f"*** NG 輪郭が z={z:.3f} で {prev_w:.3f} → {w:.3f} と細る"
+        prev_w = w
+        if 0.02 <= z <= z_hi:
+            slope = (rp.half_width(p, z + h) - rp.half_width(p, z)) / h
+            if prev_slope is not None and slope - prev_slope > max(taper, 0.0) + 1e-3:
+                worst = f"*** NG 輪郭の傾きが z={z:.3f} で {slope - prev_slope:+.3f} 跳ぶ"
+            prev_slope = slope
+    return worst
+
+
 def _check(comp, p: dict, tmp: Path) -> tuple[bool, str]:
+    defect = _outline_defect(p)
+    if defect is not None:
+        return False, defect
     part = comp.build(p)
     solids = len(part.solids())
     if not part.is_valid or solids != 1:

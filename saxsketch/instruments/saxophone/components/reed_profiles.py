@@ -14,6 +14,7 @@ y>=0 なので side は "top" / "all" のみ使う）。
 """
 from __future__ import annotations
 
+import functools
 import math
 
 
@@ -41,42 +42,140 @@ def tip_arc_radius(p: dict) -> float:
     return (hw * hw + d * d) / (2.0 * d) if d > 0.0 else 0.0
 
 
-def front_edge_z(p: dict, x: float) -> float:
-    """幅方向 x で材料が始まる z。中央で 0、角（|x|=先端幅/2）で `tip_curve_depth`。"""
-    r = tip_arc_radius(p)
-    if r <= 0.0:
-        return 0.0
-    return r - math.sqrt(max(r * r - x * x, 0.0))
+def taper_half_width(p: dict, z: float) -> float:
+    """側面テーパーだけの半幅（角の丸みも前縁カーブも掛かっていない素の値）。"""
+    t = min(max(z / p["reed_length"], 0.0), 1.0)
+    return (p["tip_width"] + (p["heel_width"] - p["tip_width"]) * t) / 2.0
+
+
+@functools.lru_cache(maxsize=64)
+def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: float):
+    """先端の平面視輪郭を決める (R, z_t, z_f, x_t, a_f)。純スカラなので lru_cache。
+
+    輪郭は**区間が 3 つの 1 本の曲線**:
+
+        前縁アーク（半径 R）  z < z_t
+        角のフィレット（半径 r）  z_t ≤ z < z_f
+        側面テーパー          z ≥ z_f
+
+    フィレットは前縁アークと側面の両方に内接する円。中心は側面から r だけ内側
+    （x = a − r）なので、アーク中心との距離が R − r になる z が閉形式で出る。
+    テーパーは片側 0.004/mm しか傾いていないので、a の再代入で数回で収束する。
+
+    **`tip_curve_depth = 0` で現行式に戻る**: R が無くなって z_t = 0 / z_f = r と
+    なり、輪郭は「z=0 の直線 → 半径 r のフィレット → 側面」＝ 4-C.2 以前の形。
+
+    sqrt の中が負になるのは R ≤ a_f のときだけで、パラメータの可動域では起きない
+    （R − 先端半幅 = (hw − d)²/(2d) ≥ 0.8 に対し、テーパーの伸びは ≤ 0.37）。
+    """
+    def a_at(z: float) -> float:
+        t = min(max(z / length, 0.0), 1.0)
+        return (tip_w + (heel_w - tip_w) * t) / 2.0
+
+    if d <= 0.0:
+        a_f = a_at(r)
+        return 0.0, 0.0, r, a_f - r, a_f
+    hw = tip_w / 2.0
+    radius = (hw * hw + d * d) / (2.0 * d)
+    a = a_at(d)
+    for _ in range(5):    # a と z_f の不動点。5 回で両端の段が 1e-12mm 未満に落ちる
+        z_f = radius - math.sqrt(max((radius - r) ** 2 - (a - r) ** 2, 0.0))
+        a = a_at(z_f)
+    # アークとの接点は中心間を結ぶ線上、アーク中心から距離 R の所。
+    z_t = radius - radius * (radius - z_f) / (radius - r)
+    x_t = radius * (a - r) / (radius - r)
+    return radius, z_t, z_f, x_t, a
+
+
+def _nose(p: dict):
+    return _nose_geometry(tip_curve_depth(p), p.get("tip_corner_r", 0.8),
+                          p["tip_width"], p["heel_width"], p["reed_length"])
+
+
+def tip_full_width_z(p: dict) -> float:
+    """リードが**実際に**全幅へ達する z ＝ フィレットが側面に接する所。
+
+    `tip_curve_depth`（前縁アークの理論的な角）より 0.46〜0.59mm 後ろにある。
+    差はフィレット半径ぶんの逃げで、意図した造形。適合カードがこの値を出す。
+    """
+    return _nose(p)[2]
+
+
+def _outline_width(p: dict, z: float) -> float:
+    """平面視輪郭の幅（下限を掛ける前）。`_nose_geometry` の 3 区間をそのまま評価する。
+
+    フィレットの外側基準に 2 つの流儀があり、**前縁カーブの有無で使い分ける**:
+
+    - カーブ有り: 中心を `a_f` に固定した**真円**。アークと厳密に接するので
+      継ぎ目に段が出ない（局所テーパーに乗せると 1.6µm 下がって輪郭が一度細る）。
+    - カーブ無し: 局所テーパーに乗せる（4-C.2 以前の式そのもの）。アークが無いので
+      接する相手が無く、**旧形状をビット単位で据え置く**ほうを取る。
+
+    フィレット区間を `w -= 2·(r − sqrt(…))` の形で書いてあるのも同じ理由で、
+    `(w − 2r) + 2s` に整理すると丸めが 2 ULP ずれてビット一致が壊れる。
+    """
+    r = p.get("tip_corner_r", 0.8)
+    radius, z_t, z_f, _x_t, a_f = _nose(p)
+    if z < z_t:
+        return 2.0 * math.sqrt(max(2.0 * radius * z - z * z, 0.0))
+    # 2 で割って 2 倍は IEEE754 で厳密なので、旧式の `tip + (heel-tip)*t` に戻る。
+    if z >= z_f:
+        return 2.0 * taper_half_width(p, z)
+    w = 2.0 * (a_f if radius > 0.0 else taper_half_width(p, z))
+    return w - 2.0 * (r - math.sqrt(max(r * r - (z - z_f) ** 2, 0.0)))
+
+
+def arc_end_x(p: dict) -> float:
+    """前縁アークが終わって角のフィレットへ移る |x|。ここより外は意図した逃げ。"""
+    return _nose(p)[3]
+
+
+def half_width(p: dict, z: float) -> float:
+    """z 位置の半幅（下限なし）。輪郭の逆関数を解くのに使う。"""
+    return _outline_width(p, z) / 2.0
 
 
 def width(p: dict, z: float) -> float:
-    """z 位置の幅。先端幅 → 踵幅の線形テーパー＋先端角の丸み＋前縁カーブ。
+    """z 位置の幅。下限 0.5mm は最先端の断面が点に潰れてロフトが縮退しないため。"""
+    return max(_outline_width(p, z), 0.5)
 
-    前縁が曲線なので、幅は 2 つの制限の小さいほうになる:
-      - 側面のテーパー（角の丸みを含む）
-      - 前縁カーブより後ろに存在する x の範囲
 
-    角の丸みは **前縁の角**（z = `tip_curve_depth`）を基準に効かせる。カーブが 0 なら
-    角は z=0 に戻り、式は従来と完全に一致する（`tip_curve_depth` を 0 にしたリードは
-    1 ビットも形が動かない）。
+def front_edge_z(p: dict, x: float) -> float:
+    """幅方向 x で材料が始まる z ＝ 平面視輪郭 `half_width` の逆関数。
+
+    **アークの閉形式では角のフィレットを取りこぼす。** 4-C.2 の実装はアークだけを
+    逆に解いていたので、角の近くで実際の輪郭と 0.28〜0.56mm 食い違っていた
+    （適合カードの許容差 0.3mm より大きい）。フィレット区間は閉形式にすると
+    テーパーの傾きが混ざるので、`half_width` は単調非減少なことを使って二分法で解く
+    （`profiles.table_cut_end_z` と同じ手）。
     """
-    t = min(max(z / p["reed_length"], 0.0), 1.0)
-    w = p["tip_width"] + (p["heel_width"] - p["tip_width"]) * t
-    r = p.get("tip_corner_r", 0.8)
-    d = tip_curve_depth(p)
-    s = z - d        # 前縁の角からの距離
-    if 0.0 < s < r:  # 平面視での先端角の丸み（両側から削る）
-        w -= 2.0 * (r - math.sqrt(max(r * r - (r - s) ** 2, 0.0)))
-    elif s <= 0.0:
-        w -= 2.0 * r
-    if 0.0 < z < d:  # 前縁カーブの内側。z ≥ d では円弧は全幅に達しているので効かない
-        rr = tip_arc_radius(p)
-        w = min(w, 2.0 * math.sqrt(max(2.0 * rr * z - z * z, 0.0)))
-    return max(w, 0.5)
+    x = abs(x)
+    if x <= 0.0:
+        return 0.0
+    radius, z_t, _z_f, x_t, _a_f = _nose(p)
+    if x <= x_t:
+        if radius <= 0.0:
+            return 0.0            # 前縁カーブなし＝ z=0 の直線
+        return radius - math.sqrt(max(radius * radius - x * x, 0.0))
+    lo, hi = z_t, p["reed_length"]
+    if half_width(p, hi) < x:
+        return hi                 # この幅までリードが広がらない
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if half_width(p, mid) >= x:
+            hi = mid
+        else:
+            lo = mid
+    return hi
 
 
 def tip_load_width(p: dict) -> float:
-    """先端の実効幅 [mm]。硬さモデルの等分布荷重の幅（`reed_model._bending`）。
+    """先端の実効幅 [mm]。**先端を「面」として見るときの幅はすべてこれ**。
+
+    読み手は 2 つある: 硬さモデルの等分布荷重の幅（`reed_model._bending`）と、
+    物理モデル音のリード流路の幅（`reed_model.reed_override` の `width_mm`）。
+    後者は 4-C.2 で直し損ねていて、4-C.2b で `width(p, 0.0)` の z=0 漏れを
+    直したときに露見した（流路が 0.5mm へ潰れて合成音が純正弦になった）。
 
     **`width(p, 0.0)` を使ってはいけない。** 前縁カーブを入れると z=0 は幅ゼロの
     尖点になり、荷重が 1/27 まで落ちて硬さ相当が上限 20.0 へ振り切れる（実測）。
@@ -195,10 +294,13 @@ def edge_thickness(p: dict, z: float) -> float:
 
 _STATION_TS = [0.0, 0.02, 0.05, 0.10, 0.18, 0.28, 0.40, 0.55, 0.72, 0.88, 1.0]
 
-#: 前縁カーブ区間に置く刻み（`tip_curve_depth` 比）。角（1.0）を必ず含める。
-#: ヴァンプ基準の最初の刻みは 0.54〜0.70mm しかなく、1.3mm のカーブを 2 点でしか
-#: 通らない。カーブが 0 なら全部 0.0 に潰れて既存の先端ステーションと重複が消える。
-_TIP_CURVE_TS = [0.15, 0.35, 0.60, 0.85, 1.0]
+#: 先端の輪郭に置くステーションの数（前縁アーク側 / 角のフィレット側）。
+#: **`tip_curve_depth` に対する比では刻まない** —— 半幅は z の平方根で立ち上がるので
+#: 等間隔だと最先端が粗くなる。2 つの円をそれぞれ**等角**で刻めば、弦の逃げが
+#: R·Δθ²/8 で一様に押さえられる（実測: 輪郭の垂直ずれが 0.5mm → 最先端の幅の
+#: 下限 0.25mm ぶんだけに減る）。
+_NOSE_ARC_STEPS = 6
+_NOSE_FILLET_STEPS = 4
 
 #: 断面上面のサンプル位置（x / 半幅）。+1 → −1 の順で、底辺 2 点と合わせて
 #: 反時計回りに一周する。**点数は全断面で一定**（`loft_sections` のルールドロフトは
@@ -210,11 +312,30 @@ _TIP_CURVE_TS = [0.15, 0.35, 0.60, 0.85, 1.0]
 _TOP_QS = [1.0 - 2.0 * i / 18.0 for i in range(19)]
 
 
+def nose_station_zs(p: dict) -> list[float]:
+    """先端の輪郭に沿って置く z 列（前縁アーク → 角のフィレット）。
+
+    **前縁カーブが無いときは何も足さない。** 4-C.2 以前の形（`tip_curve_depth = 0`）
+    はステーションごと据え置き、新機能が既定形状を 1 ビットも動かさないようにする。
+    """
+    radius, z_t, z_f, x_t, a_f = _nose(p)
+    if radius <= 0.0:
+        return []
+    r = p.get("tip_corner_r", 0.8)
+    th = math.asin(min(x_t / radius, 1.0))
+    zs = [radius * (1.0 - math.cos(th * i / _NOSE_ARC_STEPS))
+          for i in range(1, _NOSE_ARC_STEPS + 1)]
+    a0 = math.atan2(z_t - z_f, x_t - (a_f - r))    # フィレット始点の角（負）
+    zs += [z_f + r * math.sin(a0 * (1.0 - i / _NOSE_FILLET_STEPS))
+           for i in range(1, _NOSE_FILLET_STEPS + 1)]
+    return zs
+
+
 def station_zs(p: dict) -> list[float]:
     """断面を置く z 列。先端側を密にし、バーク端と踵を必ず含める。"""
     zv = vamp_start_z(p)
     zs = [t * zv for t in _STATION_TS]
-    zs += [t * tip_curve_depth(p) for t in _TIP_CURVE_TS]   # 前縁カーブ
+    zs += nose_station_zs(p)
     zs.append(zv + 0.01)          # バーク段差（削り終わりを明示）
     zs.append(p["reed_length"])
     return sorted(set(round(z, 4) for z in zs))
@@ -307,7 +428,9 @@ def param_regions(p: dict) -> dict:
         "tip_thickness":  r(0.0, 0.12 * zv, "top", "先端の削り"),
         "heel_thickness": r(zv, length, "all", "バーク（未削部）"),
         "heel_edge_thickness": r(zv, length, "top", "ケーンの円弧（カマボコ）"),
-        "tip_curve_depth": r(0.0, max(tip_curve_depth(p), 0.5), "all", "前縁カーブ"),
+        # 角の丸みまで含めた**実際の**先端区間（`tip_full_width_z` はフィレットが
+        # 側面に接する所で、`tip_curve_depth` より 0.46〜0.59mm 後ろにある）。
+        "tip_curve_depth": r(0.0, max(tip_full_width_z(p), 0.5), "all", "前縁カーブ"),
         "vamp_length":    r(0.0, zv, "top", "ヴァンプ（削り面）"),
         "profile_curve":  r(0.0, zv, "top", "ヴァンプ（削り面）"),
         "spine_ratio":    r(0.0, zv, "top", "中央の背骨"),

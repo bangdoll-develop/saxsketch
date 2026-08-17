@@ -134,16 +134,27 @@ class ReedComponent(Component):
 
         正ならリードが後退（ティップレールが露出）、負なら前へ張り出す。
         比べるのは共通の x 範囲だけ（幅そのものの差は「幅の差」の行が見ている）。
+
+        **角の丸みが効く区間は除く**（x > `_nose` の接点）。そこはリードが
+        意図的に逃げている所で、0.46〜0.59mm の後退は形状の仕様であって
+        「輪郭が合っていない」ではない。逃げの量は別の行が出す。
         """
         hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        x_max = min(rp.arc_end_x(p), hw)
         z0 = profiles.tip_contour_z(m, 0.0)
         worst = 0.0
         for i in range(samples + 1):
-            x = hw * i / samples
+            x = x_max * i / samples
             gap = rp.front_edge_z(p, x) - (profiles.tip_contour_z(m, x) - z0)
             if abs(gap) > abs(worst):
                 worst = gap
         return worst
+
+    def _corner_relief(self, p: dict, m: dict) -> tuple[float, float]:
+        """(リードが全幅へ達する z, 参照MP のティップ輪郭が角で落ち込む量) [mm]。"""
+        hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        return (rp.front_edge_z(p, hw),
+                profiles.tip_contour_z(m, hw) - profiles.tip_contour_z(m, 0.0))
 
     # ------------------------------------------------------------ 形状生成
 
@@ -248,6 +259,12 @@ class ReedComponent(Component):
         rows.append(["先端カーブ / MPのティップ輪郭",
                      f"{p['tip_curve_depth']:.2f} / "
                      f"{self._ref_contour_depth(m):.2f} mm（最大ずれ {gap:+.2f}）"])
+        # 角は丸みの半径ぶん後ろへ逃げる。意図した造形なので判定には入れないが、
+        # ティップレールがどれだけ露出するかは設計者が読める所に出しておく。
+        reed_corner, mp_corner = self._corner_relief(p, m)
+        rows.append(["角の位置（リード / MP）",
+                     f"{reed_corner:.2f} / {mp_corner:.2f} mm"
+                     f"（丸み {p['tip_corner_r']:.1f} ぶん {reed_corner - mp_corner:+.2f}）"])
 
         if abs(dw) > 0.3:
             status = "warn"
@@ -382,7 +399,10 @@ class ReedComponent(Component):
             ("ケーン外径（側端厚からの導出）",
              f"φ{2.0 * rp.cane_radius(p):.1f} mm（側端厚は未実測）"),
             ("ヴァンプ長", f"{rp.vamp_start_z(p):.1f} mm"),
-            ("先端カーブ", f"{p['tip_curve_depth']:.2f} mm"),
+            # 2 つ出すのは値が違うから。`tip_curve_depth` は前縁アークの理論的な角で、
+            # 実際に全幅へ達するのは角の丸みぶん後ろ（既定で +0.46〜0.59mm）。
+            ("先端カーブ / 全幅に達する位置",
+             f"{p['tip_curve_depth']:.2f} / {rp.tip_full_width_z(p):.2f} mm"),
             ("材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
         ]
         m = self.ref_params()
