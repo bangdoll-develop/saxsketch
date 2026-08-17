@@ -20,14 +20,19 @@
 張り出す不具合を**この掃引が素通りさせた**（ユーザーが 3D ビューで見つけた）。
 bbox は幅が正しい側の値を拾うので、形の破綻を bbox で見張るのには限界がある。
 
+**4-C.2d で先端厚の下限が 0.15 → 0.08 に下がった。** 光造形の解像度（積層 0.02×3
+= 0.06）と実物のケーン（0.11）を域内に入れるためで、既定は動いていない。ただし
+`side_rail_thin` の下限 0.20 と重ねると側端が 0.016mm まで薄くなる（いままでの
+最薄は 0.030mm）ので、その組を 1 本足してある。
+
 実行（WSL2 の SaxSketch 環境。リポジトリ直下で）:
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto 8 6
 
-リードのビルドはマウスピースや管体よりずっと軽い（ロフト 1 回＋ファイルドカットの
-ブーリアン 1 回）ので、3 サイズ通しでも VM は落ちない。それでも pytest と同時には
-走らせないこと（OCCT の連続負荷で WSL2 の VM ごと落ちた実績がある）。
+リードのビルドはマウスピースや管体よりずっと軽い（**ロフト 1 回だけ**。4-C.2c で
+ファイルドがブーリアンでなくなった）ので、3 サイズ通しでも VM は落ちない。それでも
+pytest と同時には走らせないこと（OCCT の連続負荷で WSL2 の VM ごと落ちた実績がある）。
 """
 from __future__ import annotations
 
@@ -67,6 +72,9 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
         ("ファイルド×深い円弧×先端広", dict(base, heel_edge_thickness=0.3,
                                             tip_width=base["heel_width"] + 1.0,
                                             file_cut="filed")),
+        # 4-C.2d で先端厚の下限が 0.08 に下がった。側端の薄化と重なると
+        # 側端厚が 0.08 × 0.20 = 0.016mm になる（従来の最薄 0.030 の半分）。
+        ("薄い先端×薄い側端", dict(base, tip_thickness=0.08, side_rail_thin=0.20)),
     ]
     for k in SWEEP_KEYS:
         s = specs.get(k)

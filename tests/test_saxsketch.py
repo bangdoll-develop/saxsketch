@@ -1817,6 +1817,150 @@ def test_reed_printability_flag(alto_reed):
         {**p, "tip_thickness": 0.20, "material": "pla"}, m)["printable"]
 
 
+def test_reed_recommended_values_are_never_a_clamped_lie():
+    """推奨値は「そこへ持っていけば**本当に**その硬さになる値」であること。
+
+    4-C.2d 以前は二分法の端をそのまま返し、さらに材料表の下限で `max()` して
+    いたので、3 サイズ × 5 材料の 15 通りのうち **6 通りが解ではない値**だった
+    （tenor/petg は「先端厚 1.20mm で 3番相当」と書いていたが、1.20mm でも
+    2.72 にしかならない）。黙って域内へ潰さないことを全組合せで固定する。
+    """
+    from saxsketch.acoustics import reed_model
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        m = comp.ref_params()
+        p = {s.key: s.default for s in comp.param_specs()}
+        for mat in reed_model.MATERIALS:
+            props = reed_model.reed_properties({**p, "material": mat}, m)
+            for key, rec, lim in (
+                    ("tip_thickness", "recommended_tip_mm", "recommended_tip_limit"),
+                    ("vamp_length", "recommended_vamp_mm", "recommended_vamp_limit")):
+                v = props[rec]
+                if v is None:
+                    # 届かないときは「どこまで行けるか」を必ず添える
+                    edge, got = props[lim]
+                    assert abs(got - 3.0) > 0.01, (tid, mat, key)
+                    continue
+                assert props[lim] is None, (tid, mat, key)
+                s = reed_model.reed_properties(
+                    {**p, "material": mat, key: v}, m)["strength_equiv"]
+                assert s == pytest.approx(3.0, abs=0.05), (tid, mat, key, v, s)
+
+
+def test_reed_recommended_tip_is_none_when_out_of_reach(alto_reed):
+    """先端厚だけでは届かない材料で、数値ではなく「届かない」と言うこと。
+
+    先端厚はいちばん弱いレバーなので、柔らかい材料では可動域いっぱいでも
+    3番相当にならない。カードに偽の数値が出ないことまで見る。
+    """
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    soft = {**p, "material": "resin_flex"}
+    props = reed_model.reed_properties(soft, comp.ref_params())
+    assert props["recommended_tip_mm"] is None
+    edge, got = props["recommended_tip_limit"]
+    assert edge == pytest.approx(reed_model.TIP_THICKNESS_RANGE[1])
+    assert got < 3.0
+    # ヴァンプ長のほうは届く（＝「硬くできない」ではなくレバーの選び方の話）
+    assert props["recommended_vamp_mm"] is not None
+
+    card = next(c for c in comp.simulate(soft)["cards"] if c["title"] == "硬さ・剛性")
+    tip_row = next(r for r in card["rows"] if "3番相当にする先端厚" in r[0])
+    assert "届かない" in tip_row[1] and "mm（現在" not in tip_row[1]
+
+
+def test_reed_vamp_is_a_stronger_lever_than_the_tip(alto_reed):
+    """硬さを決めているのは先端厚ではなく自由振動長のつけ根の厚み。
+
+    たわみは `∫ w·z³/(2EI) dz` で z³ の重みなので固定端側が支配する。
+    ここが崩れると硬さカードの助言（ヴァンプ長を名指しする）が嘘になる。
+    """
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+    m = comp.ref_params()
+    bands = reed_model.deflection_bands(p, m)
+    assert sum(bands) == pytest.approx(100.0)
+    assert bands[0] < 10.0, bands              # 先端 1/4 の寄与
+    assert bands[-1] > 3.0 * bands[0], bands   # 根元 1/4 のほうがずっと重い
+
+    def s(**over):
+        return reed_model.reed_properties({**p, **over}, m)["strength_equiv"]
+
+    base = s()
+    d_tip = max(abs(s(tip_thickness=p["tip_thickness"] + 0.1) - base),
+                abs(s(tip_thickness=p["tip_thickness"] - 0.1) - base))
+    d_vamp = max(abs(s(vamp_length=p["vamp_length"] + 6.0) - base),
+                 abs(s(vamp_length=p["vamp_length"] - 6.0) - base))
+    assert d_vamp > d_tip, (d_tip, d_vamp)
+
+
+def test_reed_thin_tip_can_still_be_a_normal_strength():
+    """実物並みに薄い先端（0.11mm）でも 3番相当を作れること。
+
+    印刷リードのテンプレート既定 0.38〜0.42 は**造形の都合**であって、
+    「印刷リードは先端を厚くするしかない」ではない。誰かがその思い込みで
+    先端厚を唯一のレバーに戻さないよう、可動域内に解があることを固定する。
+    """
+    from saxsketch.acoustics import reed_model
+    lo, hi = reed_model.VAMP_LENGTH_RANGE
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        m = comp.ref_params()
+        p = {s.key: s.default for s in comp.param_specs()}
+        thin = {**p, "tip_thickness": 0.11}
+        assert reed_model.TIP_THICKNESS_RANGE[0] <= 0.11
+        v, limit = reed_model.vamp_length_for_strength(thin, m)
+        assert v is not None and lo <= v <= hi, (tid, v)
+        got = reed_model.reed_properties({**thin, "vamp_length": v}, m)
+        assert got["strength_equiv"] == pytest.approx(3.0, abs=0.05), (tid, got)
+
+
+def test_reed_print_floors_are_both_reported(alto_reed):
+    """印刷の下限が 2 つとも出て、どちらが効いているかが 1 つだけ立つこと。
+
+    4-C.2d 以前は解像度（`min_layer × 3`）とハードコードの 0.35 をカードが見て、
+    `reed_properties` の `printable` は材料表の値を見ていて**表示されていな
+    かった**（tip=0.30 でカードは「要注意」・フラグは False）。
+    """
+    from saxsketch.acoustics import reed_model
+    comp, p = alto_reed
+
+    def card(q):
+        return next(c for c in comp.simulate(q)["cards"] if c["title"] == "印刷可否")
+
+    c0 = card(p)
+    labels = [r[0] for r in c0["rows"]]
+    assert any("解像度の下限" in x for x in labels), labels
+    assert any("実用強度の下限" in x for x in labels), labels
+    assert sum("効いている" in r[1] for r in c0["rows"]) == 1, c0["rows"]
+    props = reed_model.reed_properties(p, comp.ref_params())
+    assert (c0["big"] == "造形可") == props["printable"]
+
+    # 工程を変えると「造形不可（解像度）」が「要注意（強度は未確認）」に変わる。
+    # **「造形可」にはならない** —— 誰も 0.11mm の印刷リードが屈曲に耐えることを
+    # 示していないので、モデルは「不可能」をやめて「未確認」と言うだけ。
+    thin = {**p, "tip_thickness": 0.11}
+    assert card(thin)["big"] == "造形不可"
+    assert card({**thin, "material": "resin_rigid", "min_layer": 0.03})["big"] == "要注意"
+
+
+def test_reed_parameter_ranges_have_one_source(alto_reed):
+    """可動域が `reed_model` の定数と一致すること（2 か所に書かない）。
+
+    ソルバと `ParamSpec` で域が食い違うと、カードが UI で設定できない値を
+    勧める（4-C.2d 以前は上限 1.20 対 0.90 でずれていた）。
+    """
+    from saxsketch.acoustics import reed_model
+    comp, _ = alto_reed
+    spec = {s.key: s for s in comp.param_specs()}
+    for key, span in (("tip_thickness", reed_model.TIP_THICKNESS_RANGE),
+                      ("vamp_length", reed_model.VAMP_LENGTH_RANGE),
+                      ("min_layer", reed_model.MIN_LAYER_RANGE)):
+        assert (spec[key].min, spec[key].max) == span, key
+
+
 def test_reed_override_changes_sound(alto_reed):
     """リード実形状が物理モデル音に効いていること（Phase 3 の価値の核）。
 
