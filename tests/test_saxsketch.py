@@ -1880,6 +1880,145 @@ def test_reed_filed_cut_removes_material(alto_reed):
     assert filed < unfiled
 
 
+def test_reed_filed_cut_is_in_the_thickness_law():
+    """ファイルドが**厚みの法則の中**にあること。
+
+    4-C.2b まではバーク端の前後をブーリアンで削っていたので、印刷される形だけが
+    変わって `blade_volume_mm3`（BOM・印刷カードが読む）も `second_moment`（硬さ）も
+    ファイルドを 1 ビットも見ていなかった —— 実ソリッドが 7.4〜8.5mm³ 減るのに
+    法則側の差は **+0.0** だった。上の `..._removes_material` は実ソリッドしか
+    見ないのでこの穴を通してしまう。
+
+    いまは「表皮を一直線まで剥がす」を `thickness()` の天井として持っている。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.acoustics import reed_model
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        m = _template_params("mouthpiece", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        u = {**base, "file_cut": "unfiled"}
+        f = {**base, "file_cut": "filed"}
+        # 材料体積は 1.2〜1.4% 減る（実測。ブーリアン時代はここが 0.0 だった）
+        vu, vf = rp.blade_volume_mm3(u), rp.blade_volume_mm3(f)
+        assert 0.008 < (vu - vf) / vu < 0.02, (tid, vu, vf)
+        # 断面二次モーメントも帯の中で下がる（硬さが動く）
+        zb = rp.vamp_start_z(base) * 0.95
+        assert rp.second_moment(f, zb) < rp.second_moment(u, zb) * 0.95, tid
+        su = reed_model.reed_properties(u, m)["strength_equiv"]
+        sf = reed_model.reed_properties(f, m)["strength_equiv"]
+        assert sf < su, (tid, su, sf)
+
+
+def test_reed_filed_band_is_a_straight_line_at_the_vamp_end():
+    """ファイルドの境は**全幅にわたる一直線**で、落差は表皮の厚みちょうど。
+
+    「単なる切込み」ではないことの固定 —— 溝なら帯の前側にも段が出る。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        p = {**base, "file_cut": "filed"}
+        zv, bark = rp.vamp_start_z(p), rp.bark_thickness(p)
+        hw = p["heel_width"] / 2.0
+        for i in range(9):
+            x = hw * i / 8.0
+            step = rp.thickness(p, zv + 0.001, x) - rp.thickness(p, zv - 0.001, x)
+            assert step == pytest.approx(bark, abs=1e-9), (tid, x, step)
+        # 帯の前側は削り面へ連続して溶ける（段が無い ＝ 溝ではない）
+        z0 = rp.filed_band_start_z(p, 0.0)
+        assert rp.thickness(p, z0 - 0.05, 0.0) \
+            == pytest.approx(rp.thickness(p, z0 + 0.05, 0.0), abs=0.01), tid
+
+
+def test_reed_filed_band_narrows_toward_the_centre():
+    """「表皮を削った部分」が三日月になること（中央が細く側端が太い）。
+
+    削り面が中央でいちばん後ろまで伸びているからで、解説図の形そのもの。
+    実測 中央 2.3〜2.5mm → 側端 16.9〜23.4mm。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    for tid in ("soprano", "alto", "tenor"):
+        comp = get_registry().get("saxophone").make_component("reed", tid)
+        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        p = {**base, "file_cut": "filed"}
+        zv, hw = rp.vamp_start_z(p), p["heel_width"] / 2.0
+        widths = [zv - rp.filed_band_start_z(p, hw * i / 10.0) for i in range(11)]
+        assert widths == sorted(widths), (tid, widths)
+        assert 2.0 < widths[0] < 3.0, (tid, widths[0])
+        assert 15.0 < widths[-1] < 25.0, (tid, widths[-1])
+
+
+def test_reed_filed_needs_bark_to_remove():
+    """ファイルドは**表皮ぶんの余裕**が要ることを `params_error` が知っていること。
+
+    表皮を落とす面がテーブル面より下へ行くと断面が裏返る。管の限界近くで
+    先端幅 > 踵幅 にすると起きる（直す前は 252 通りで最小 y = −0.16）。
+    **掃引は 1 パラメータの端値しか振らないのでこの領域に届かない。**
+    `params_error` を通った組は 1 つ残らず断面が y ≥ 0 でなければならない。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+    checked = 0
+    for het in (0.3, 0.9, 1.6):
+        for ht in (1.8, 2.8, 3.6):
+            for heel_w in (9.0, 12.0, 15.0, 18.0):
+                # その組で `params_error` を通る最大の先端幅を二分法で出す
+                lo, hi = heel_w, 18.0
+                for _ in range(40):
+                    mid = (lo + hi) / 2.0
+                    p = {**base, "heel_edge_thickness": het, "heel_thickness": ht,
+                         "tip_width": mid, "heel_width": heel_w, "file_cut": "filed"}
+                    lo, hi = (lo, mid) if comp.params_error(p) else (mid, hi)
+                p = {**base, "heel_edge_thickness": het, "heel_thickness": ht,
+                     "tip_width": lo, "heel_width": heel_w, "file_cut": "filed"}
+                if comp.params_error(p) is not None:
+                    continue
+                checked += 1
+                ys = [y for s in rp.sections(p) for _, y in s["pts"]]
+                assert min(ys) >= -1e-9, (het, ht, heel_w, lo, min(ys))
+    assert checked >= 20, checked
+
+    # アンファイルドは狭まっていない。上限を両方とも解いて、その**間の幅**が
+    # 「アンファイルドなら成立、ファイルドなら弾かれる」ことを見る。
+    wide = {**base, "heel_edge_thickness": 0.9, "heel_width": 9.0}
+
+    def max_tip_width(file_cut):
+        lo, hi = 9.0, 18.0
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            lo, hi = ((lo, mid) if rp.cane_layout_error(
+                {**wide, "tip_width": mid, "file_cut": file_cut}) else (mid, hi))
+        return lo
+
+    w_unfiled, w_filed = max_tip_width("unfiled"), max_tip_width("filed")
+    assert w_filed < w_unfiled, (w_unfiled, w_filed)
+    between = (w_unfiled + w_filed) / 2.0
+    assert rp.cane_layout_error({**wide, "tip_width": between,
+                                 "file_cut": "unfiled"}) is None
+    assert rp.cane_layout_error({**wide, "tip_width": between,
+                                 "file_cut": "filed"}) is not None
+
+
+def test_reed_unfiled_is_untouched_by_the_file_cut(alto_reed):
+    """アンファイルドの断面が天井の追加で 1 ビットも動かないこと。"""
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    _, p = alto_reed
+    u = {**p, "file_cut": "unfiled"}
+    assert rp.station_zs(u) == rp.station_zs({k: v for k, v in u.items()
+                                              if k != "file_cut"})
+    for s in rp.sections(u):
+        for x, y in s["pts"]:
+            assert y == min(rp._vamp_thickness(u, s["z"], x), rp.cane_top(u, x)) \
+                or y == 0.0, (s["z"], x, y)
+
+
 # ------------------------------------------------------------------ リガチャー
 
 @pytest.fixture(scope="module")

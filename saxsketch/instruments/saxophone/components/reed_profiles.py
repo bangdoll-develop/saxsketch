@@ -227,6 +227,16 @@ def cane_top(p: dict, x: float) -> float:
 _MIN_EDGE_THICKNESS = 0.05
 
 
+def bark_thickness(p: dict) -> float:
+    """ファイルドで剥がす表皮（バーク）の厚み [mm]。
+
+    **実測で決まる量ではない** —— 印刷品に本物の表皮は無いので、これは「表皮を
+    剥がしたように見える段の深さ」。実物のケーンの表皮も 0.1〜0.3mm 程度で、
+    リードの厚みに対して十分小さい。踵厚に比例させて 0.25mm で頭打ちにする。
+    """
+    return min(0.25, p["heel_thickness"] * 0.12)
+
+
 def cane_layout_error(p: dict) -> str | None:
     """ブランクが元のケーン管に収まらない組合せを説明つきで弾く。
 
@@ -234,18 +244,29 @@ def cane_layout_error(p: dict) -> str | None:
     断面が裏返る**（実測: tip_width 18.0 / heel_width 14.0 で断面の最小 y = −0.45、
     heel_width 9.0 で −3.48。後者はソリッドが `is_valid=False` になった）。
 
-    **2 つのパラメータの関係**なので `ParamSpec` の範囲では表せない
+    **ファイルドは表皮ぶんの余裕も要る。** 表皮を落とした面がテーブル面より下へ
+    行くと同じことが起きる（実測: 先端幅 > 踵幅 で管の限界近くの 252 通りが
+    最小 y = −0.16 になった。**掃引は 1 パラメータの端値しか振らないので届かない**）。
+    これは「削る材料が残っていない」という物理そのものなので、アンファイルドまで
+    狭めずに `file_cut` で場合分けする。
+
+    **2 つ以上のパラメータの関係**なので `ParamSpec` の範囲では表せない
     （幅を狭くしても側端厚を上げても成立する）。`Component.params_error` へ回す。
     """
     r = cane_radius(p)
     if r <= 0.0:
         return None                     # 円弧なし（上面が平ら）＝どんな幅でも収まる
-    h = p["heel_thickness"] - _MIN_EDGE_THICKNESS
+    keep = _MIN_EDGE_THICKNESS
+    if p.get("file_cut") == "filed":
+        keep += bark_thickness(p)
+    h = p["heel_thickness"] - keep
     limit = math.sqrt(max(h * (2.0 * r - h), 0.0))   # 円弧が余裕高さまで来る x
     hw = max(p["tip_width"], p["heel_width"]) / 2.0
     if hw <= limit:
         return None
-    return (f"リードが元のケーン管に収まりません: 最大半幅 {hw:.1f} mm に対し、"
+    extra = ("（ファイルドは表皮 %.2f mm を落とすぶん余分に要る）"
+             % bark_thickness(p)) if p.get("file_cut") == "filed" else ""
+    return (f"リードが元のケーン管に収まりません{extra}: 最大半幅 {hw:.1f} mm に対し、"
             f"外径 φ{2.0 * r:.1f} の管では半幅 {limit:.1f} mm までしか厚みが"
             f"残りません。踵の側端厚（{heel_edge_thickness(p):.2f}）を上げて円弧を"
             f"浅くするか、幅を狭くしてください。")
@@ -257,8 +278,20 @@ def thickness(p: dict, z: float, x: float = 0.0) -> float:
     実物の作りそのもの: D 形のブランクを取ってからヴァンプを削るので、削っていない
     所はケーンの円弧が残り、削った所は削り面が勝つ。円弧が勝ち始めるのは
     ヴァンプの後ろ半分（実測 z ≈ 14.8 / 16.8 / 17.5）で、先端側は削り面が勝つ。
+
+    **ファイルドは素材上面を 1 段下げる**（表皮を一直線の位置まで剥がす加工）。
+    残るのは溝ではなく、削り面が下がりきる曲線と直線の間の**三日月形の帯**
+    ＝ 解説図の「表皮を削った部分」。溝ではないので、帯の前側に段は出ない。
+
+    ここに入れるのが重要で、**ブーリアンで削ると法則の外になる** —— 4-C.2b まで
+    ファイルドは切除ソリッドで作っていたので、`blade_volume_mm3`（BOM・印刷カード）
+    も `second_moment`（硬さ）もファイルドを 1 ビットも見ていなかった
+    （実ソリッドは −7.4〜−8.5mm³ 減るのに法則側の差は +0.0 だった）。
     """
-    return min(_vamp_thickness(p, z, x), cane_top(p, x))
+    top = cane_top(p, x)
+    if p.get("file_cut") == "filed" and z < vamp_start_z(p):
+        top -= bark_thickness(p)
+    return min(_vamp_thickness(p, z, x), top)
 
 
 def _vamp_thickness(p: dict, z: float, x: float = 0.0) -> float:
@@ -283,6 +316,25 @@ def _vamp_thickness(p: dict, z: float, x: float = 0.0) -> float:
     spine = p.get("spine_ratio", 1.15)
     blend = 1.0 - u  # 先端で最大、バーク端で 0
     return t_center * (1.0 - (1.0 - rail) * blend * q ** (2.0 * spine))
+
+
+def filed_band_start_z(p: dict, x: float) -> float:
+    """幅位置 x で「表皮を削った部分」が始まる z（帯の前縁）。
+
+    削り面が表皮を落とした面より低くなる所。**新しい法則ではなく、既存の 2 本の
+    曲線の交点**なので、帯の形はパラメータではなく幾何から出てくる。
+    中央でいちばん後ろ（帯が細い）、側端でいちばん前（帯が太い）＝ 三日月。
+    """
+    zv = vamp_start_z(p)
+    target = cane_top(p, x) - bark_thickness(p)
+    lo, hi = 0.0, zv
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if _vamp_thickness(p, mid, x) >= target:
+            hi = mid
+        else:
+            lo = mid
+    return hi
 
 
 def edge_thickness(p: dict, z: float) -> float:
@@ -337,6 +389,10 @@ def station_zs(p: dict) -> list[float]:
     zs = [t * zv for t in _STATION_TS]
     zs += nose_station_zs(p)
     zs.append(zv + 0.01)          # バーク段差（削り終わりを明示）
+    if p.get("file_cut") == "filed":
+        # ファイルドの一直線。**刻みを置かないと段が斜めになる** —— 手前の刻みは
+        # 0.88·zv なので 3.8mm かけて落ち、法則の体積が −5% と出る（実測）。
+        zs.append(zv - 0.01)
     zs.append(p["reed_length"])
     return sorted(set(round(z, 4) for z in zs))
 
@@ -436,7 +492,9 @@ def param_regions(p: dict) -> dict:
         "spine_ratio":    r(0.0, zv, "top", "中央の背骨"),
         "side_rail_thin": r(0.0, zv, "top", "サイドレール（両脇）"),
         "tip_corner_r":   r(0.0, 0.10 * zv, "top", "先端角の丸み"),
-        "file_cut":       r(zv - 2.0, zv + 1.0, "top", "ファイルドカット（削り終わり）"),
+        # 帯の実領域（側端でいちばん前まで伸びる）。決め打ちの ±数 mm ではない。
+        "file_cut":       r(filed_band_start_z(p, p["heel_width"] / 2.0), zv,
+                            "top", "表皮を削った部分（ファイルド）"),
         # material / min_layer は形状に影響しない → 領域なし
     }
 

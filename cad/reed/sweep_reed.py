@@ -62,6 +62,11 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
         ("前縁直線（旧形状）", dict(base, tip_curve_depth=0.0)),
         ("薄い側端×深いカーブ", dict(base, side_rail_thin=0.20,
                                      tip_curve_depth=2.5, file_cut="filed")),
+        # ファイルド × 深い円弧 × 先端幅 > 踵幅。**1 パラメータの端値では届かない**
+        # 領域で、表皮を落とす面がテーブル面より下へ潜る組（4-C.2c で発見）。
+        ("ファイルド×深い円弧×先端広", dict(base, heel_edge_thickness=0.3,
+                                            tip_width=base["heel_width"] + 1.0,
+                                            file_cut="filed")),
     ]
     for k in SWEEP_KEYS:
         s = specs.get(k)

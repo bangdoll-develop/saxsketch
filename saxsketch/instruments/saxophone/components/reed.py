@@ -9,7 +9,7 @@ from __future__ import annotations
 from saxsketch.acoustics import reed_model
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
-from saxsketch.geometry.builders import extrude_arc_prism, loft_sections
+from saxsketch.geometry.builders import loft_sections
 
 from . import profiles
 from . import reed_profiles as rp
@@ -75,8 +75,10 @@ def _specs(t: dict) -> list[ParamSpec]:
         ParamSpec(key="file_cut", label="カット種別", category="カット",
                   type="choice", default=t["file_cut"],
                   choices=[Choice("unfiled", "アンファイルド"),
-                           Choice("filed", "ファイルド（横一文字）")],
-                  effect="ファイルド=削り終わりが直線。明るく反応が速い傾向"),
+                           Choice("filed", "ファイルド（表皮を一直線まで剥がす）")],
+                  effect="ケーンの表皮をどこまで落とすか。ファイルド=削り終わりの"
+                         "曲線より後ろも一直線の位置まで剥がすので、その間に"
+                         "「表皮を削った部分」の帯が出る。明るく反応が速い傾向"),
         # --- 製造 ---
         ParamSpec(key="material", label="材料プリセット", category="製造",
                   type="choice", default=t["material"],
@@ -158,36 +160,14 @@ class ReedComponent(Component):
 
     # ------------------------------------------------------------ 形状生成
 
-    #: ファイルドカットの帯の半長 [mm]（バーク端の前後へ同じだけ広がる）。
-    FILE_CUT_HALF_SPAN = 1.2
-
     def build(self, params: dict):
-        p = params
-        part = loft_sections(rp.sections(p))
-        if p.get("file_cut") == "filed":
-            part = part - self._file_cut_solid(p)
-        return part
+        """ロフト 1 回だけ。**ブーリアンを使わない。**
 
-    @staticmethod
-    def _file_cut_solid(p: dict):
-        """ファイルドカット（バーク端の横一文字）を削る切除ソリッド。
-
-        **上面の円弧に沿わせる。** 水平な屋根で削ると中央の冠だけが平らに落ちて
-        （アルトで幅 5.2mm）、全幅に走る「横一文字」にならない。円弧を `depth` だけ
-        下げた曲線は**同じ半径の円**なので、3 点円弧で厳密に表せる。
+        ファイルド（表皮を一直線まで剥がす加工）は `reed_profiles.thickness` の
+        天井として入っている。切除ソリッドで削っていた頃は、印刷される形だけが
+        変わって `blade_volume_mm3` も `second_moment` も気づいていなかった。
         """
-        zv = rp.vamp_start_z(p)
-        span = ReedComponent.FILE_CUT_HALF_SPAN
-        depth = min(0.25, p["heel_thickness"] * 0.12)
-        # リードの**最大**半幅より外まで届かせる（先端幅のほうが広い設定もある）。
-        # ただし円弧の外へは出られないので、管の半径で頭を打つ（そこが円弧の最下点）。
-        xe = min(max(p["tip_width"], p["heel_width"]) / 2.0 + 0.5, rp.cane_radius(p))
-        z0 = zv - span
-        arc = [(-xe, rp.cane_top(p, xe) - depth, z0),
-               (0.0, rp.cane_top(p, 0.0) - depth, z0),
-               (xe, rp.cane_top(p, xe) - depth, z0)]
-        return extrude_arc_prism(arc, cap_y=p["heel_thickness"] + 1.0,
-                                 direction=(0.0, 0.0, 1.0), length=2.0 * span)
+        return loft_sections(rp.sections(params))
 
     # ------------------------------------------------------------ シミュレーション
 
