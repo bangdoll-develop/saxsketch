@@ -55,6 +55,8 @@ export interface ProjectData {
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
   survey: SurveyState;
+  /** 旧プロジェクトを開いたときのパラメータ変換報告（黙って値を変えないため） */
+  notices?: string[];
 }
 /** 採寸ワークフロー（Phase 4-A） */
 export interface SurveyField {

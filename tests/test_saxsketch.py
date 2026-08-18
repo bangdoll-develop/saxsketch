@@ -2210,12 +2210,208 @@ def test_ligature_solid_valid(alto_ligature, tmp_path):
         assert check_mesh(f)["watertight"]
 
 
-def test_ligature_plate_types(alto_ligature):
-    """プレートの有無で体積が順序どおり（なし < レール < 全面）になること。"""
+def test_ligature_contact_types_add_material(alto_ligature):
+    """当たり方で体積が順序どおり（なし < 点 < 線 < 面）になること。
+
+    接触は**内周断面の凸**なので、要素が増えるほど空洞が減って材料が増える。
+    ソリッドが常に 1 個であることも見る（浮いた要素が生まれない設計の担保）。
+    """
     comp, p = alto_ligature
-    vols = {k: comp.build({**p, "plate_type": k}).volume
-            for k in ("none", "rail", "plain")}
-    assert vols["none"] < vols["rail"] < vols["plain"]
+    vols = {}
+    for k in ("none", "point", "line", "face"):
+        part = comp.build({**p, "contact_type": k, "contact_count": 2})
+        assert len(part.solids()) == 1, k
+        vols[k] = part.volume
+    assert vols["none"] < vols["point"] < vols["line"] < vols["face"], vols
+
+
+def test_ligature_contacts_are_symmetric_by_construction():
+    """接触の x 位置が**式から**対称であること（判定で弾くのではない）。
+
+    生成式が n とタブ半幅だけの関数なので、非対称な並びを作れる経路が無い。
+    幅も「隣と融合しない」上限を守る。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    for hw in (4.0, 6.70, 6.95, 7.65, 12.0):
+        for n in range(1, 7):
+            xs = lp.contact_xs(hw, n)
+            w = lp.contact_width(hw, n)
+            assert len(xs) == n
+            for i in range(n):
+                assert xs[i] == -xs[n - 1 - i], (hw, n, xs)   # ビット一致
+            assert abs(xs[-1]) + w / 2.0 <= lp.contact_span(hw) + 1e-12
+            for a, b in zip(xs, xs[1:]):
+                assert b - a > w, (hw, n, w)                  # 隣と融合しない
+
+
+def test_ligature_contacts_actually_touch_the_reed():
+    """接触要素の頂点が「リード背面（カマボコ）− リード逃げ」に乗ること。
+
+    4-C.2 でリードの背面が円弧になったのに接触面は平面のままだったので、
+    **既定の「2点レール」はリードに 1 か所も当たっていなかった**
+    （締め代 0.15 のはずが、レール位置で 0.83〜1.04mm 離れていた）。
+    断面ポリラインから直接読んで、その穴をふさぐ。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        r = comp.reed_params()
+        for kind in ("face", "line", "point"):
+            for n in (1, 2, 3, 6):
+                p = {**base, "contact_type": kind, "contact_count": n}
+                rows = lp.contact_rows(m, p)
+                z0, z1 = lp.seat_range(m, p)
+                zc = rows[0] if rows else (z0 + z1) / 2.0
+                hw = lp.flat_half_width(m, p)
+                floor = lp.tab_floor_y(m, p, r, zc)
+                # 断面の先頭がタブ床の折れ線（残りは上側＝ビーク側の円弧）
+                nb = len(lp.tab_bottom_pts(m, p, r, hw, zc))
+                sec = next(s for s in lp.inner_sections(m, p, r)
+                           if abs(s["z"] - zc) < 1e-9)["pts"][:nb]
+
+                def back(x):
+                    return (profiles.table_plane_y(m, zc)
+                            - rp.cane_top(r, abs(x)) - p["reed_clearance"])
+
+                if kind == "face":
+                    # 面は背面に密着 → 床より上のタブ床の点が全部カマボコに乗る
+                    touched = [(px, py) for px, py in sec
+                               if abs(px) <= lp.contact_span(hw) + 1e-9
+                               and py > floor + 1e-9]
+                    assert len(touched) >= 8, (tid, n)
+                    for px, py in touched:
+                        assert py == pytest.approx(back(px), abs=1e-9)
+                else:
+                    for x in lp.contact_xs(hw, n):
+                        crest = max(py for px, py in sec if abs(px - x) < 1e-9)
+                        assert crest == pytest.approx(back(x), abs=1e-9), \
+                            (tid, kind, n, x)
+
+
+def test_ligature_contact_none_is_the_old_shape():
+    """`contact_type="none"` の内周が接触を入れる前と同じ形であること。
+
+    実装時に HEAD の `inner_sections` とビット一致を確認したうえで、その形を
+    決めている 3 つ（頂点数 71 / タブ床が 2 点で「テーブル − 踵厚 − リード逃げ
+    − はめあい隙間」ちょうど / 残りが厳密に円上）をここで固定する。
+    既定の当たり方（線）でも**床の高さは動かない**ことも見る。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        r = comp.reed_params()
+        p = {**base, "contact_type": "none"}
+        for s in lp.inner_sections(m, p, r):
+            pts, z = s["pts"], s["z"]
+            assert len(pts) == 71, tid
+            floor = (profiles.table_plane_y(m, z) - r["heel_thickness"]
+                     - p["reed_clearance"] - p["clearance"])
+            assert pts[0][1] == floor and pts[1][1] == floor    # ビット一致
+            assert pts[0][0] == -pts[1][0]
+            radius = profiles.outer_radius(m, z) + p["clearance"]
+            for x, y in pts[2:]:
+                assert math.hypot(x, y) == pytest.approx(radius, abs=1e-9) \
+                    or abs(x) == pytest.approx(abs(pts[0][0]), abs=1e-9)
+        # 接触を入れても床は動かない（逃げ 0.25 ＝ テンプレートの隙間 0.25）
+        for kind in ("face", "line"):
+            q = {**base, "contact_type": kind}
+            assert lp.tab_floor_y(m, q, r, 50.0) == lp.tab_floor_y(m, p, r, 50.0)
+
+
+def test_ligature_reverse_screw_needs_a_contact(alto_ligature):
+    """逆締めが成立しない組を `params_error` が弾くこと（既定は通る）。
+
+    スリットが必ずタブ床を割るので、橋渡しする接触が無いと接触面が真っ二つに
+    なる。橋がバンド厚に収まらない組も同じ理由で形にならない。
+    """
+    comp, p = alto_ligature
+    assert comp.params_error(p) is None
+    assert comp.params_error({**p, "closure": "screw_reed"}) is None
+    bad = comp.params_error({**p, "closure": "screw_reed", "contact_type": "none"})
+    assert bad and "橋渡し" in bad
+    thick = comp.params_error({**p, "closure": "screw_reed", "min_wall": 2.0})
+    assert thick and "バンド厚" in thick
+    # 3 サイズとも既定の逆締めは成立する（橋 1.6 ＋ 逃げ 0.35 ＋ 床 0.2 = 2.15）
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        c = reg.make_component("ligature", tid)
+        c.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
+        q = {s.key: s.default for s in c.param_specs()}
+        assert c.params_error({**q, "closure": "screw_reed"}) is None, tid
+
+
+def test_ligature_elastic_has_no_screw(alto_ligature):
+    """弾性バンドがスリットもネジ座も持たない一連リングになること。"""
+    from saxsketch.geometry.builders import loft_sections
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    comp, base = alto_ligature
+    p = {**base, "closure": "elastic", "clearance": -0.30, "material": "tpu"}
+    m = comp.ref_params()
+    r = comp.reed_params()
+    part = comp.build(p)
+    assert len(part.solids()) == 1 and part.is_valid
+    ring = (loft_sections(lp.outer_sections(m, p, r))
+            - loft_sections(lp.inner_sections(m, p, r)))
+    assert part.volume == pytest.approx(ring.volume, rel=1e-9)   # 切除も加算も無い
+    assert lp.has_screws(p) is False
+    assert not [b for b in comp.bom(p) if b["type"] == "市販品"]
+    card = next(c for c in comp.simulate(p)["cards"] if c["title"] == "締結")
+    assert card["big"] == "ネジなし" and "M" not in str(card["big"])
+
+
+def test_ligature_elastic_needs_a_stretchy_material(alto_ligature):
+    """伸びない材料の一連リングを印刷強度カードが `bad` と言うこと。
+
+    形としては作れる（薄いバンドなら成立する余地がある）ので `params_error`
+    にはしない —— そこは設計者の判断。剛体バンドで隙間が負なら適合カードが警告する。
+    """
+    comp, base = alto_ligature
+    p = {**base, "closure": "elastic", "clearance": -0.30}
+
+    def card(q, title):
+        return next(c for c in comp.simulate(q)["cards"] if c["title"] == title)
+
+    assert card({**p, "material": "petg"}, "印刷強度")["status"] == "bad"
+    assert card({**p, "material": "tpu"}, "印刷強度")["status"] == "ok"
+    assert card({**p, "material": "tpu"}, "マウスピース適合")["status"] == "ok"
+    # 剛体バンド × 負の隙間 → 入らない
+    rigid = card({**base, "clearance": -0.30}, "マウスピース適合")
+    assert rigid["status"] == "warn" and "伸びない" in rigid["advice"]
+    # 弾性 × 正の隙間 → 掴めない
+    loose = card({**p, "clearance": 0.25, "material": "tpu"}, "マウスピース適合")
+    assert loose["status"] == "warn" and "締め代" in loose["advice"]
+
+
+def test_ligature_legacy_plate_type_migrates(alto_ligature):
+    """旧 `plate_type` が変換され、**変換したことが 1 行返る**こと。
+
+    `ParamSet` は未知キーを黙って捨てるので、フックが無いと「全面プレート」に
+    してあったプロジェクトが黙って線接触に変わる。既定のフックは恒等であることも
+    見る（コアは楽器を知らないまま）。
+    """
+    comp, p = alto_ligature
+    # 旧 .wproj には新キーが無い（存在しなかった）ので、その形で渡す
+    legacy = {k: v for k, v in p.items()
+              if k not in ("closure", "contact_type", "contact_count")}
+    for old, kind, count in (("none", "none", 1), ("plain", "face", 1),
+                             ("rail", "line", 2)):
+        values, notices = comp.migrate_params({**legacy, "plate_type": old})
+        assert "plate_type" not in values
+        assert values["contact_type"] == kind and values["contact_count"] == count
+        assert values["closure"] == "screw_beak"
+        assert len(notices) == 1 and "圧力プレート" in notices[0]
+    assert comp.migrate_params(dict(p)) == (p, [])       # 旧キーが無ければ素通し
+    reed = get_registry().get("saxophone").make_component("reed", "alto")
+    assert reed.migrate_params({"a": 1}) == ({"a": 1}, [])   # 既定は恒等
 
 
 def test_ligature_screw_hole_inside_boss():
@@ -2246,8 +2442,7 @@ def test_ligature_tab_matches_plate(alto_ligature):
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     comp, p = alto_ligature
     m = comp.ref_params()
-    rt = comp.reed_thickness()
-    assert lp.flat_half_width(m, p, rt) <= lp.requested_tab_half_width(m, p) + 1e-9
+    assert lp.flat_half_width(m, p) <= lp.requested_tab_half_width(m, p) + 1e-9
 
     def fit(mp):
         comp.set_refs({"mouthpiece": {"params": mp}})
@@ -2261,7 +2456,7 @@ def test_ligature_tab_matches_plate(alto_ligature):
         # 「テーブル面の弦」ではなく**外形径そのもの**（アルトのリード 13.4mm に対し
         # 座の外形は 0.974·body_dia なので body_dia < 14.2mm で入らなくなる）。
         narrow = {**m, "body_dia": 13.0}
-        assert lp.flat_half_width(narrow, p, rt) \
+        assert lp.flat_half_width(narrow, p) \
             < lp.requested_tab_half_width(narrow, p)
         card = fit(narrow)
         assert card["status"] == "warn" and "収納幅" in card["advice"]
@@ -2304,6 +2499,20 @@ def test_ligature_sections_never_self_intersect():
         return 0.5 * sum(pts[i][0] * pts[(i + 1) % n][1]
                          - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
 
+    def check(sections, tag):
+        # ルールドロフトの前提: 1 本のロフトの中で頂点数が一定であること。
+        # 棚（テーブル面の水平部）は弦とタブ幅の大小で決まるので、帯の中で z に
+        # よって出たり消えたりする —— そこで点数が変わると面がねじれる。
+        assert len({len(s["pts"]) for s in sections}) == 1, (tag, "頂点数")
+        for s in sections:
+            pts = s["pts"]
+            hit = self_intersection(pts)
+            assert hit is None, (tag, s["z"], hit)
+            assert signed_area(pts) > 0, (tag, s["z"])          # 反時計回り
+            dup = [i for i in range(len(pts))
+                   if pts[i] == pts[(i + 1) % len(pts)]]
+            assert not dup, (tag, s["z"], dup)                  # 点が重ならない
+
     reg = get_registry().get("saxophone")
     shelf_cases = 0
     for tid in SIZES:
@@ -2311,7 +2520,8 @@ def test_ligature_sections_never_self_intersect():
         m0 = _template_params("mouthpiece", tid)
         specs = {s.key: s for s in lig.param_specs()}
         base = dict(ParamSet(lig.param_specs(), lig.template["ligature"]).values)
-        rt0 = float(lig.template["reed"]["heel_thickness"])
+        r0 = lig.reed_params()
+        rt0 = r0["heel_thickness"]
         for bd, cl, rc, rt in itertools.product(
                 (m0["body_dia"] * 0.6, m0["body_dia"], m0["body_dia"] * 1.4),
                 (specs["clearance"].min, specs["clearance"].max),
@@ -2319,18 +2529,27 @@ def test_ligature_sections_never_self_intersect():
                 (rt0 * 0.6, rt0, rt0 * 1.5)):
             m = dict(m0, body_dia=bd)
             p = dict(base, clearance=cl, reed_clearance=rc)
+            r = dict(r0, heel_thickness=rt)
             z0, z1 = lp.seat_range(m, p)
             zm = (z0 + z1) / 2.0
             r_in = profiles.outer_radius(m, zm) + cl
             if lp.requested_tab_half_width(m, p) < lp._shelf_half_width(
                     r_in, profiles.table_plane_y(m, zm)):
                 shelf_cases += 1
-            for sections in (lp.inner_sections(m, p, rt),
-                             lp.outer_sections(m, p, rt)):
-                for s in sections:
-                    hit = self_intersection(s["pts"])
-                    assert hit is None, (tid, bd, cl, rt, hit)
-                    assert signed_area(s["pts"]) > 0, (tid, bd, cl, rt)  # 反時計回り
+            check(lp.inner_sections(m, p, r), (tid, bd, cl, rc, rt, "内周"))
+            check(lp.outer_sections(m, p, r), (tid, bd, cl, rc, rt, "外周"))
+        # 接触の組合せ（凸を入れても自己交差しないことがそのまま新機能の守り）
+        for closure, kind, n in itertools.product(
+                ("screw_beak", "screw_reed", "elastic"),
+                ("none", "face", "line", "point"), (1, 2, 3, 6)):
+            p = dict(base, closure=closure, contact_type=kind, contact_count=n)
+            if lig.params_error(p):
+                continue
+            tag = (tid, closure, kind, n)
+            check(lp.inner_sections(m0, p, r0), tag + ("内周",))
+            check(lp.outer_sections(m0, p, r0), tag + ("外周",))
+            if closure == "screw_reed":
+                check(lp.bridge_sections(m0, p, r0), tag + ("橋",))
     assert shelf_cases > 0, "棚が出る側（タブ<弦）を1つも踏んでいない"
 
 
@@ -3170,6 +3389,44 @@ def test_project_refs_roundtrip(tmp_path):
             "name": "旧", "params": {"tip_opening": 1.9}}))
     loaded = Project.load(old)
     assert loaded.refs == {} and loaded.params["tip_opening"] == 1.9
+
+
+def test_open_reports_migrated_params(tmp_path):
+    """旧 `plate_type` の .wproj を開くと変換され、**報告が応答に載る**こと。
+
+    `ParamSet.apply` は未知キーを黙って捨てるので、フックが無いと利用者の設定が
+    理由も無く既定へ落ちる。「黙って値が変わらない」ことの端から端までの固定。
+    """
+    import json
+    import zipfile
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    old = tmp_path / "legacy_lig.wproj"
+    with zipfile.ZipFile(old, "w") as zf:
+        zf.writestr("project.json", json.dumps({
+            "schema_version": 1, "instrument_id": "saxophone",
+            "template_id": "alto", "component_id": "ligature",
+            "name": "旧リガチャー",
+            "params": {"band_width": 16.0, "plate_type": "plain"}}))
+    r = c.post("/api/project/open", json={"path": str(old)})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["params"]["contact_type"] == "face"          # 全面 → 面接触
+    assert body["params"]["closure"] == "screw_beak"
+    assert "plate_type" not in body["params"]
+    assert len(body["notices"]) == 1 and "圧力プレート" in body["notices"][0]
+    # 値を触ったら報告は役目を終える（トーストが残り続けない）
+    assert c.put("/api/project/params",
+                 json={"params": {"band_width": 15.5}}).status_code == 200
+    assert c.get("/api/project").json()["notices"] == []
+
+    # 新規プロジェクトには報告が付かない
+    r = c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                         "template_id": "alto",
+                                         "component_id": "ligature"})
+    assert r.json()["notices"] == []
 
 
 def test_reference_endpoint(tmp_path):

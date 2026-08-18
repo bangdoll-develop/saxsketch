@@ -149,6 +149,9 @@ def project_get():
         "manual_edit": STATE.manual_edit_summary(),
         "reference": STATE.reference_summary(),
         "survey": STATE.survey_state(),
+        # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）。
+        # 黙って値が変わらないための経路なので、パラメータを触るまで残る。
+        "notices": STATE.notices,
     }
 
 

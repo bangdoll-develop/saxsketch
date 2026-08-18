@@ -80,6 +80,18 @@ class Component(ABC):
         """
         return None
 
+    def migrate_params(self, values: dict) -> tuple[dict, list[str]]:
+        """保存済みプロジェクトのパラメータを現行のキーへ移す。既定は恒等。
+
+        `ParamSet.apply` は**未知のキーを黙って捨てる**ので、パラメータを作り
+        替えると古い .wproj が黙って既定値へ落ちる（利用者の設計が理由も無く
+        変わる）。ここで変換し、**何をどう移したかを 1 行返す**。
+
+        コアは楽器を知らないままでよい: 返るのは表示用の文字列だけで、コアは
+        それをそのまま利用者へ渡す（`params_error` と同じ形のフック）。
+        """
+        return values, []
+
     @abstractmethod
     def simulate(self, params: dict) -> dict:
         """設計時シミュレーション結果（Tier1/2、感度、倍音列）を返す。"""

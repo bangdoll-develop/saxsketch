@@ -99,6 +99,9 @@ class AppState:
         # 採寸ワークフロー（Phase 4-A）。音響基準定数(size_info)へのプロジェクト局所上書き。
         self.size_overrides: dict = {}
         self._base_size: dict = {}   # コンポーネント既定の size_info（descriptor 由来のコピー）
+        # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）。
+        # 黙って値を変えないための経路なので、利用者が何か触るまで残す。
+        self.notices: list[str] = []
         self.settings = self._load_settings()
 
     # ---------------------------------------------------------- 設定
@@ -154,6 +157,7 @@ class AppState:
             params=dict(paramset.values))
         self.component = component
         self.paramset = paramset
+        self.notices = []
         self._bind_refs()
         self.size_overrides = {}
         self._bind_size()
@@ -166,11 +170,15 @@ class AppState:
         component = inst.make_component(proj.component_id, proj.template_id)
         specs = component.param_specs()
         paramset = ParamSet(specs, component.template.get(proj.component_id, {}))
-        paramset.apply(proj.params)
+        # パラメータを作り替えたぶんをここで移す。**apply の前**でなければ意味が
+        # ない（apply は未知キーを黙って捨てるので、後では旧値が残っていない）。
+        values, notices = component.migrate_params(dict(proj.params))
+        paramset.apply(values)
         proj.params = dict(paramset.values)
         self.project = proj
         self.component = component
         self.paramset = paramset
+        self.notices = notices
         self._bind_refs()
         # 採寸チェックポイントに保存された音響基準の上書きを復元する。
         self.size_overrides = dict(
@@ -281,6 +289,7 @@ class AppState:
             self.paramset.apply(keep)
             raise ValueError(bad)
         self.project.params = dict(applied)
+        self.notices = []      # 利用者が値を触った時点で変換報告は役目を終える
         return applied
 
     # ---------------------------------------------------------- 形状

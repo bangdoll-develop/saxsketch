@@ -28,6 +28,8 @@ export default function App() {
   const [manualEdit, setManualEdit] = useState<ManualEdit | null>(null);
   const [viewDerived, setViewDerived] = useState(false);
   const [staleWarn, setStaleWarn] = useState(false);
+  // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
+  const [notices, setNotices] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
   const [hasSection, setHasSection] = useState(false);
   // ドラッグ中の未確定値。断面ハンドルを掴んでいる間だけ非 null になる。
@@ -67,6 +69,12 @@ export default function App() {
   }, [staleWarn]);
 
   useEffect(() => {
+    if (notices.length === 0) return;
+    const t = setTimeout(() => setNotices([]), 12000);
+    return () => clearTimeout(t);
+  }, [notices]);
+
+  useEffect(() => {
     // 影響領域は形状パラメータに依存 → モデル更新のたびに再取得
     if (!project) return;
     api.regions().then(setRegions).catch(() => {});
@@ -88,6 +96,7 @@ export default function App() {
     const p = await api.getProject();
     setProject(p); setParams(p.params); setSim(p.simulation);
     setManualEdit(p.manual_edit);
+    setNotices(p.notices ?? []);
     setViewDerived(false);
     setModelVersion((v) => v + 1);
     setDialog(null);
@@ -336,6 +345,12 @@ export default function App() {
         <div className="err-toast warn-toast">
           ⚠ 凍結後にパラメータを変更しました。登録済みの編集済みモデルは古い形状になります
           （入稿には使用されません）。「🛠 外部編集」から再凍結してやり直してください。
+        </div>
+      )}
+      {notices.length > 0 && !staleWarn && (
+        <div className="err-toast warn-toast">
+          ⚠ 保存時から変わったパラメータを変換しました:
+          {notices.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}
     </>

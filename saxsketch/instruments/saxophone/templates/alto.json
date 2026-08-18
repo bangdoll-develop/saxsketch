@@ -64,7 +64,9 @@
   "screw_size": "m3",
   "boss_height": 6.0,
   "slit_width": 3.0,
-  "plate_type": "rail",
+  "closure": "screw_beak",
+  "contact_type": "line",
+  "contact_count": 2,
   "material": "petg",
   "min_wall": 1.6
  },
