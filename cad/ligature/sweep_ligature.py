@@ -71,6 +71,14 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
         ("厚い帯×6線", dict(base, band_thickness=specs["band_thickness"].max,
                             contact_type="line", contact_count=6)),
         ("隙間最小×面", dict(base, clearance=0.05, contact_type="face")),
+        # 4-C.3b: 帯の位置決め。以前は幅が座へ丸め込まれてここが**同じ形に
+        # なっていた**（掃引は既定幅しか回していなかったので届いていなかった）
+        ("帯幅 最小", dict(base, band_width=specs["band_width"].min)),
+        ("帯幅 最大", dict(base, band_width=specs["band_width"].max)),
+        ("帯幅 最大×6線", dict(base, band_width=specs["band_width"].max,
+                               contact_type="line", contact_count=6)),
+        ("オフセット 0", dict(base, seat_offset=specs["seat_offset"].min)),
+        ("オフセット 最大", dict(base, seat_offset=specs["seat_offset"].max)),
     ]
     return out + extra
 

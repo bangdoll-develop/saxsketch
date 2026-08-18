@@ -338,7 +338,9 @@ class LigatureComponent(Component):
             ["内周径", f"φ{lp.inner_radius(m, p) * 2.0:.2f} mm"],
             ["マウスピース ボディ径", f"φ{m['body_dia']:.1f} mm"],
             ["装着位置 z", f"{z0:.1f}〜{z1:.1f} mm"],
-            ["リガチャー座", f"{seat0:.1f}〜{seat1:.1f} mm"],
+            ["リガチャー座（公称）", f"{seat0:.1f}〜{seat1:.1f} mm"],
+            ["座位置オフセット（要求/実効）",
+             f"{p['seat_offset']:.1f} / {lp.effective_seat_offset(m, p):.2f} mm"],
             ["リード収納幅（要求/実際)",
              f"{lp.requested_tab_half_width(m, p) * 2.0:.1f} / "
              f"{lp.flat_half_width(m, p) * 2.0:.1f} mm"],
@@ -356,10 +358,12 @@ class LigatureComponent(Component):
                         f"張り出せますが、外形径そのものは超えられません。"
                         f"ボディ径の大きいマウスピースを参照するか、はめあい"
                         f"隙間を減らしてください。")
-        if z1 - z0 < p["band_width"] - 0.05:
+        win = profiles.window_end_z(m)
+        if z0 < win:
             return card("warn",
-                        f"バンド幅がリガチャー座に収まりません（座は "
-                        f"{seat1 - seat0:.1f}mm）。幅を狭めるか座位置"
+                        f"帯の前端 {z0:.1f}mm が窓の後端 {win:.1f}mm より前に出ます。"
+                        f"リガチャーが窓（リードが振動する開口）に掛かるので、"
+                        f"バンド幅を {seat1 - win:.1f}mm 以下にするか、座位置"
                         f"オフセットを小さくしてください。")
         if elastic and p["clearance"] > 0.0:
             return card("warn",
@@ -375,10 +379,21 @@ class LigatureComponent(Component):
             return card("warn",
                         "はめあい隙間が小さく、印刷公差では入らない可能性が"
                         "あります。0.20〜0.30mm を推奨します。")
-        return card("ok",
-                    "マウスピース外形に追従した内周です。参照マウスピースの"
-                    "ボディ径を変えると内周も自動で追従します。接触の頂点は"
-                    "リード背面（カマボコ）に沿うので、締め代は全接触で揃います。")
+        advice = ("マウスピース外形に追従した内周です。参照マウスピースの"
+                  "ボディ径を変えると内周も自動で追従します。接触の頂点は"
+                  "リード背面（カマボコ）に沿うので、締め代は全接触で揃います。")
+        if z0 < seat0 - 1e-9:
+            # 座は「実測のリガチャー帯 ≈18mm / heel 79mm」から作った公称値であって
+            # 壁ではない。はみ出しは事実として出すだけで、警告にはしない。
+            advice += (f"帯は公称の座より {seat0 - z0:.1f}mm 前へ出ていますが、"
+                       f"座の長さ（最大径の 23%）は典型的なリガチャー幅から作った"
+                       f"公称値なので、これ自体は不都合ではありません。")
+        if lp.effective_seat_offset(m, p) < p["seat_offset"] - 0.005:
+            advice += (f"座位置オフセットは {p['seat_offset']:.1f}mm を要求して"
+                       f"いますが、帯の後端が最大径（z={seat1:.1f}）で止まるため"
+                       f"実効 {lp.effective_seat_offset(m, p):.2f}mm です。"
+                       f"前へ動かすには幅を広げてください。")
+        return card("ok", advice)
 
     def _screw_card(self, params: dict) -> dict:
         p = params

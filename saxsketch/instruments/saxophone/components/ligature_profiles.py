@@ -50,14 +50,35 @@ from . import reed_profiles as rp
 
 
 def seat_range(ref_p: dict, lig_p: dict) -> tuple[float, float]:
-    """リガチャーが実際に載る z 範囲。座の前端 + オフセットから帯幅ぶん。"""
+    """リガチャーが実際に載る z 範囲。**後端で止め、前へは伸ばす。**
+
+    後端の壁は物理: `ligature_seat_range` の後端は胴の最大径（`heel_z`）で、
+    そこから先は胴が細くなるので、頂点を跨いだ帯は掴めない。
+
+    **前端は丸めない。** 座の長さは `_SEAT_LENGTH_RATIO = 0.23`（実測のリガチャー帯
+    ≈18mm / heel 79mm、テナー 1 本由来）から作った**公称値**であって壁ではない。
+    以前はここで帯を座へ丸め込んでいたので、幅を上げても z 範囲が動かず、
+    **STL がビット一致して 3D が更新されなかった**（素のアルトは 16.5mm 以降が
+    全部同じ形。閾値は参照マウスピースの `heel_z × 0.23` なので機体ごとに動く）。
+    「典型的なリガチャーの幅」で座を定義しておいて、その座より広いリガチャーを
+    禁じる ——**定義が循環していた**。
+
+    `seat_offset` は後端に当たると飽和する（既定 3 サイズとも可動域 0〜15 のうち
+    生きているのは 0〜0.17mm）。これは物理の壁なので消せない。**黙って飲まず、
+    `effective_seat_offset` を適合カードに出す。**
+    """
     seat0, seat1 = profiles.ligature_seat_range(ref_p)
-    z0 = seat0 + lig_p["seat_offset"]
-    z1 = z0 + lig_p["band_width"]
-    if z1 > seat1:  # 座からはみ出さないよう後端で止める
-        z1 = seat1
-        z0 = max(seat0, z1 - lig_p["band_width"])
-    return z0, z1
+    z1 = min(seat0 + lig_p["seat_offset"] + lig_p["band_width"], seat1)
+    return z1 - lig_p["band_width"], z1
+
+
+def effective_seat_offset(ref_p: dict, lig_p: dict) -> float:
+    """座の前端から帯の前端までの**実際の**距離 [mm]。
+
+    要求どおりなら `seat_offset` と一致する。後端で止まっているぶんだけ小さくなる。
+    """
+    seat0, _ = profiles.ligature_seat_range(ref_p)
+    return seat_range(ref_p, lig_p)[0] - seat0
 
 
 # ---------------------------------------------------------------- リード側の接触

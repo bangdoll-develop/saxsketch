@@ -2327,6 +2327,96 @@ def test_ligature_contact_none_is_the_old_shape():
             assert lp.tab_floor_y(m, q, r, 50.0) == lp.tab_floor_y(m, p, r, 50.0)
 
 
+def test_ligature_band_width_always_changes_the_shape():
+    """バンド幅を動かすと**必ず**形が変わること（黙ったクランプの再発防止）。
+
+    以前は `seat_range` が帯を「リガチャー座」へ丸め込んでいたので、座より広い
+    幅では z 範囲が動かず、STL がビット一致して 3D が更新されなかった
+    （素のアルトは 16.5mm 以降が全部同じ。閾値は参照マウスピースの
+    `heel_z × 0.23` なので機体ごとに動く）。スライダの可動域 8.0〜28.0 を
+    0.5 刻みで全部踏んで、断面が毎回変わることを見る。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        r = comp.reed_params()
+        seen = {}
+        widths = [8.0 + 0.5 * i for i in range(41)]
+        for bw in widths:
+            p = {**base, "band_width": bw}
+            key = repr(lp.inner_sections(m, p, r))
+            assert key not in seen, f"{tid}: 幅 {bw} と {seen.get(key)} が同じ形"
+            seen[key] = bw
+            z0, z1 = lp.seat_range(m, p)
+            assert z1 - z0 == pytest.approx(bw, abs=1e-12), tid
+        # 上限いっぱいでもタブは収まり、窓にも掛からない（実測: 前端 29.1/42.3/51.0
+        # に対し窓の後端 27.8/35.8/41.9）
+        wide = {**base, "band_width": 28.0}
+        assert lp.flat_half_width(m, wide) >= lp.requested_tab_half_width(m, wide)
+        assert lp.seat_range(m, wide)[0] > profiles.window_end_z(m), tid
+
+
+def test_ligature_band_is_anchored_at_the_max_diameter():
+    """帯の後端が最大径（`heel_z`）に張り付き、前へだけ伸びること。
+
+    後端は物理の壁（そこから先は胴が細くなるので頂点を跨いだ帯は掴めない）。
+    前端は丸めない —— 座の長さ 0.23·heel_z は「典型的なリガチャー幅」から作った
+    公称値であって壁ではない。既定 3 サイズの装着位置は**この直しの前と一致する**
+    （実装時に 15 桁まで確認済み）。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    recorded = {"soprano": (44.102722, 57.102722), "alto": (54.298507, 70.298507),
+                "tenor": (61.016681, 79.016681)}
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        z0, z1 = lp.seat_range(m, base)
+        assert (z0, z1) == pytest.approx(recorded[tid], abs=5e-6), tid
+        seat0, seat1 = profiles.ligature_seat_range(m)
+        assert seat1 == profiles.heel_z(m)          # 座の後端 ＝ 最大径
+        for bw in (8.0, 16.0, 28.0):
+            a, b = lp.seat_range(m, {**base, "band_width": bw})
+            # 後端は「要求どおりの位置」か「最大径」のどちらか。ビット一致で見る
+            assert b == min(seat0 + base["seat_offset"] + bw, seat1)
+            assert a == b - bw                      # 前だけ伸びる（丸めない）
+        # 座より広い幅では後端が最大径に張り付き、そこから動かない
+        for bw in (16.0, 20.0, 28.0):
+            assert lp.seat_range(m, {**base, "band_width": bw})[1] == seat1, tid
+        # オフセットを詰めれば前端は座の前端まで戻せる（前クランプが無いこと）
+        near = lp.seat_range(m, {**base, "seat_offset": 0.0, "band_width": 8.0})
+        assert near[0] == pytest.approx(profiles.ligature_seat_range(m)[0], abs=1e-9)
+
+
+def test_ligature_reports_the_effective_seat_offset(alto_ligature):
+    """後端で飽和した座位置オフセットを、黙って飲まずカードに出すこと。
+
+    既定は 3 サイズとも要求 3.0〜4.5 に対し実効 0.13〜0.17mm ＝ 可動域 0〜15 の
+    1% しか生きていない。後端の壁は物理なので消せないが、**報告はできる**。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    comp, p = alto_ligature
+    m = comp.ref_params()
+    assert lp.effective_seat_offset(m, p) == pytest.approx(0.169, abs=5e-3)
+    card = next(c for c in comp.simulate(p)["cards"]
+                if c["title"] == "マウスピース適合")
+    row = next(r for r in card["rows"] if "座位置オフセット" in r[0])
+    assert "4.0" in row[1] and "0.17" in row[1]
+    assert "実効" in card["advice"]
+    # 要求どおり入る幅なら実効＝要求になり、助言からも消える
+    q = {**p, "band_width": 12.0}
+    assert lp.effective_seat_offset(m, q) == pytest.approx(p["seat_offset"], abs=1e-9)
+    card2 = next(c for c in comp.simulate(q)["cards"]
+                 if c["title"] == "マウスピース適合")
+    assert "実効" not in card2["advice"]
+
+
 def test_ligature_reverse_screw_needs_a_contact(alto_ligature):
     """逆締めが成立しない組を `params_error` が弾くこと（既定は通る）。
 
