@@ -50,7 +50,7 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
     """締結 3 × 当たり方 4 × 数 3 の総当たり ＋ 端値の組。"""
     out: list[tuple[str, dict]] = []
     for closure, kind, n in itertools.product(
-            ("screw_beak", "screw_reed", "elastic"),
+            ("screw_beak", "screw_reed", "elastic", "taper"),
             ("none", "face", "line", "point"), (1, 3, 6)):
         if kind in ("none", "face") and n != 1:
             continue                      # 要素を持たないので数は効かない
@@ -79,6 +79,17 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
                                contact_type="line", contact_count=6)),
         ("オフセット 0", dict(base, seat_offset=specs["seat_offset"].min)),
         ("オフセット 最大", dict(base, seat_offset=specs["seat_offset"].max)),
+        # 4-C.3c: テーパ圧入。輪は `z - press_depth` の胴で引くので、押し込みの
+        # 端値で内周が痩せてもタブ・棚・接触が破綻しないことを見る
+        ("テーパ 押し込み 0", dict(base, closure="taper", press_depth=0.0)),
+        ("テーパ 押し込み 最大", dict(base, closure="taper",
+                                     press_depth=specs["press_depth"].max)),
+        ("テーパ 最大×6点", dict(base, closure="taper",
+                                press_depth=specs["press_depth"].max,
+                                contact_type="point", contact_count=6)),
+        ("テーパ 最大×厚い帯", dict(base, closure="taper",
+                                   press_depth=specs["press_depth"].max,
+                                   band_thickness=specs["band_thickness"].max)),
     ]
     return out + extra
 

@@ -2481,6 +2481,137 @@ def test_ligature_elastic_needs_a_stretchy_material(alto_ligature):
     assert loose["status"] == "warn" and "締め代" in loose["advice"]
 
 
+def test_ligature_taper_zero_press_is_the_plain_ring():
+    """押し込み 0 のテーパ圧入が、ネジなしリング（弾性）と**ビット一致**すること。
+
+    テーパは「`z - press_depth` の胴で引いた輪を `z` に置く」だけなので、
+    押し込み 0 では `ref_z` が恒等になり既存形状を 1 ビットも汚さない。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        r = comp.reed_params()
+        ring = {**base, "closure": "elastic"}
+        taper = {**base, "closure": "taper", "press_depth": 0.0}
+        assert lp.ref_z(taper, 12.5) == 12.5                  # 恒等
+        assert lp.inner_sections(m, ring, r) == lp.inner_sections(m, taper, r), tid
+        assert lp.outer_sections(m, ring, r) == lp.outer_sections(m, taper, r), tid
+        # 押し込むと内周は必ず小さくなる（手前の細い胴で引くので）
+        deep = {**taper, "press_depth": 5.0}
+        assert lp.inner_radius(m, deep) < lp.inner_radius(m, ring)
+
+
+def test_ligature_taper_presses_both_the_cone_and_the_reed():
+    """押し込み量が円錐とリードの締め代を**同じ 1 つのシフト**から出すこと。
+
+    テーブル傾斜 4.18° は円錐 2.5〜2.9° より急なので、当たるのは必ずリードが先
+    （実測: リード 2.05mm に対し円錐 5.03 / 5.32 / 5.65mm）。しきい値で符号が
+    変わり、そこから先は押し込みに比例して増える。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        comp.set_refs({"mouthpiece": {"params": m}})
+        base = {s.key: s.default for s in comp.param_specs()}
+        p = {**base, "closure": "taper"}
+        cone_at, reed_at = lp.press_engagement(m, p)
+        assert reed_at == pytest.approx(2.05, abs=0.02), tid   # 3 サイズ共通
+        assert 5.0 < cone_at < 5.7, tid
+        assert reed_at < cone_at, tid          # リードが先に当たる
+        prev = (-9e9, -9e9)
+        for d in (0.0, 2.0, 4.0, 6.0, 8.0, 10.0):
+            ic, ir = lp.press_interference(m, {**p, "press_depth": d})
+            assert ic > prev[0] and ir > prev[1], tid          # 単調
+            assert (ic > 0.0) == (d > cone_at), (tid, d)       # しきい値で符号
+            assert (ir > 0.0) == (d > reed_at), (tid, d)
+            prev = (ic, ir)
+        # 既定は両方当たっている（テンプレートの press_depth は円錐のしきい値の上）
+        assert min(lp.press_interference(m, p)) > 0.0, tid
+
+
+def test_ligature_taper_allows_rigid_materials(alto_ligature):
+    """テーパ圧入では伸びない樹脂が通り、弾性バンドでは通らないこと。
+
+    掴んでいるのはフープの伸びではなくリングの楕円化なので、`STRETCHY_MATERIALS`
+    の縛りは `elastic` にだけ掛かる。TPU は逆に柔らかすぎて楔が効かない。
+    """
+    from saxsketch.instruments.saxophone.components import ligature as lig_mod
+    comp, p = alto_ligature
+    taper = {**p, "closure": "taper", "material": "pla"}
+    assert comp.params_error(taper) is None
+    cards = {c["title"]: c for c in comp.simulate(taper)["cards"]}
+    assert cards["印刷強度"]["status"] == "ok"
+    assert cards["テーパ圧入"]["status"] == "ok"
+    assert cards["締結"]["big"] == "ネジなし"
+    # 同じ材料でも弾性バンドは伸びないので bad のまま
+    el = {**p, "closure": "elastic", "clearance": -0.3, "material": "pla"}
+    assert next(c for c in comp.simulate(el)["cards"]
+                if c["title"] == "印刷強度")["status"] == "bad"
+    # TPU はテーパ圧入に向かない（弾性率表に載せない ＝ 見積りの対象外）
+    assert "tpu" not in lig_mod.MATERIAL_E_MPA
+    tpu = next(c for c in comp.simulate({**taper, "material": "tpu"})["cards"]
+               if c["title"] == "テーパ圧入")
+    assert tpu["status"] == "warn" and "弾性バンド" in tpu["advice"]
+    # 負の隙間からは押し込めない
+    bad = comp.params_error({**taper, "clearance": -0.2})
+    assert bad and "テーパ圧入" in bad
+    # 部品表に市販ねじが載らない
+    assert not any(r["type"] == "市販品" for r in comp.bom(taper))
+
+
+def test_ligature_taper_warns_when_the_cone_floats(alto_ligature):
+    """リードにだけ当たって円錐が浮く押し込みを、黙って通さないこと。
+
+    既定の隙間 0.25 では円錐は 5.32mm から当たる。その手前ではリングの上が
+    支えられないので首を振る —— 助言は「隙間 ≤ 0.64 × リード逃げ」を出す。
+    """
+    comp, p = alto_ligature
+    taper = {**p, "closure": "taper", "material": "pla"}
+
+    def card(q):
+        return next(c for c in comp.simulate(q)["cards"] if c["title"] == "テーパ圧入")
+
+    loose = card({**taper, "press_depth": 3.0})
+    assert loose["status"] == "warn" and "浮いて" in loose["advice"]
+    assert "0.10" in loose["advice"] or "0.09" in loose["advice"]
+    assert card({**taper, "press_depth": 1.0})["status"] == "bad"   # どこにも当たらない
+    # 隙間を詰めれば同じ押し込みで両方当たる
+    assert card({**taper, "press_depth": 3.0, "clearance": 0.09})["status"] == "ok"
+    # 厚い帯は手で押し込めない（剛性が t³ で効く）
+    hard = card({**taper, "press_depth": 10.0, "band_thickness": 4.0})
+    assert hard["status"] == "warn" and "手で押せる" in hard["advice"]
+
+
+def test_ligature_ring_stiffness_is_the_ovalising_one(alto_ligature):
+    """帯の剛性を**楕円化**で測り、一様内圧のフープで測らないこと。
+
+    リードが下から・胴が上から押す直径方向の 2 点荷重なので、効くのは楕円化
+    （δ = 0.149·P·r³/EI）。フープ（E·t·W/r）で見積もると 68〜76 倍硬く出て、
+    「閉じた剛体リングでは押し込み 2mm に 1.6kN 要る ＝ 成立しない」という
+    誤った結論になる（計画中に実際に踏んだ）。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.instruments.saxophone.components import ligature as lig_mod
+    comp, p = alto_ligature
+    m = comp.ref_params()
+    e = lig_mod.MATERIAL_E_MPA["pla"]
+    q = {**p, "closure": "taper"}
+    k = lp.ring_stiffness(m, q, e)
+    z0, z1 = lp.seat_range(m, q)
+    hoop = e * p["band_thickness"] * (z1 - z0) / lp.inner_radius(m, q)
+    assert k < hoop / 60.0
+    assert k == pytest.approx(119.0, rel=0.05)
+    # 剛性は厚みの 3 乗（曲げ）で効く。断面積の 1 乗（フープ）ではない
+    k2 = lp.ring_stiffness(m, {**q, "band_thickness": 2.0 * p["band_thickness"]}, e)
+    assert k2 / k == pytest.approx(8.0, rel=0.25)
+
+
 def test_ligature_legacy_plate_type_migrates(alto_ligature):
     """旧 `plate_type` が変換され、**変換したことが 1 行返る**こと。
 

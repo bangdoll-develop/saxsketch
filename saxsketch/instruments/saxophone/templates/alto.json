@@ -63,6 +63,7 @@
   "screw_count": 2,
   "screw_size": "m3",
   "boss_height": 6.0,
+  "press_depth": 5.5,
   "slit_width": 3.0,
   "closure": "screw_beak",
   "contact_type": "line",

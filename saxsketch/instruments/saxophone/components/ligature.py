@@ -28,12 +28,19 @@ MATERIAL_LABELS = {
 MIN_BAND_THICKNESS = {"petg": 2.0, "pla": 2.4, "nylon_sls": 1.8, "resin": 2.6,
                       "tpu": 1.2}
 #: 弾性バンド（ネジなし）に使える材料。他はリングが伸びないので掴めない。
+#: **テーパ圧入には掛からない** —— そちらは伸びではなく楔で掴むので剛体でよい。
 STRETCHY_MATERIALS = {"tpu"}
+#: 材料のヤング率 [MPa]。**文献値・代表値**（pla / petg は
+#: `reed_model.MATERIALS` と同じ 3500 / 2000）。テーパ圧入の挟み力の見積りにだけ
+#: 使う。TPU は楔が効かないので見積りの対象外（カードが warn を出す）。
+MATERIAL_E_MPA = {"petg": 2000.0, "pla": 3500.0, "nylon_sls": 1700.0,
+                  "resin": 2400.0}
 
 CLOSURE_LABELS = {
     "screw_beak": "ネジ（ビーク側）",
     "screw_reed": "ネジ（リード側・逆締め）",
     "elastic": "弾性バンド（ネジなし）",
+    "taper": "テーパ圧入（ネジなし）",
 }
 CONTACT_LABELS = {
     "none": "なし（バンド直接）",
@@ -79,6 +86,9 @@ def _specs(t: dict) -> list[ParamSpec]:
                   choices=[Choice(k, v) for k, v in CLOSURE_LABELS.items()],
                   effect="逆締め=ネジがリード側。スリットを橋渡しするプレートが"
                          "リードを押さえる。弾性=ネジなしで伸ばして嵌める"),
+        f("press_depth", "押し込み量", "締結", "mm", 0.0, 10.0, 0.1,
+          "テーパ圧入で、無圧入で載る位置からどれだけ押し込むか。"
+          "円錐とテーブルの両方の締め代がこれで決まる"),
         ParamSpec(key="screw_count", label="ネジ本数", category="締結",
                   type="int", default=t["screw_count"], min=1, max=2, step=1,
                   effect="2本=均等に締まる、1本=部品が単純で軽い"),
@@ -179,6 +189,10 @@ class LigatureComponent(Component):
             bad = lp.bridge_floor_error(p)
             if bad:
                 return bad
+        if closure == "taper" and p["clearance"] < 0.0:
+            return ("テーパ圧入は正のはめあい隙間から始めて押し込みます。"
+                    "隙間を 0 以上にするか、負の隙間で嵌めたいなら締結方式を"
+                    "弾性バンドにしてください。")
         # 接触の逃げ（頂点から床まで）がはめあい隙間より深いと、そのぶん床が
         # 下がってタブの肉が薄くなる。弾性バンド（負の隙間）で効いてくる。
         wall = (p["band_thickness"] + p["clearance"]
@@ -228,7 +242,7 @@ class LigatureComponent(Component):
 
         part = loft_sections(lp.outer_sections(m, p, r)) \
             - loft_sections(lp.inner_sections(m, p, r))
-        if closure == "elastic":
+        if closure in ("elastic", "taper"):
             return part                      # スリットもネジ座も無い一連リング
 
         slit = p["slit_width"]
@@ -281,9 +295,11 @@ class LigatureComponent(Component):
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
-        return {"kind": "ligature", "cards": [
-            self._fit_card(params), self._screw_card(params),
-            self._strength_card(params)]}
+        cards = [self._fit_card(params), self._screw_card(params),
+                 self._strength_card(params)]
+        if str(params.get("closure")) == "taper":
+            cards.insert(1, self._taper_card(params))
+        return {"kind": "ligature", "cards": cards}
 
     def _contact_rows(self, m: dict, p: dict) -> list[list[str]]:
         """接触の実測値（適合カードの後半）。
@@ -370,12 +386,12 @@ class LigatureComponent(Component):
                         "弾性バンドなのにはめあい隙間が正です。伸ばして嵌める"
                         "方式では隙間が締め代になるので、負の値（-0.2〜-0.4mm）に"
                         "してください。")
-        if not elastic and p["clearance"] < 0.0:
+        if not elastic and str(p.get("closure")) != "taper"                 and p["clearance"] < 0.0:
             return card("warn",
                         "剛体バンド（ネジ締め）で隙間が負です。リングは伸びないので"
                         "マウスピースに入りません。隙間を 0 以上にするか、締結方式を"
                         "弾性バンドにしてください。")
-        if not elastic and p["clearance"] < 0.15:
+        if str(p.get("closure")) not in ("elastic", "taper")                 and p["clearance"] < 0.15:
             return card("warn",
                         "はめあい隙間が小さく、印刷公差では入らない可能性が"
                         "あります。0.20〜0.30mm を推奨します。")
@@ -398,17 +414,25 @@ class LigatureComponent(Component):
     def _screw_card(self, params: dict) -> dict:
         p = params
         closure = str(p.get("closure", "screw_beak"))
-        if closure == "elastic":
+        if closure in ("elastic", "taper"):
+            taper = closure == "taper"
             rows = [
                 ["締結方式", CLOSURE_LABELS[closure]],
-                ["締め代（負のはめあい隙間）", f"{-p['clearance']:.2f} mm"],
+                ["締め代",
+                 f"押し込み {p['press_depth']:.1f} mm ぶん" if taper
+                 else f"負のはめあい隙間 {-p['clearance']:.2f} mm"],
                 ["材料", MATERIAL_LABELS.get(p["material"], p["material"])],
                 ["バンド厚", f"{p['band_thickness']:.1f} mm"],
             ]
+            advice = ("スリットもネジも無い一連のリングです。市販ねじは部品表に"
+                      "載りません。")
+            advice += ("胴の円錐に押し込んで楔で止めます。掴んでいるのは伸びでは"
+                       "なくリングの楕円化（直径方向のたわみ）なので、伸びない"
+                       "樹脂でも成立します。詳細はテーパ圧入のカードへ。" if taper
+                       else "伸ばして嵌めるので、締め代（負の隙間）と材料の伸びが"
+                            "締結の実体になります。")
             return {"title": "締結", "big": "ネジなし", "status": "ok", "rows": rows,
-                    "advice": "スリットもネジも無い一連のリングです。伸ばして嵌める"
-                              "ので、締め代（負の隙間）と材料の伸びが締結の実体に"
-                              "なります。市販ねじは部品表に載りません。"}
+                    "advice": advice}
 
         nominal, hole_d, head_d = lp.screw_spec(p)
         need = lp.required_screw_length(p)
@@ -447,6 +471,109 @@ class LigatureComponent(Component):
                        "なので、当たり方を「なし」にはできません）。")
         return {"title": "締結", "big": big, "status": "ok", "rows": rows,
                 "advice": advice}
+
+    #: 樹脂どうしの摩擦係数の**仮定**。楔の比（保持力÷挿入力）はこれと楔角だけで
+    #: 決まり、寸法にも材料にも依らない。決着させるのは実測。
+    ASSUMED_MU = 0.30
+    #: 半径の印刷公差の**仮定** [mm]。`clearance` の推奨 0.20〜0.30mm が
+    #: 「印刷公差を見込む」ぶんなので、その半分を片側公差として置いた。
+    PRINT_TOL_MM = 0.10
+    #: 手で押し込める軸力の目安 [N]（**仮定**）。超えると治具か万力が要る。
+    HAND_PRESS_N = 150.0
+
+    def _taper_card(self, params: dict) -> dict:
+        """テーパ圧入の楔と挟み力（`closure == "taper"` のときだけ出す）。
+
+        **荷重の型はフープではない。** リードが下から・胴が上から押す直径方向の
+        2 点なので、効くのはリングの楕円化。一様内圧のフープ剛性で見積もると
+        68〜76 倍硬く出て「閉じた剛体リングは成立しない」という誤った結論になる
+        （計画中に実際に踏んだ）。
+        """
+        import math
+
+        m = self.ref_params()
+        p = params
+        if not m:
+            return {"title": "テーパ圧入", "big": None, "status": "warn",
+                    "rows": [], "advice": "参照マウスピースが未設定です。"}
+        cs, ts = lp.cone_slope(m, p), lp.table_slope(m)
+        cone_at, reed_at = lp.press_engagement(m, p)
+        ir_cone, ir_reed = lp.press_interference(m, p)
+        mat = p.get("material", "petg")
+        e = MATERIAL_E_MPA.get(mat)
+        rows = [
+            ["楔半角（円錐 / テーブル）",
+             f"{math.degrees(math.atan(cs)):.2f}° / {math.degrees(math.atan(ts)):.2f}°"],
+            ["押し込み量", f"{p['press_depth']:.1f} mm"],
+            ["円錐側の締め代", f"{ir_cone:+.3f} mm（当たり始め {cone_at:.2f} mm）"],
+            ["リード側の締め代", f"{ir_reed:+.3f} mm（当たり始め {reed_at:.2f} mm）"],
+        ]
+        force = stress = axial = None
+        if e is not None:
+            k = lp.ring_stiffness(m, p, e)
+            force = k * max(ir_reed, 0.0)
+            z0, z1 = lp.seat_range(m, p)
+            t = p["band_thickness"]
+            second = (z1 - z0) * t ** 3 / 12.0
+            r = lp.inner_radius(m, p) + t / 2.0
+            stress = (force * r / 2.0) * (t / 2.0) / second
+            # 直径方向の荷重 `force` は上（円錐）と下（リード）に同じ大きさで
+            # 立つので、軸方向の摩擦は 2 か所ぶん。楔は両方の傾きが足し算になる。
+            grip = 2.0 * self.ASSUMED_MU
+            wedge = cs + ts
+            axial = force * (grip + wedge)
+            rows += [
+                ["リングの楕円化剛性",
+                 f"{k:.0f} N/mm（{MATERIAL_LABELS.get(mat, mat)}・E {e:.0f} MPa）"],
+                ["挟み力（リードを押す力）", f"{force:.0f} N"],
+                ["帯の曲げ応力", f"{stress:.1f} MPa"],
+                ["リードが滑り出す軸力",
+                 f"{force * self.ASSUMED_MU:.0f} N（μ={self.ASSUMED_MU} の仮定）"],
+                ["押し込む / 抜く軸力（概算）",
+                 f"{axial:.0f} / {force * (grip - wedge):.0f} N"
+                 f"（保持 ÷ 挿入 = {grip / (grip + wedge):.2f}。"
+                 f"比は μ と楔角だけで決まり寸法にも材料にも依らない）"],
+                ["印刷公差 ±%.2fmm の影響" % self.PRINT_TOL_MM,
+                 f"停止位置 ±{self.PRINT_TOL_MM / cs:.2f} mm ＝ "
+                 f"挟み力 ±{k * self.PRINT_TOL_MM:.0f} N"],
+            ]
+
+        def card(status, advice):
+            return {"title": "テーパ圧入",
+                    "big": None if force is None else f"{force:.0f}N",
+                    "status": status, "rows": rows, "advice": advice}
+
+        if ir_reed <= 0.0 and ir_cone <= 0.0:
+            return card("bad",
+                        f"押し込み {p['press_depth']:.1f}mm ではどこにも当たりません"
+                        f"（リードは {reed_at:.2f}mm、円錐は {cone_at:.2f}mm から）。"
+                        f"リングはすべり嵌めのまま抜け落ちます。")
+        if ir_cone <= 0.0:
+            return card("warn",
+                        f"リードには当たっていますが円錐が {-ir_cone:.3f}mm 浮いて"
+                        f"います。リングの上が支えられないので首を振ります。"
+                        f"押し込みを {cone_at:.2f}mm 以上にするか、はめあい隙間を "
+                        f"{cs / ts * p['reed_clearance']:.2f}mm 以下にして"
+                        f"（テーブル 4.18° は円錐 "
+                        f"{math.degrees(math.atan(cs)):.2f}° より急なので、"
+                        f"隙間 ≤ {cs / ts:.2f}×リード逃げ で同時に当たります）"
+                        f"ください。")
+        if axial is not None and axial > self.HAND_PRESS_N:
+            return card("warn",
+                        f"押し込みに {axial:.0f}N 要ります（手で押せる目安 "
+                        f"{self.HAND_PRESS_N:.0f}N）。押し込み量を減らすか、"
+                        f"バンド厚を薄くしてリングを柔らかくしてください。")
+        if e is None:
+            return card("warn",
+                        f"{MATERIAL_LABELS.get(mat, mat)} は楔で掴む方式に向きません"
+                        f"（柔らかすぎて締め代が力にならない）。伸ばして嵌めたい"
+                        f"なら締結方式を弾性バンドにしてください。")
+        return card("ok",
+                    f"円錐とリードの両方に当たっています。掴んでいるのはフープの"
+                    f"伸びではなく**リングの楕円化**（直径方向のたわみ）なので、"
+                    f"伸びない樹脂でも成立します。挟み力・応力はリングだけの"
+                    f"見積りで、実物はリード背面が潰れるぶん柔らかい ＝ "
+                    f"**硬め側に外れます**。決着させるのは印刷して押し込むこと。")
 
     def _strength_card(self, params: dict) -> dict:
         p = params
@@ -511,6 +638,12 @@ class LigatureComponent(Component):
             rows.append({"type": "備考", "name": "橋（圧力プレート）", "qty": 1,
                          "material": "本体と一体",
                          "note": f"厚み {lp.bridge_thickness(p):.1f}mm・片持ち"})
+        if str(p.get("closure")) == "taper" and m:
+            ic, ir = lp.press_interference(m, p)
+            rows.append({"type": "備考", "name": "テーパ圧入", "qty": 1,
+                         "material": "-",
+                         "note": f"押し込み {p['press_depth']:.1f}mm（締め代 "
+                                 f"円錐 {ic:+.3f} / リード {ir:+.3f} mm）"})
         return rows
 
     def _section_svg(self, m: dict, params: dict) -> str:
@@ -557,6 +690,14 @@ class LigatureComponent(Component):
             dims.append(("橋の厚み / 残る床",
                          f"{lp.bridge_thickness(p):.1f} / "
                          f"{lp.bridge_residual_floor(p):.2f} mm"))
+        if str(p.get("closure")) == "taper" and m:
+            ic, ir = lp.press_interference(m, p)
+            ca, ra = lp.press_engagement(m, p)
+            dims += [
+                ("押し込み量", f"{p['press_depth']:.1f} mm"),
+                ("締め代（円錐 / リード）", f"{ic:+.3f} / {ir:+.3f} mm"),
+                ("当たり始め（円錐 / リード）", f"{ca:.2f} / {ra:.2f} mm"),
+            ]
         extras: dict = {"dimensions": dims}
         if m:
             z0, z1 = lp.seat_range(m, p)

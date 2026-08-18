@@ -81,6 +81,67 @@ def effective_seat_offset(ref_p: dict, lig_p: dict) -> float:
     return seat_range(ref_p, lig_p)[0] - seat0
 
 
+# ---------------------------------------------------------------- テーパ圧入
+
+def press_depth(lig_p: dict) -> float:
+    """公称の押し込み量 [mm]。テーパ圧入以外では 0。"""
+    if str(lig_p.get("closure")) != "taper":
+        return 0.0
+    return float(lig_p.get("press_depth", 0.0))
+
+
+def ref_z(lig_p: dict, z: float) -> float:
+    """マウスピース側を読む z。**テーパ圧入では押し込みぶん手前を読む。**
+
+    押し込みとは「手前で作った輪を後ろへ押し込むこと」そのものなので、輪の形は
+    `z - press_depth` の胴で決まり、置く場所は `z` になる。円錐（`outer_radius`）と
+    テーブル（`table_plane_y`）が**同じ 1 つのシフトで動く**ので、締め代が 2 か所に
+    分裂しない。`press_depth = 0` では恒等 ＝ ネジなしリングとビット一致。
+
+    断面を取る z（＝装着位置）はシフトしない。点接触の行の位置も同じ。
+    """
+    return z - press_depth(lig_p)
+
+
+def cone_slope(ref_p: dict, lig_p: dict) -> float:
+    """帯の範囲での胴の母線の傾き dR/dz。楔の半角は atan でこれから出る。
+
+    座の母線は**ほぼ完全な円錐**（帯の中の局所傾きの振れは実測 ±0.03°）なので、
+    2 点で代表してよい。実測: 0.0497 / 0.0470 / 0.0443（半角 2.85 / 2.69 / 2.53°）。
+    """
+    z0, z1 = seat_range(ref_p, lig_p)
+    if z1 - z0 <= 0.0:
+        return 0.0
+    return (profiles.outer_radius(ref_p, z1)
+            - profiles.outer_radius(ref_p, z0)) / (z1 - z0)
+
+
+def table_slope(ref_p: dict) -> float:
+    """テーブル傾斜の tan。実測 0.0731（4.18°）で 3 サイズ共通。"""
+    return math.tan(profiles.table_angle(ref_p))
+
+
+def press_engagement(ref_p: dict, lig_p: dict) -> tuple[float, float]:
+    """(円錐が当たり始める押し込み, リードが当たり始める押し込み) [mm]。
+
+    **テーブル 4.18° は円錐 2.5〜2.9° より急なので、既定値ではリードが先に当たる**
+    （実測: リード 2.05mm に対し円錐 5.03 / 5.32 / 5.65mm）。その間の押し込みでは
+    リングがリードだけに乗って上が浮く ＝ 掴まない。カードで警告する量であって、
+    黙って直す量ではない。
+    """
+    cs, ts = cone_slope(ref_p, lig_p), table_slope(ref_p)
+    cone = lig_p["clearance"] / cs if cs > 0.0 else float("inf")
+    reed = lig_p["reed_clearance"] / ts if ts > 0.0 else float("inf")
+    return cone, reed
+
+
+def press_interference(ref_p: dict, lig_p: dict) -> tuple[float, float]:
+    """(円錐側, リード側) の締め代 [mm]。負は「まだ当たっていない」。"""
+    d = press_depth(lig_p)
+    return (d * cone_slope(ref_p, lig_p) - lig_p["clearance"],
+            d * table_slope(ref_p) - lig_p["reed_clearance"])
+
+
 # ---------------------------------------------------------------- リード側の接触
 
 #: 接触要素を置ける半幅の比（タブ半幅に対して）。旧「全面プレート」と同じ。
@@ -118,8 +179,8 @@ def contact_top_y(ref_p: dict, lig_p: dict, reed_p: dict,
     頂点は上がる —— これが「全 x で締め代を `reed_clearance` に揃える」の実体。
     """
     xc = min(abs(x), reed_p["heel_width"] / 2.0)
-    return (profiles.table_plane_y(ref_p, z) - rp.cane_top(reed_p, xc)
-            - lig_p["reed_clearance"])
+    return (profiles.table_plane_y(ref_p, ref_z(lig_p, z))
+            - rp.cane_top(reed_p, xc) - lig_p["reed_clearance"])
 
 
 def reed_face_y(ref_p: dict, lig_p: dict, reed_p: dict, z: float) -> float:
@@ -132,7 +193,7 @@ def reed_face_y(ref_p: dict, lig_p: dict, reed_p: dict, z: float) -> float:
     （アルトで 7e-16）。床は接触を入れる前と 1 ビットも変わってはいけないので、
     ここは中央厚を直接引く。
     """
-    return (profiles.table_plane_y(ref_p, z)
+    return (profiles.table_plane_y(ref_p, ref_z(lig_p, z))
             - reed_p["heel_thickness"] - lig_p["reed_clearance"])
 
 
@@ -397,11 +458,12 @@ def inner_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     hw_mid = flat_half_width(ref_p, lig_p)
     out = []
     for z in section_zs(ref_p, lig_p):
-        radius = profiles.outer_radius(ref_p, z) + offset
+        zr = ref_z(lig_p, z)
+        radius = profiles.outer_radius(ref_p, zr) + offset
         hw = _tab_hw(ref_p, lig_p, radius, offset)
         out.append({"z": z,
                     "pts": _wrap_section(
-                        radius, profiles.table_plane_y(ref_p, z), hw,
+                        radius, profiles.table_plane_y(ref_p, zr), hw,
                         tab_bottom_pts(ref_p, lig_p, reed_p, hw, z, hw_mid))})
     return out
 
@@ -412,11 +474,12 @@ def outer_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     z0, z1 = seat_range(ref_p, lig_p)
     out = []
     for z in (z0, (z0 + z1) / 2.0, z1):
-        radius = profiles.outer_radius(ref_p, z) + offset
+        zr = ref_z(lig_p, z)
+        radius = profiles.outer_radius(ref_p, zr) + offset
         hw = _tab_hw(ref_p, lig_p, radius, offset)
         y = reed_face_y(ref_p, lig_p, reed_p, z) - offset
         out.append({"z": z,
-                    "pts": _wrap_section(radius, profiles.table_plane_y(ref_p, z),
+                    "pts": _wrap_section(radius, profiles.table_plane_y(ref_p, zr),
                                          hw, [(-hw, y), (hw, y)])})
     return out
 
@@ -431,7 +494,8 @@ def bridge_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     hw_mid = flat_half_width(ref_p, lig_p)
     out = []
     for z in section_zs(ref_p, lig_p):
-        radius = profiles.outer_radius(ref_p, z) + offset
+        zr = ref_z(lig_p, z)
+        radius = profiles.outer_radius(ref_p, zr) + offset
         hw = min(_tab_hw(ref_p, lig_p, radius, offset), hw_mid)
         floor = tab_floor_y(ref_p, lig_p, reed_p, z)
         top = ([(-hw, floor)]
@@ -445,7 +509,8 @@ def bridge_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
 def inner_radius(ref_p: dict, lig_p: dict) -> float:
     """帯中央での内周半径（適合チェック・仕様書用）。"""
     z0, z1 = seat_range(ref_p, lig_p)
-    return profiles.outer_radius(ref_p, (z0 + z1) / 2.0) + lig_p["clearance"]
+    return (profiles.outer_radius(ref_p, ref_z(lig_p, (z0 + z1) / 2.0))
+            + lig_p["clearance"])
 
 
 def requested_tab_half_width(ref_p: dict, lig_p: dict) -> float:
@@ -473,8 +538,31 @@ SCREW_SPECS = {          # (呼び径 mm, バカ穴径 mm, 頭部径 mm)
 STOCK_SCREW_LENGTHS = [6, 8, 10, 12, 16, 20]
 
 
+#: 直径 2 点荷重のリングのたわみ係数（δ = C·P·r³/EI, C = π/4 − 2/π）。
+_OVAL_C = 0.149
+
+
+def ring_stiffness(ref_p: dict, lig_p: dict, e_mpa: float) -> float:
+    """帯を**直径方向**に潰すのに要る剛性 [N/mm]。
+
+    **荷重の型はフープ（一様内圧）ではない。** リードが下から、胴が上から押す
+    2 点なので、効くのはリングの楕円化 δ = 0.149·P·r³/(EI)。実測すると
+    一様内圧のフープ剛性の **1/68〜1/76**（PLA で 109.5 / 113.5 / 136.6 N/mm 対
+    7400 / 8603 / 9897）。閉じた一体リングのテーパ圧入が成立するのはこのため
+    —— フープで見積もると「押し込み 2mm に 1.6kN」という誤った結論になる。
+
+    帯にはリードのタブが下側に付いていて実際はもう少し硬いので、これは
+    **柔らかめ側の見積り**。決着させるのは実際に印刷して押し込むこと。
+    """
+    z0, z1 = seat_range(ref_p, lig_p)
+    t = lig_p["band_thickness"]
+    r = inner_radius(ref_p, lig_p) + t / 2.0        # 中立面の半径
+    second_moment = (z1 - z0) * t ** 3 / 12.0
+    return e_mpa * second_moment / (_OVAL_C * r ** 3)
+
+
 def has_screws(lig_p: dict) -> bool:
-    return str(lig_p.get("closure", "screw_beak")) != "elastic"
+    return str(lig_p.get("closure", "screw_beak")) not in ("elastic", "taper")
 
 
 def screw_spec(lig_p: dict) -> tuple[float, float, float]:
@@ -580,6 +668,7 @@ def param_regions(ref_p: dict, lig_p: dict) -> dict:
         "contact_type": reed_side,
         "contact_count": reed_side,
         "min_wall": band,
+        "press_depth": band,
         # material は形状に影響しない → 領域なし
     }
 
