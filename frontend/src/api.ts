@@ -98,6 +98,10 @@ export interface ExternalLoad {
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
   dims: [string, string][];
+  /** 参照の形をそのまま重ねられるか（座標系が一致するコンポーネントだけ true） */
+  overlay: boolean;
+  /** 参照の同一性。重ね表示のURLの `?v=`（サーバのキャッシュ鍵と同じ値） */
+  hash: string | null;
 }
 export interface InstrumentSummary {
   id: string; label: string;

@@ -123,6 +123,10 @@ class LigatureComponent(Component):
     id = "ligature"
     label = "リガチャー"
     REQUIRES_REF = "mouthpiece"
+    #: 断面はマウスピースの z でそのまま張られている（`lp.outer_sections` /
+    #: `inner_sections` が z ごとに `profiles.outer_radius` と `table_plane_y` を
+    #: 引く。`build()` に平行移動も回転も無い）ので、参照の形をそのまま重ねられる。
+    REF_SHARES_FRAME = True
 
     def __init__(self, descriptor: dict, template: dict):
         super().__init__(descriptor, template)

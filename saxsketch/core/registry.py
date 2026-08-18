@@ -28,6 +28,12 @@ class Component(ABC):
     #: 従属先コンポーネントのID。設定するとプロジェクトが参照スナップショットを持つ
     #: （例: リード/リガチャー → "mouthpiece"）。None なら参照不要。
     REQUIRES_REF: str | None = None
+    #: 参照コンポーネントと**同じ座標系**で作られているか。True のとき UI は
+    #: 参照の形をそのまま重ねられる（変換が要らない）。
+    #:
+    #: 既定を False にしてあるのは、**間違って重なるより重ならない方が安全**だから。
+    #: 座標系が一致するかはコンポーネント自身にしか分からない（コアは楽器を知らない）。
+    REF_SHARES_FRAME: bool = False
 
     def __init__(self, descriptor: dict, template: dict):
         self.descriptor = descriptor

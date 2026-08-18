@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import os
-import tempfile
 import threading
 from pathlib import Path
 
@@ -93,6 +92,9 @@ class AppState:
         self.paramset: ParamSet | None = None
         self.build_lock = threading.Lock()
         self._stl_cache: dict[str, bytes] = {}
+        # 参照コンポーネントの STL（重ね表示）。鍵は `ref_hash()` なので
+        # パラメータを動かしても消えない（参照が変わったときだけ作り直す）。
+        self._ref_stl_cache: dict[str, bytes] = {}
         self._sim_cache: dict[str, dict] = {}
         self._imp_cache: dict[str, dict] = {}
         self._wav_cache: dict[str, tuple] = {}
@@ -271,6 +273,11 @@ class AppState:
             "label": entry.get("label", "-"),
             "source": entry.get("source"),
             "dims": [list(d) for d in self.component.ref_dimensions()],
+            # 参照の形をそのまま重ねられるか（`Component.REF_SHARES_FRAME`）と、
+            # その参照の同一性。フロントはこの 2 つだけでトグルと URL を決める
+            # ——「リガチャーだけ」という楽器固有の知識を UI に置かないため。
+            "overlay": bool(getattr(self.component, "REF_SHARES_FRAME", False)),
+            "hash": self.ref_hash(),
         }
 
     def apply_params(self, values: dict) -> dict:
@@ -304,6 +311,7 @@ class AppState:
 
     def _clear_caches(self) -> None:
         self._stl_cache.clear()
+        self._ref_stl_cache.clear()
         self._sim_cache.clear()
         self._imp_cache.clear()
         self._wav_cache.clear()
@@ -334,25 +342,29 @@ class AppState:
             "cad": cad,
         }
 
-    def get_stl_bytes(self, tolerance: float = 0.03) -> bytes:
-        """プレビュー/エクスポート用の STL。
+    def _build_stl(self, spec: dict) -> bytes:
+        """スペック 1 つを STL バイト列にする。**ビルドの入口はここだけ。**
 
         ビルド自体は**別プロセス**へ出す。OCCT が GIL を離さないので、親で回すと
         再生成中に断面もパラメータ更新も止まる（`buildworker` の注記を参照）。
-        ワーカが使えない環境では親で作る — 遅いだけで結果は同じ。
+        ワーカが使えない環境では親で作る — 遅いだけで結果は同じ
+        （子と同じ `build_from_spec` を通るので、手順が 2 つに割れない）。
         """
+        from saxsketch.server.buildworker import WORKER, build_from_spec
+        if WORKER.alive:
+            with contextlib.suppress(RuntimeError):
+                return WORKER.build_stl(spec)
+        with self.build_lock:
+            return build_from_spec(spec)
+
+    def get_stl_bytes(self, tolerance: float = 0.03) -> bytes:
+        """プレビュー/エクスポート用の STL。"""
         key = self._params_key() + f":{tolerance}"
         cached = self._stl_cache.get(key)
         if cached is not None:
             return cached
 
-        from saxsketch.server.buildworker import WORKER
-        data = None
-        if WORKER.alive:
-            with contextlib.suppress(RuntimeError):
-                data = WORKER.build_stl(self.build_spec(tolerance))
-        if data is None:
-            data = self._stl_bytes_inproc(tolerance)
+        data = self._build_stl(self.build_spec(tolerance))
 
         # キャッシュは直近3件のみ保持
         if len(self._stl_cache) > 3:
@@ -360,13 +372,54 @@ class AppState:
         self._stl_cache[key] = data
         return data
 
-    def _stl_bytes_inproc(self, tolerance: float) -> bytes:
-        from saxsketch.export.models import export_model
-        part = self.build_part()
-        with tempfile.TemporaryDirectory() as td:
-            f = Path(td) / "model.stl"
-            export_model(part, f, "stl", tolerance=tolerance)
-            return f.read_bytes()
+    # ---------------------------------------------------------- 参照の重ね表示
+
+    def ref_hash(self) -> str | None:
+        """参照スナップショットの同一性。参照を持たないコンポーネントでは None。
+
+        **重ね表示の鍵はこれ 1 つ。** サーバのキャッシュ鍵とフロントの `?v=` に
+        同じ値を使う（別々の条件で無効化される状態を作らないため）。
+        """
+        ref_id = getattr(self.component, "REQUIRES_REF", None)
+        entry = self.project.refs.get(ref_id or "") if self.project else None
+        if not ref_id or not entry:
+            return None
+        payload = json.dumps(
+            {"i": self.project.instrument_id, "t": self.project.template_id,
+             "c": ref_id, "p": entry.get("params", {})},
+            sort_keys=True, default=str)
+        return hashlib.md5(payload.encode()).hexdigest()[:12]
+
+    def ref_stl_bytes(self, tolerance: float = 0.05) -> bytes:
+        """参照コンポーネントだけを作った STL（重ね表示用）。
+
+        **常にプレビュー品質**。重ねは目で位置関係を見るためのもので、
+        寸法を測る用途には出さない（測るのは判定カードの数字）。
+
+        マウスピースのビルドはリガチャーの 4.4 倍（5.6〜6.2 秒 対 1.3 秒）かかる。
+        参照が変わったときだけ作れば済むので、鍵は `ref_hash()`
+        —— スライダーを動かしても変わらない。
+        """
+        assert self.project is not None and self.component is not None
+        ref_id = getattr(self.component, "REQUIRES_REF", None)
+        entry = self.project.refs.get(ref_id or "", {})
+        if not ref_id or not entry.get("params"):
+            raise ValueError("参照コンポーネントがありません")
+
+        key = f"{self.ref_hash()}:{tolerance}"
+        cached = self._ref_stl_cache.get(key)
+        if cached is not None:
+            return cached
+
+        # 参照そのものを作るスペック。参照（マウスピース）は自分の参照を持たない。
+        # `template_id` は据え置き —— `set_reference` が楽器・サイズ違いを弾いて
+        # いるので、参照は必ず同じテンプレート。
+        spec = self.build_spec(tolerance)
+        spec.update(component_id=ref_id, params=dict(entry["params"]), refs={})
+        data = self._build_stl(spec)
+        self._ref_stl_cache.clear()      # 参照は 1 つしか要らない
+        self._ref_stl_cache[key] = data
+        return data
 
     def simulate(self) -> dict:
         """シミュレーション結果。同じパラメータなら作り直さない。

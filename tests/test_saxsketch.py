@@ -3702,6 +3702,119 @@ def test_reference_endpoint(tmp_path):
                         "path": str(bad)}).status_code == 400
 
 
+def test_ref_overlay_is_declared_by_the_component():
+    """重ねられるかは**コンポーネントが宣言する**こと（UI に楽器固有の知識を置かない）。
+
+    リガチャーの断面はマウスピースの z でそのまま張られているので重ねられる。
+    リードは参照を持つが**自分の座標系**（テーブル面が y=0・先端が z=0）なので
+    重ねられない —— 参照の有無ではなく座標系で分かれる、が要点。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    def new(component_id):
+        return c.post("/api/project/new",
+                      json={"instrument_id": "saxophone", "template_id": "alto",
+                            "component_id": component_id}).json()
+
+    assert new("mouthpiece")["reference"] is None      # 参照を持たない
+    assert new("reed")["reference"]["overlay"] is False
+    ref = new("ligature")["reference"]
+    assert ref["overlay"] is True
+    assert isinstance(ref["hash"], str) and len(ref["hash"]) == 12
+
+
+def test_ref_model_is_404_without_a_shared_frame():
+    """座標系が一致しないコンポーネントでは参照モデルを出さないこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    for component_id in ("mouthpiece", "reed"):
+        c.post("/api/project/new",
+               json={"instrument_id": "saxophone", "template_id": "alto",
+                     "component_id": component_id})
+        assert c.get("/api/ref/model.stl").status_code == 404
+
+
+def test_ref_model_is_the_reference_mouthpiece(tmp_path):
+    """`/api/ref/model.stl` が**マウスピース**を返すこと（リガチャーではない）。
+
+    どちらも「それらしい」STL なので、取り違えは目では気づけない。量で切り分ける
+    —— マウスピースは全長 91.7mm・半径 14.55mm、リガチャーの帯は 16mm 幅。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.analysis import meshdiff
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    r = c.get("/api/ref/model.stl")
+    assert r.status_code == 200
+    f = tmp_path / "ref.stl"
+    f.write_bytes(r.content)
+    lo, hi = meshdiff.load_mesh(str(f)).bounds
+
+    m = _template_params("mouthpiece", "alto")
+    assert hi[2] - lo[2] == pytest.approx(m["overall_length"], abs=0.2)
+    assert hi[0] == pytest.approx(m["body_dia"] / 2.0, abs=0.2)
+    # リガチャーの帯（16mm）を返していないこと
+    assert hi[2] - lo[2] > 4.0 * STATE.paramset.values["band_width"]
+
+
+def test_ref_model_is_cached_by_the_reference(tmp_path, monkeypatch):
+    """参照 STL は**参照が変わったときだけ**作ること。
+
+    マウスピースのビルドは 5.7 秒（リガチャー本体の 4.4 倍）。スライダーを
+    動かすたびに作り直すと、ワーカが 1 本しか無いので本体の再生成まで待たされる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE, AppState
+    c = TestClient(app)
+
+    built = []
+    original = AppState._build_stl
+
+    def counting(self, spec):
+        built.append(spec["component_id"])
+        return original(self, spec)
+
+    monkeypatch.setattr(AppState, "_build_stl", counting)
+
+    # 差し替え用に body_dia だけ違うアルトのマウスピース
+    wide = tmp_path / "wide.wproj"
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 30.0}})
+    c.post("/api/project/save", json={"path": str(wide)})
+
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    before = STATE.ref_hash()
+    built.clear()
+    assert c.get("/api/ref/model.stl").content == c.get("/api/ref/model.stl").content
+    assert built == ["mouthpiece"]                 # 2 回叩いてビルドは 1 回
+
+    # パラメータを動かしても参照は作り直さない（鍵は refs だけで決まる）
+    c.put("/api/project/params", json={"params": {"band_width": 15.5}})
+    assert c.get("/api/ref/model.stl").status_code == 200
+    assert built == ["mouthpiece"]
+
+    # 参照を差し替えたら鍵が変わり、作り直す
+    c.post("/api/project/reference", json={"component": "mouthpiece",
+                                           "path": str(wide)})
+    assert STATE.ref_hash() != before
+    assert c.get("/api/ref/model.stl").status_code == 200
+    assert built == ["mouthpiece", "mouthpiece"]
+
+
 def test_frozen_refs_marks_stale(tmp_path):
     """参照差替えが凍結を陳腐化させ、入稿に古い編集モデルが混ざらないこと。"""
     from fastapi.testclient import TestClient
@@ -4133,7 +4246,7 @@ def test_build_worker_stl_matches_inproc():
     走らないのでワーカは上がらない）と経路が分かれるので、その差が形に出ない
     ことをここで押さえる。ワーカを起動できない環境では skip する。
     """
-    from saxsketch.server.buildworker import WORKER
+    from saxsketch.server.buildworker import WORKER, build_from_spec
     from saxsketch.server.state import STATE
 
     if not WORKER.start():
@@ -4141,7 +4254,7 @@ def test_build_worker_stl_matches_inproc():
     try:
         STATE.new_project("saxophone", "tenor", "mouthpiece", None)
         spec = STATE.build_spec(0.05)
-        assert WORKER.build_stl(spec) == STATE._stl_bytes_inproc(0.05)
+        assert WORKER.build_stl(spec) == build_from_spec(spec)
     finally:
         WORKER.stop()
 

@@ -317,6 +317,30 @@ async def model_stl(quality: str = "preview"):
     return Response(content=data, media_type="application/octet-stream")
 
 
+@app.get("/api/ref/model.stl")
+async def ref_model_stl():
+    """重ね表示用の参照コンポーネント（リガチャー → マウスピース）の STL。
+
+    **参照が無い／座標系が違うコンポーネントでは 404。** フロントは
+    `reference.overlay` を見てトグルを出すので、ここへ来るのは本来その 1 通りだけ。
+
+    品質はプレビュー固定。位置関係を見るための表示で、寸法を測る用途には出さない。
+    URL の `?v=` は**サーバは見ない**（ブラウザのキャッシュ鍵としてだけ付く。
+    実体の鍵は `AppState.ref_hash()`）。
+    """
+    _require_project()
+    if not getattr(STATE.component, "REF_SHARES_FRAME", False):
+        raise HTTPException(status_code=404,
+                            detail="このコンポーネントは参照を重ねて表示できません")
+    try:
+        data = await asyncio.to_thread(STATE.ref_stl_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+    return Response(content=data, media_type="application/octet-stream")
+
+
 @app.get("/api/model/regions")
 def model_regions():
     """各パラメータの影響領域（3Dハイライト用）。現在のパラメータ値で計算。"""

@@ -21,6 +21,9 @@ export default function App() {
   const [sim, setSim] = useState<Simulation | null>(null);
   const [modelVersion, setModelVersion] = useState(0);
   const [modelBusy, setModelBusy] = useState(false);
+  // 参照マウスピースの重ね表示。既定オフ・UI 状態（プロジェクトには保存しない）
+  const [showRef, setShowRef] = useState(false);
+  const [refBusy, setRefBusy] = useState(false);
   const [dialog, setDialog] = useState<DialogKind>("new");
   const [error, setError] = useState("");
   const [regions, setRegions] = useState<Record<string, Region>>({});
@@ -52,6 +55,9 @@ export default function App() {
     api.getProject().then((p) => {
       setProject(p); setParams(p.params); setSim(p.simulation);
       setManualEdit(p.manual_edit);
+      // 変換報告はサーバ側に残っている（利用者が値を触るまで消えない）。ここで
+      // 拾わないと、旧プロジェクトを開いた後に**再読み込みしただけで報告が消える**。
+      setNotices(p.notices ?? []);
       setModelVersion((v) => v + 1); setDialog(null);
     }).catch(() => {});
   }, []);
@@ -91,6 +97,19 @@ export default function App() {
 
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
+
+  // 重ねられるかはコンポーネントが宣言する（`reference.overlay`）。取込モデルの
+  // 表示中は重ねない —— 外部モデルは別の整列で入っているので基準が違う。
+  const canOverlay = !!project?.reference?.overlay && !viewDerived;
+  const overlaySrc = canOverlay && showRef
+    ? `/api/ref/model.stl?v=${project!.reference!.hash}` : null;
+
+  // 右上のタブは段で重ねる。**段の番号は数えて出す** —— 決め打ちにすると
+  // 段が 3 つになった瞬間に重なる（`.view-tabs` / `.second` / `.third`）。
+  const tabRowClass = (i: number) =>
+    "view-tabs" + (i === 1 ? " second" : i === 2 ? " third" : "");
+  const derivedRow = hasSection ? 1 : 0;
+  const overlayRow = derivedRow + (manualEdit?.derived && viewMode === "3d" ? 1 : 0);
 
   const loadProject = useCallback(async () => {
     const p = await api.getProject();
@@ -267,7 +286,8 @@ export default function App() {
                         srcOverride={viewDerived && manualEdit?.derived
                           ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
                           : null}
-                        onBusy={setModelBusy} />
+                        overlaySrc={overlaySrc}
+                        onBusy={setModelBusy} onOverlayBusy={setRefBusy} />
             </div>
           )}
           {project && viewMode === "section" && (
@@ -283,7 +303,8 @@ export default function App() {
                         ? "外部取込モデル（整列後の形状）"
                         : "外部編集済みモデル（凍結時の形状ベース）")
                     : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
-                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "")
+                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "") +
+                (refBusy && viewMode === "3d" ? "　⏳ 参照を生成中…" : "")
               : "プロジェクトを作成してください"}
           </div>
           {project && hasSection && (
@@ -295,13 +316,22 @@ export default function App() {
             </div>
           )}
           {manualEdit?.derived && viewMode === "3d" && (
-            <div className={"view-tabs" + (hasSection ? " second" : "")}>
+            <div className={tabRowClass(derivedRow)}>
               <button className={viewDerived ? "" : "active"}
                       onClick={() => setViewDerived(false)}>設計形状</button>
               <button className={viewDerived ? "active" : ""}
                       onClick={() => setViewDerived(true)}>
                 {manualEdit.derived.kind === "external" ? "取込モデル" : "編集済み"}
                 {manualEdit.derived.kind !== "external" && manualEdit.stale ? " ⚠旧" : ""}
+              </button>
+            </div>
+          )}
+          {canOverlay && viewMode === "3d" && (
+            <div className={tabRowClass(overlayRow)}>
+              <button className={showRef ? "active" : ""}
+                      onClick={() => setShowRef((v) => !v)}
+                      title="参照マウスピースを半透明で重ねる">
+                🫥 参照MP
               </button>
             </div>
           )}
