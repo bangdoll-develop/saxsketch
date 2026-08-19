@@ -149,6 +149,9 @@ def project_get():
         "manual_edit": STATE.manual_edit_summary(),
         "reference": STATE.reference_summary(),
         "survey": STATE.survey_state(),
+        # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）。
+        # 黙って値が変わらないための経路なので、パラメータを触るまで残る。
+        "notices": STATE.notices,
     }
 
 
@@ -314,11 +317,47 @@ async def model_stl(quality: str = "preview"):
     return Response(content=data, media_type="application/octet-stream")
 
 
+@app.get("/api/ref/model.stl")
+async def ref_model_stl():
+    """重ね表示用の参照コンポーネント（リガチャー → マウスピース）の STL。
+
+    **参照が無い／座標系が違うコンポーネントでは 404。** フロントは
+    `reference.overlay` を見てトグルを出すので、ここへ来るのは本来その 1 通りだけ。
+
+    品質はプレビュー固定。位置関係を見るための表示で、寸法を測る用途には出さない。
+    URL の `?v=` は**サーバは見ない**（ブラウザのキャッシュ鍵としてだけ付く。
+    実体の鍵は `AppState.ref_hash()`）。
+    """
+    _require_project()
+    if not getattr(STATE.component, "REF_SHARES_FRAME", False):
+        raise HTTPException(status_code=404,
+                            detail="このコンポーネントは参照を重ねて表示できません")
+    try:
+        data = await asyncio.to_thread(STATE.ref_stl_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+    return Response(content=data, media_type="application/octet-stream")
+
+
 @app.get("/api/model/regions")
 def model_regions():
     """各パラメータの影響領域（3Dハイライト用）。現在のパラメータ値で計算。"""
     _require_project()
     return STATE.component.regions(dict(STATE.paramset.values))
+
+
+@app.get("/api/dimensions")
+def model_dimensions():
+    """パラメータの寸法（3D の図示用）。**CAD ビルドを伴わない**。
+
+    `/api/model/regions` と同じ形（引数なし・現在値）。断面のドラッグ中に
+    追従させる側は `/api/section` の `dimensions` が運ぶ（定義は同じ 1 か所）。
+    寸法を持たないコンポーネントは `[]`。UI はそれを見てトグルを出さない。
+    """
+    _require_project()
+    return STATE.component.dimensions(dict(STATE.paramset.values))
 
 
 @app.get("/api/section")
@@ -345,6 +384,11 @@ def model_section(request: Request):
     data = STATE.component.section(values)
     if data is None:
         raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
+    # 寸法はここで**ルート側が**足す。断面を持つ部品が増えたときに
+    # `section()` の中へ書き足し忘れる経路を作らないため（定義は `dimensions()`
+    # の 1 か所のまま）。ドラッグ中のクエリ上書きがそのまま効くので、寸法は
+    # 形と同じフレームで動く。
+    data["dimensions"] = STATE.component.dimensions(values)
     return data
 
 

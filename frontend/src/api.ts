@@ -55,6 +55,8 @@ export interface ProjectData {
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
   survey: SurveyState;
+  /** 旧プロジェクトを開いたときのパラメータ変換報告（黙って値を変えないため） */
+  notices?: string[];
 }
 /** 採寸ワークフロー（Phase 4-A） */
 export interface SurveyField {
@@ -96,6 +98,10 @@ export interface ExternalLoad {
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
   dims: [string, string][];
+  /** 参照の形をそのまま重ねられるか（座標系が一致するコンポーネントだけ true） */
+  overlay: boolean;
+  /** 参照の同一性。重ね表示のURLの `?v=`（サーバのキャッシュ鍵と同じ値） */
+  hash: string | null;
 }
 export interface InstrumentSummary {
   id: string; label: string;
@@ -109,12 +115,19 @@ export interface GoalSeekResult {
 export interface Region {
   z0: number; z1: number; side: "top" | "bottom" | "all"; label: string;
 }
+/** ハンドルが主パラメータと一緒に書く従属パラメータ。
+ *  主と**同じ t**（span 上の位置）で線形に決まる。step を持たないのは、
+ *  従属値が主から解いた値だから — 丸めると解が崩れる（サーバ側の注記を参照）。 */
+export interface HandleLinked { key: string; min: number; max: number }
 /** 断面エディタのドラッグハンドル。span はパラメータ min/max に対応する断面座標 */
 export interface SectionHandle {
   key: string; label: string; axis: "z" | "y";
   z: number; y: number;
   value: number; min: number; max: number; span: [number, number];
   unit: string; step: number; active: boolean;
+  /** どのタブで出すか。バッフルは拡大表示、外形は全体表示にしかない */
+  group: "baffle" | "outer";
+  also: HandleLinked[];
 }
 export interface SectionData {
   z_range: [number, number];
@@ -123,7 +136,24 @@ export interface SectionData {
   warnings: string[];
   baffle_type: string;
   title: string;
+  /** 寸法。断面はドラッグ中もこれで追従する（3D は `/api/dimensions`） */
+  dimensions: Dimension[];
 }
+/** パラメータの寸法線 1 本。座標はコンポーネント自身のモデル座標。
+ *  `value` は **|b − a|**（サーバが両端から測る）ので、ラベルの数字と
+ *  引かれる線の長さが食い違わない。`requested` はスライダの公称値で、
+ *  step 1 目盛より大きく食い違うときだけ付く（＝黙ったクランプがそのまま出る）。 */
+export interface Dimension {
+  key: string; label: string; unit: string; value: number;
+  a: [number, number, number]; b: [number, number, number];
+  dir: [number, number, number]; level: number;
+  requested?: number;
+}
+/** x=0 の断面へそのまま写せるか。**宣言ではなく座標から導く**（サーバ側の
+ *  `dimension.in_section_plane` と同じ判定。両方に書くのは判定が 3 行で、
+ *  往復を増やさずに描画側が決められるほうが速いから）。 */
+export const inSectionPlane = (d: Dimension) =>
+  Math.abs(d.a[0]) < 1e-9 && Math.abs(d.b[0]) < 1e-9 && Math.abs(d.dir[0]) < 1e-9;
 export interface ManualEdit {
   frozen: { frozen_at: string; export_dir: string | null;
             solid_volume_cc: number | null } | null;
@@ -219,6 +249,7 @@ export const api = {
   dialog: (mode: DialogMode, suggested = "") =>
     req<DialogResult>("/api/dialog", json({ mode, suggested })),
   regions: () => req<Record<string, Region>>("/api/model/regions"),
+  dimensions: () => req<Dimension[]>("/api/dimensions"),
   /** override を渡すと「もしこの値にしたら」の断面を返す（プロジェクトは変えない）。
    *  画面が持っているパラメータをそのまま渡せば、PUT の完了を待たずに常に
    *  「いま画面で見えている値」の断面が得られる。確定は putParams 経由で行う。 */

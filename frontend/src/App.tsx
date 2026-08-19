@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type ManualEdit, type ProjectData, type Region, type Simulation,
+  api, type Dimension, type ManualEdit, type ProjectData, type Region,
+  type Simulation,
 } from "./api";
 import ParamPanel from "./components/ParamPanel";
 import SectionEditor from "./components/SectionEditor";
@@ -21,6 +22,13 @@ export default function App() {
   const [sim, setSim] = useState<Simulation | null>(null);
   const [modelVersion, setModelVersion] = useState(0);
   const [modelBusy, setModelBusy] = useState(false);
+  // 参照マウスピースの重ね表示。既定オフ・UI 状態（プロジェクトには保存しない）
+  const [showRef, setShowRef] = useState(false);
+  const [refBusy, setRefBusy] = useState(false);
+  // 寸法の図示。既定オフ・UI 状態で、**3D と断面が同じ 1 個を共有する**
+  // （ビューを行き来しても設定が残る）。プロジェクトには保存しない。
+  const [showDims, setShowDims] = useState(false);
+  const [dimensions, setDimensions] = useState<Dimension[]>([]);
   const [dialog, setDialog] = useState<DialogKind>("new");
   const [error, setError] = useState("");
   const [regions, setRegions] = useState<Record<string, Region>>({});
@@ -28,6 +36,8 @@ export default function App() {
   const [manualEdit, setManualEdit] = useState<ManualEdit | null>(null);
   const [viewDerived, setViewDerived] = useState(false);
   const [staleWarn, setStaleWarn] = useState(false);
+  // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
+  const [notices, setNotices] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
   const [hasSection, setHasSection] = useState(false);
   // ドラッグ中の未確定値。断面ハンドルを掴んでいる間だけ非 null になる。
@@ -50,6 +60,9 @@ export default function App() {
     api.getProject().then((p) => {
       setProject(p); setParams(p.params); setSim(p.simulation);
       setManualEdit(p.manual_edit);
+      // 変換報告はサーバ側に残っている（利用者が値を触るまで消えない）。ここで
+      // 拾わないと、旧プロジェクトを開いた後に**再読み込みしただけで報告が消える**。
+      setNotices(p.notices ?? []);
       setModelVersion((v) => v + 1); setDialog(null);
     }).catch(() => {});
   }, []);
@@ -67,9 +80,18 @@ export default function App() {
   }, [staleWarn]);
 
   useEffect(() => {
+    if (notices.length === 0) return;
+    const t = setTimeout(() => setNotices([]), 12000);
+    return () => clearTimeout(t);
+  }, [notices]);
+
+  useEffect(() => {
     // 影響領域は形状パラメータに依存 → モデル更新のたびに再取得
     if (!project) return;
     api.regions().then(setRegions).catch(() => {});
+    // 寸法も同じ周期で取り直す（断面はドラッグ中も追従させたいので、そちらは
+    // `/api/section` の応答に載ってくるぶんを使う。定義はサーバ側で同じ 1 か所）。
+    api.dimensions().then(setDimensions).catch(() => setDimensions([]));
   }, [modelVersion, project]);
 
   useEffect(() => {
@@ -84,10 +106,30 @@ export default function App() {
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
 
+  // 重ねられるかはコンポーネントが宣言する（`reference.overlay`）。取込モデルの
+  // 表示中は重ねない —— 外部モデルは別の整列で入っているので基準が違う。
+  const canOverlay = !!project?.reference?.overlay && !viewDerived;
+  const overlaySrc = canOverlay && showRef
+    ? `/api/ref/model.stl?v=${project!.reference!.hash}` : null;
+
+  // 寸法を持つかもサーバの答えで決める（UI に「どの部品が持つか」を書かない）。
+  // 取込モデルの表示中は出さない —— 外部モデルは別の整列で入っているので、
+  // 設計形状の寸法を重ねる根拠が無い（重ね表示と同じ判断）。
+  const canDims = dimensions.length > 0 && !viewDerived;
+  const shownDims = canDims && showDims ? dimensions : null;
+
+  // 右上のタブは段で重ねる。**段の番号は数えて出す** —— 決め打ちにすると
+  // 段が 3 つになった瞬間に重なる（`.view-tabs` / `.second` / `.third`）。
+  const tabRowClass = (i: number) =>
+    "view-tabs" + (i === 1 ? " second" : i === 2 ? " third" : "");
+  const derivedRow = hasSection ? 1 : 0;
+  const overlayRow = derivedRow + (manualEdit?.derived && viewMode === "3d" ? 1 : 0);
+
   const loadProject = useCallback(async () => {
     const p = await api.getProject();
     setProject(p); setParams(p.params); setSim(p.simulation);
     setManualEdit(p.manual_edit);
+    setNotices(p.notices ?? []);
     setViewDerived(false);
     setModelVersion((v) => v + 1);
     setDialog(null);
@@ -158,6 +200,13 @@ export default function App() {
     pushParams({ [key]: value });
   }, [pushParams]);
 
+  // 複数キーをまとめて確定する。断面ハンドルは 1 本で 2 つのパラメータを書くことが
+  // あり（`SectionHandle.also`）、ゴールシークの提案も同じ形なので経路を共有する。
+  const applyParams = useCallback((updates: Record<string, number>) => {
+    setParams((prev) => ({ ...prev, ...updates }));    // 楽観更新
+    pushParams(updates);
+  }, [pushParams]);
+
   // 断面ハンドルのドラッグ中。値は画面にだけ反映し、サーバへは送らない。
   const onPreview = useCallback((updates: Record<string, number> | null) => {
     previewRef.current = updates;
@@ -201,11 +250,6 @@ export default function App() {
     const path = await pickPath("open");
     if (path) setReference(path);
   }, [setReference, pickPath]);
-
-  const applyProposal = useCallback((proposal: Record<string, number>) => {
-    setParams((prev) => ({ ...prev, ...proposal }));
-    pushParams(proposal);
-  }, [pushParams]);
 
   return (
     <>
@@ -256,23 +300,28 @@ export default function App() {
                         srcOverride={viewDerived && manualEdit?.derived
                           ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
                           : null}
-                        onBusy={setModelBusy} />
+                        overlaySrc={overlaySrc}
+                        dimensions={shownDims} hoverKey={hoverKey}
+                        onBusy={setModelBusy} onOverlayBusy={setRefBusy} />
             </div>
           )}
           {project && viewMode === "section" && (
-            <SectionEditor params={params} onChange={onParamChange}
-                           onPreview={onPreview} modelBusy={modelBusy} />
+            <SectionEditor params={params} onChange={applyParams}
+                           onPreview={onPreview} modelBusy={modelBusy}
+                           showDims={showDims} hoverKey={hoverKey}
+                           onToggleDims={() => setShowDims((v) => !v)} />
           )}
           <div className="badge">
             {project
               ? (viewMode === "section"
-                  ? `${project.component_label} — 丸ポチをドラッグしてバッフルを調整`
+                  ? `${project.component_label} — 丸ポチをドラッグ（タブでバッフル / 外形を切替）`
                   : viewDerived
                     ? (manualEdit?.derived?.kind === "external"
                         ? "外部取込モデル（整列後の形状）"
                         : "外部編集済みモデル（凍結時の形状ベース）")
                     : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
-                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "")
+                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "") +
+                (refBusy && viewMode === "3d" ? "　⏳ 参照を生成中…" : "")
               : "プロジェクトを作成してください"}
           </div>
           {project && hasSection && (
@@ -284,7 +333,7 @@ export default function App() {
             </div>
           )}
           {manualEdit?.derived && viewMode === "3d" && (
-            <div className={"view-tabs" + (hasSection ? " second" : "")}>
+            <div className={tabRowClass(derivedRow)}>
               <button className={viewDerived ? "" : "active"}
                       onClick={() => setViewDerived(false)}>設計形状</button>
               <button className={viewDerived ? "active" : ""}
@@ -292,6 +341,24 @@ export default function App() {
                 {manualEdit.derived.kind === "external" ? "取込モデル" : "編集済み"}
                 {manualEdit.derived.kind !== "external" && manualEdit.stale ? " ⚠旧" : ""}
               </button>
+            </div>
+          )}
+          {(canOverlay || canDims) && viewMode === "3d" && (
+            <div className={tabRowClass(overlayRow)}>
+              {canOverlay && (
+                <button className={showRef ? "active" : ""}
+                        onClick={() => setShowRef((v) => !v)}
+                        title="参照マウスピースを半透明で重ねる">
+                  🫥 参照MP
+                </button>
+              )}
+              {canDims && (
+                <button className={showDims ? "active" : ""}
+                        onClick={() => setShowDims((v) => !v)}
+                        title="パラメータの寸法を図示する">
+                  📏 寸法
+                </button>
+              )}
             </div>
           )}
           {highlight && !viewDerived && viewMode === "3d" && (
@@ -315,7 +382,7 @@ export default function App() {
       )}
       {dialog === "goalseek" && sim?.kind === "mouthpiece" && project && (
         <GoalSeekDialog tier2={sim.tier2} schema={project.schema}
-                        onApply={applyProposal} onClose={() => setDialog(null)} />
+                        onApply={applyParams} onClose={() => setDialog(null)} />
       )}
       {dialog === "export" && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
@@ -334,6 +401,12 @@ export default function App() {
         <div className="err-toast warn-toast">
           ⚠ 凍結後にパラメータを変更しました。登録済みの編集済みモデルは古い形状になります
           （入稿には使用されません）。「🛠 外部編集」から再凍結してやり直してください。
+        </div>
+      )}
+      {notices.length > 0 && !staleWarn && (
+        <div className="err-toast warn-toast">
+          ⚠ 保存時から変わったパラメータを変換しました:
+          {notices.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}
     </>

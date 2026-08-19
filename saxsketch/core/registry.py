@@ -28,6 +28,12 @@ class Component(ABC):
     #: 従属先コンポーネントのID。設定するとプロジェクトが参照スナップショットを持つ
     #: （例: リード/リガチャー → "mouthpiece"）。None なら参照不要。
     REQUIRES_REF: str | None = None
+    #: 参照コンポーネントと**同じ座標系**で作られているか。True のとき UI は
+    #: 参照の形をそのまま重ねられる（変換が要らない）。
+    #:
+    #: 既定を False にしてあるのは、**間違って重なるより重ならない方が安全**だから。
+    #: 座標系が一致するかはコンポーネント自身にしか分からない（コアは楽器を知らない）。
+    REF_SHARES_FRAME: bool = False
 
     def __init__(self, descriptor: dict, template: dict):
         self.descriptor = descriptor
@@ -80,6 +86,18 @@ class Component(ABC):
         """
         return None
 
+    def migrate_params(self, values: dict) -> tuple[dict, list[str]]:
+        """保存済みプロジェクトのパラメータを現行のキーへ移す。既定は恒等。
+
+        `ParamSet.apply` は**未知のキーを黙って捨てる**ので、パラメータを作り
+        替えると古い .wproj が黙って既定値へ落ちる（利用者の設計が理由も無く
+        変わる）。ここで変換し、**何をどう移したかを 1 行返す**。
+
+        コアは楽器を知らないままでよい: 返るのは表示用の文字列だけで、コアは
+        それをそのまま利用者へ渡す（`params_error` と同じ形のフック）。
+        """
+        return values, []
+
     @abstractmethod
     def simulate(self, params: dict) -> dict:
         """設計時シミュレーション結果（Tier1/2、感度、倍音列）を返す。"""
@@ -103,6 +121,21 @@ class Component(ABC):
     def regions(self, params: dict) -> dict:
         """各パラメータの影響領域 {key: {z0, z1, side, label}}（3Dハイライト用）。"""
         return {}
+
+    def dimensions(self, params: dict) -> list[dict]:
+        """パラメータの寸法を図示するための線分。既定は無し。
+
+        要素は `saxsketch.core.dimension.dim()` が組み立てる（**値は線の両端から
+        測る**ので、ラベルと線が食い違わない）。座標はコンポーネント自身の
+        モデル座標で、3D も断面もそのまま描ける。
+
+        **CAD ビルドを伴わないこと**が要件。`section()` と同じくドラッグ中に
+        叩かれるので、形状法則の数値計算だけで組み立てる。
+
+        空リストなら UI は寸法トグルを出さない —— 「どの部品が寸法を持つか」を
+        UI に書かない（`GET /api/section` の 404 で断面タブを出し分けるのと同じ）。
+        """
+        return []
 
     def section(self, params: dict) -> dict | None:
         """中央面の断面と、そこで直接ドラッグできるハンドル。

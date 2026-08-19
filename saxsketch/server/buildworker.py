@@ -44,6 +44,33 @@ def _disabled() -> bool:
     return os.environ.get("SAXSKETCH_NO_BUILD_WORKER") == "1"
 
 
+# ------------------------------------------------------------------ スペック → STL
+
+def build_from_spec(spec: dict) -> bytes:
+    """スペック 1 つを STL バイト列にする。
+
+    **子プロセスと親側のフォールバックが同じものを呼ぶ。** 子が使えないときは
+    親が同じ手順を踏むので、2 か所に書くと片方だけが直る状態を作れてしまう
+    （`AppState._build_stl` が唯一の呼び出し元）。
+
+    `AppState` を見ない純関数。`Component.build()` が params の純関数なので、
+    レジストリからコンポーネントを作り直せば親子で状態を持ち合わなくて済む。
+    """
+    from saxsketch.core.registry import get_registry
+    from saxsketch.export.models import export_model
+
+    inst = get_registry().get(spec["instrument_id"])
+    comp = inst.make_component(spec["component_id"], spec["template_id"])
+    if spec.get("refs"):
+        comp.set_refs(spec["refs"])
+    part = (comp.build_cad(spec["params"]) if spec.get("cad")
+            else comp.build(spec["params"]))
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "m.stl"
+        export_model(part, f, "stl", tolerance=spec["tolerance"])
+        return f.read_bytes()
+
+
 # ------------------------------------------------------------------ 子プロセス側
 
 def _child_main(req_q, res_q) -> None:
@@ -58,26 +85,13 @@ def _child_main(req_q, res_q) -> None:
         res_q.put(("boot_failed", None, f"{type(e).__name__}: {e}"))
         return
 
-    from saxsketch.core.registry import get_registry
-    from saxsketch.export.models import export_model
-
     while True:
         job = req_q.get()
         if job is None:
             return
         gen, spec = job
         try:
-            inst = get_registry().get(spec["instrument_id"])
-            comp = inst.make_component(spec["component_id"], spec["template_id"])
-            if spec.get("refs"):
-                comp.set_refs(spec["refs"])
-            part = (comp.build_cad(spec["params"]) if spec.get("cad")
-                    else comp.build(spec["params"]))
-            with tempfile.TemporaryDirectory() as td:
-                f = Path(td) / "m.stl"
-                export_model(part, f, "stl", tolerance=spec["tolerance"])
-                data = f.read_bytes()
-            res_q.put(("ok", gen, data))
+            res_q.put(("ok", gen, build_from_spec(spec)))
         except Exception as e:                 # noqa: BLE001 - 形状生成の失敗全般
             res_q.put(("error", gen, f"{type(e).__name__}: {e}"))
 

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" width="760" height="430">
+<rect width="100%%" height="100%%" fill="#fff"/>
+<line x1="50" y1="215" x2="740" y2="215" stroke="#bbb" stroke-dasharray="4 3"/>
+<polyline points="60.00,-91.80 75.60,75.05 93.28,12.03 96.40,3.00 122.40,-59.64 143.20,-92.15 148.40,-92.17 164.00,-92.24 226.40,-134.10 359.52,-134.66" fill="none" stroke="#d22" stroke-width="1.8" /><polyline points="359.52,564.66 226.40,564.10 164.00,522.24 148.40,522.17 143.20,522.15 122.40,489.64 96.40,427.00 93.28,417.97 75.60,354.95 60.00,521.80" fill="none" stroke="#d22" stroke-width="1.8" />
+<polyline points="60.00,202.00 62.61,157.46 70.42,100.41 83.35,44.30 93.28,12.03 101.32,-10.42 124.16,-63.29 143.20,-99.38 151.70,-113.86 158.33,-122.19 166.86,-128.57 176.73,-132.57 187.30,-133.94 226.40,-134.10 359.52,-134.66" fill="none" stroke="#08c" stroke-width="1.8" /><polyline points="359.52,564.66 226.40,564.10 187.30,563.94 176.73,562.57 166.86,558.57 158.33,552.19 151.70,543.86 143.20,529.38 124.16,493.29 101.32,440.42 93.28,417.97 83.35,385.70 70.42,329.59 62.61,272.54 60.00,228.00" fill="none" stroke="#08c" stroke-width="1.8" />
+<circle cx="60.00" cy="-91.80" r="2.4" fill="#d22"/>
+<circle cx="75.60" cy="75.05" r="2.4" fill="#d22"/>
+<circle cx="93.28" cy="12.03" r="2.4" fill="#d22"/>
+<circle cx="96.40" cy="3.00" r="2.4" fill="#d22"/>
+<circle cx="122.40" cy="-59.64" r="2.4" fill="#d22"/>
+<circle cx="143.20" cy="-92.15" r="2.4" fill="#d22"/>
+<circle cx="148.40" cy="-92.17" r="2.4" fill="#d22"/>
+<circle cx="164.00" cy="-92.24" r="2.4" fill="#d22"/>
+<circle cx="226.40" cy="-134.10" r="2.4" fill="#d22"/>
+<circle cx="359.52" cy="-134.66" r="2.4" fill="#d22"/>
+<circle cx="60.00" cy="228.00" r="2.4" fill="#08c"/>
+<circle cx="62.61" cy="272.54" r="2.4" fill="#08c"/>
+<circle cx="70.42" cy="329.59" r="2.4" fill="#08c"/>
+<circle cx="83.35" cy="385.70" r="2.4" fill="#08c"/>
+<circle cx="93.28" cy="417.97" r="2.4" fill="#08c"/>
+<circle cx="101.32" cy="440.42" r="2.4" fill="#08c"/>
+<circle cx="124.16" cy="493.29" r="2.4" fill="#08c"/>
+<circle cx="143.20" cy="529.38" r="2.4" fill="#08c"/>
+<circle cx="151.70" cy="543.86" r="2.4" fill="#08c"/>
+<circle cx="158.33" cy="552.19" r="2.4" fill="#08c"/>
+<circle cx="166.86" cy="558.57" r="2.4" fill="#08c"/>
+<circle cx="176.73" cy="562.57" r="2.4" fill="#08c"/>
+<circle cx="187.30" cy="563.94" r="2.4" fill="#08c"/>
+<circle cx="226.40" cy="564.10" r="2.4" fill="#08c"/>
+<circle cx="359.52" cy="564.66" r="2.4" fill="#08c"/>
+<text x="20" y="26" font-family="sans-serif" font-size="15" fill="#222">アルト・tip_curve_depth=2.0 の平面視（ロフトが実際に張る折れ線）</text>
+<text x="20" y="48" font-family="sans-serif" font-size="13" fill="#d22">赤=4-C.2（上半分）: z=0 が幅 11.8mm のまま → 前へ張り出す板</text>
+<text x="20" y="66" font-family="sans-serif" font-size="13" fill="#08c">青=4-C.2b（下半分）: z=0 は 0.5mm、アーク→フィレット→側面の1本</text>
+<line x1="60.0" y1="25" x2="60.0" y2="405" stroke="#ddd"/>
+<text x="60.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">0</text>
+<line x1="112.0" y1="25" x2="112.0" y2="405" stroke="#ddd"/>
+<text x="112.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">1</text>
+<line x1="164.0" y1="25" x2="164.0" y2="405" stroke="#ddd"/>
+<text x="164.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">2</text>
+<line x1="216.0" y1="25" x2="216.0" y2="405" stroke="#ddd"/>
+<text x="216.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">3</text>
+<line x1="268.0" y1="25" x2="268.0" y2="405" stroke="#ddd"/>
+<text x="268.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">4</text>
+<line x1="320.0" y1="25" x2="320.0" y2="405" stroke="#ddd"/>
+<text x="320.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">5</text>
+<line x1="372.0" y1="25" x2="372.0" y2="405" stroke="#ddd"/>
+<text x="372.0" y="420" font-family="sans-serif" font-size="11" fill="#888" text-anchor="middle">6</text>
+<text x="600" y="420" font-family="sans-serif" font-size="11" fill="#888">z [mm]（先端から）</text>
+</svg>
