@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from saxsketch.acoustics import reed_model
+from saxsketch.core.dimension import dim
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import loft_sections
@@ -405,6 +406,48 @@ class ReedComponent(Component):
 
     def regions(self, params: dict) -> dict:
         return rp.param_regions(params)
+
+    def dimensions(self, params: dict) -> list[dict]:
+        """主要寸法の寸法線。座標はリード自身の系（テーブル面 y=0・先端 z=0）。
+
+        **先端の 2 本は z=0 に置けない。** 前縁カーブ（4-C.2b）のせいで z=0 の
+        平面視幅は 0.5mm の刃で、`tip_width` の幅になるのは
+        `tip_full_width_z`（既定 1.86 / 1.85 / 2.19）まで下がってから。幅の寸法は
+        そこへ置き、前縁カーブの寸法は「実際に全幅へ達する z」を測る ——
+        `tip_curve_depth` はフィレット前のアークが全幅に達する理論角なので、
+        `dim()` が公称値として併記する（意図した造形なので警告にはしない）。
+        """
+        p = params
+        sp = {s.key: s for s in self.param_specs()}
+        L = p["reed_length"]
+        zv = rp.vamp_start_z(p)
+        zf = rp.tip_full_width_z(p)
+        w_tip = rp.width(p, zf)
+        w_heel = rp.width(p, L)
+        hw = p["heel_width"] / 2.0
+        DOWN, FWD, AFT = (0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (0.0, 0.0, 1.0)
+
+        return [
+            # --- 軸方向。テーブル面の下（材料の無い側）へ逃がす
+            dim([0.0, 0.0, 0.0], [0.0, 0.0, zf], DOWN,
+                spec=sp["tip_curve_depth"], params=p, level=0),
+            dim([0.0, 0.0, 0.0], [0.0, 0.0, zv], DOWN,
+                spec=sp["vamp_length"], params=p, level=1),
+            dim([0.0, 0.0, 0.0], [0.0, 0.0, L], DOWN,
+                spec=sp["reed_length"], params=p, level=2),
+            # --- 幅（x 方向。断面には写らない）
+            dim([-w_tip / 2.0, 0.0, zf], [w_tip / 2.0, 0.0, zf], DOWN,
+                spec=sp["tip_width"], params=p, level=3),
+            dim([-w_heel / 2.0, 0.0, L], [w_heel / 2.0, 0.0, L], DOWN,
+                spec=sp["heel_width"], params=p, level=4),
+            # --- 厚み
+            dim([0.0, 0.0, 0.0], [0.0, rp.thickness(p, 0.0, 0.0), 0.0], FWD,
+                spec=sp["tip_thickness"], params=p, level=0),
+            dim([0.0, 0.0, L], [0.0, rp.thickness(p, L, 0.0), L], AFT,
+                spec=sp["heel_thickness"], params=p, level=0),
+            dim([hw, 0.0, L], [hw, rp.cane_top(p, hw), L], AFT,
+                spec=sp["heel_edge_thickness"], params=p, level=1),
+        ]
 
     def bom(self, params: dict) -> list[dict]:
         size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]

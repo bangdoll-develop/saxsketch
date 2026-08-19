@@ -4951,3 +4951,184 @@ def test_body_print_card_counts_segments_for_both_joints():
             segs = int(rows["分割の見込み"].replace(" 分割", ""))
             assert segs >= 2, (tid, p["neck_joint"], rows)   # どの構成でも 1 枚では出ない
         assert float(sep["body_arc_length"]) > BED_HINT_MM
+
+
+# ------------------------------------------------------------------ 寸法の図示（Phase 4-C.5）
+
+
+def _dim_component(component_id: str, template_id: str):
+    """寸法を測るためのコンポーネントと現在値。参照が要る部品には付けて返す。"""
+    comp = get_registry().get("saxophone").make_component(component_id, template_id)
+    if comp.REQUIRES_REF:
+        comp.set_refs({comp.REQUIRES_REF: {
+            "params": _template_params(comp.REQUIRES_REF, template_id)}})
+    return comp, _template_params(component_id, template_id)
+
+
+def test_dimensions_measure_what_they_draw():
+    """**値は線の両端から測られている**こと。
+
+    ラベルの数字と実際に引かれる線の長さが食い違う経路を殺す。`value` を
+    引数で渡せる設計だと、そこが必ず食い違いの入口になるので、
+    `dimension.dim()` は a・b からしか値を作らない。
+    """
+    for cid in ("mouthpiece", "reed", "ligature"):
+        for tid in SIZES:
+            comp, p = _dim_component(cid, tid)
+            dims = comp.dimensions(p)
+            assert dims, (cid, tid)
+            for d in dims:
+                a, b, u = d["a"], d["b"], d["dir"]
+                assert len(a) == len(b) == len(u) == 3
+                assert d["value"] == pytest.approx(math.dist(a, b), abs=1e-9), (cid, d)
+                assert d["value"] > 1e-9, (cid, d)          # 潰れた寸法は出さない
+                assert math.isclose(math.dist(u, (0, 0, 0)), 1.0, abs_tol=1e-12)
+                # 逃がす向きは寸法線と直交（斜めに逃がすと補助線が交差する）
+                seg = [b[i] - a[i] for i in range(3)]
+                assert abs(sum(u[i] * seg[i] for i in range(3))) < 1e-9, (cid, d)
+                assert d["label"] and d["key"] and d["unit"]
+                assert isinstance(d["level"], int) and d["level"] >= 0
+
+
+def test_dimensions_report_the_frozen_window():
+    """窓長は**実効値**を測り、スライダの指定と違えば併記すること。
+
+    `window_end_z` は `bore_start_z − 4.0` 側でも頭打ちになるので、ソプラノは
+    可動域 24〜44mm のうち 28.5mm 以上が丸ごと死んでいる（アルトは 37.9mm 以上、
+    テナーは全域が効く）。図がスライダの値を書き写す実装だと、この帯で
+    **形と数字が食い違ったまま**になる。
+    """
+    frozen = {"soprano": 28.54, "alto": 37.92}
+    for tid in SIZES:
+        comp, base = _dim_component("mouthpiece", tid)
+        d = next(x for x in comp.dimensions(base) if x["key"] == "window_length")
+        assert "requested" not in d, tid          # 既定は届いている
+        assert d["value"] == pytest.approx(base["window_length"])
+
+        p = {**base, "window_length": 44.0}
+        d = next(x for x in comp.dimensions(p) if x["key"] == "window_length")
+        assert d["value"] == pytest.approx(profiles.window_length_effective(p))
+        if tid in frozen:
+            assert d["value"] == pytest.approx(frozen[tid], abs=0.01), tid
+            assert d["requested"] == 44.0, tid
+        else:
+            assert "requested" not in d, tid      # tenor は 44 まで本当に開く
+
+
+def test_dimensions_report_the_effective_seat_offset():
+    """座位置オフセットは実効値を測り、要求値を併記すること（4-C.3b）。
+
+    後端（最大径）の壁は消せないので、要求 3.0〜4.5mm に対し実効は 0.17mm 前後
+    しかない。**黙って飲むのではなく報告する**というのが 4-C.3b の答えで、
+    図もそれに揃える。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    want = {"soprano": 0.1336, "alto": 0.1687, "tenor": 0.1738}
+    for tid in SIZES:
+        comp, p = _dim_component("ligature", tid)
+        m = comp.ref_params()
+        d = next(x for x in comp.dimensions(p) if x["key"] == "seat_offset")
+        assert d["value"] == pytest.approx(lp.effective_seat_offset(m, p), abs=1e-9)
+        assert d["value"] == pytest.approx(want[tid], abs=0.001), tid
+        assert d["requested"] == pytest.approx(p["seat_offset"])
+        assert d["requested"] > 10 * d["value"], tid     # 桁で違う
+
+
+def test_dimensions_are_not_nominal_values():
+    """ソリッドに存在しない量を寸法線にしないこと。
+
+    `reed_width` はテーブルの幅ではない —— テーブルは平面カットなので実幅は
+    半径とカット深さから決まり、**z によって変わる**（座中央で 13.98 / 15.14 /
+    14.66mm）。`reed_width` が決めているのは窓幅の公称値とリガチャーのタブ幅
+    だけで、マウスピースの面を 1 つも決めていない。
+    """
+    want = {"soprano": 13.9835, "alto": 15.1423, "tenor": 14.6565}
+    for tid in SIZES:
+        comp, p = _dim_component("mouthpiece", tid)
+        dims = comp.dimensions(p)
+        assert not any(x["value"] == pytest.approx(p["reed_width"], abs=1e-9)
+                       for x in dims), tid
+        s0, s1 = profiles.ligature_seat_range(p)
+        d = next(x for x in dims if x["key"] == "table_flat_width")
+        assert d["value"] == pytest.approx(
+            profiles.table_flat_width(p, (s0 + s1) / 2.0), abs=1e-9)
+        assert d["value"] == pytest.approx(want[tid], abs=0.001), tid
+
+
+def test_dimensions_section_plane_is_derived():
+    """断面へ写せるかは**宣言ではなく座標から導く**こと。
+
+    幅方向（x）の寸法は中央面に写らないので自動的に落ちる。宣言にすると
+    「書き忘れ」と「書き間違い」の 2 つの穴が空く。
+    """
+    from saxsketch.core.dimension import in_section_plane
+    for cid in ("mouthpiece", "reed", "ligature"):
+        for tid in SIZES:
+            comp, p = _dim_component(cid, tid)
+            for d in comp.dimensions(p):
+                flat = abs(d["a"][0]) < 1e-9 and abs(d["b"][0]) < 1e-9                     and abs(d["dir"][0]) < 1e-9
+                assert in_section_plane(d) is flat, (cid, d["key"])
+    comp, p = _dim_component("mouthpiece", "alto")
+    sec = [d["key"] for d in comp.dimensions(p) if in_section_plane(d)]
+    assert "table_flat_width" not in sec        # 幅方向なので断面には出ない
+    assert "overall_length" in sec and "body_dia" in sec
+
+
+def test_dimensions_do_not_build():
+    """寸法は **CAD ビルドを伴わない**こと（断面と同じ要件）。
+
+    断面はドラッグ中に毎フレーム叩かれ、寸法はその応答に相乗りする。ここで
+    ビルドに触ると 1 本 5 秒の OCCT がドラッグの経路に入る。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+
+    def boom(*_a, **_k):
+        raise AssertionError("寸法の経路が CAD ビルドを呼んだ")
+
+    for cid in ("mouthpiece", "reed", "ligature"):
+        assert c.post("/api/project/new",
+                      json={"instrument_id": "saxophone", "template_id": "alto",
+                            "component_id": cid}).status_code == 200
+        STATE.component.build = boom          # インスタンス属性で覆う
+        STATE.component.build_cad = boom
+        assert c.get("/api/dimensions").status_code == 200
+        sec = c.get("/api/section")
+        assert sec.status_code in (200, 404)
+    # 覆ったビルドを残さない（STATE はプロセスに 1 個なので後続へ漏れる）
+    assert c.post("/api/project/new",
+                  json={"instrument_id": "saxophone", "template_id": "alto",
+                        "component_id": "mouthpiece"}).status_code == 200
+
+
+def test_section_and_dimensions_agree():
+    """2 つの経路が同じ定義を読んでいること。
+
+    3D は `/api/dimensions`、断面は `/api/section` の応答に相乗りする（ドラッグ中も
+    形と同じフレームで動かすため）。運び方が 2 通りでも**定義は 1 か所**。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    def new(component_id, template_id="alto"):
+        return c.post("/api/project/new",
+                      json={"instrument_id": "saxophone", "template_id": template_id,
+                            "component_id": component_id})
+
+    assert new("mouthpiece").status_code == 200
+    dims = c.get("/api/dimensions").json()
+    assert c.get("/api/section").json()["dimensions"] == dims
+    assert len(dims) == 11
+
+    for cid, n in (("reed", 8), ("ligature", 6)):
+        assert new(cid).status_code == 200
+        assert len(c.get("/api/dimensions").json()) == n, cid
+        assert c.get("/api/section").status_code == 404       # 断面は持たない
+
+    # 寸法を持たない部品は空。UI はこれを見てトグルを出さない。
+    for cid in ("neck", "body"):
+        assert new(cid).status_code == 200
+        assert c.get("/api/dimensions").json() == []

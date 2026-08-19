@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type ManualEdit, type ProjectData, type Region, type Simulation,
+  api, type Dimension, type ManualEdit, type ProjectData, type Region,
+  type Simulation,
 } from "./api";
 import ParamPanel from "./components/ParamPanel";
 import SectionEditor from "./components/SectionEditor";
@@ -24,6 +25,10 @@ export default function App() {
   // 参照マウスピースの重ね表示。既定オフ・UI 状態（プロジェクトには保存しない）
   const [showRef, setShowRef] = useState(false);
   const [refBusy, setRefBusy] = useState(false);
+  // 寸法の図示。既定オフ・UI 状態で、**3D と断面が同じ 1 個を共有する**
+  // （ビューを行き来しても設定が残る）。プロジェクトには保存しない。
+  const [showDims, setShowDims] = useState(false);
+  const [dimensions, setDimensions] = useState<Dimension[]>([]);
   const [dialog, setDialog] = useState<DialogKind>("new");
   const [error, setError] = useState("");
   const [regions, setRegions] = useState<Record<string, Region>>({});
@@ -84,6 +89,9 @@ export default function App() {
     // 影響領域は形状パラメータに依存 → モデル更新のたびに再取得
     if (!project) return;
     api.regions().then(setRegions).catch(() => {});
+    // 寸法も同じ周期で取り直す（断面はドラッグ中も追従させたいので、そちらは
+    // `/api/section` の応答に載ってくるぶんを使う。定義はサーバ側で同じ 1 か所）。
+    api.dimensions().then(setDimensions).catch(() => setDimensions([]));
   }, [modelVersion, project]);
 
   useEffect(() => {
@@ -103,6 +111,12 @@ export default function App() {
   const canOverlay = !!project?.reference?.overlay && !viewDerived;
   const overlaySrc = canOverlay && showRef
     ? `/api/ref/model.stl?v=${project!.reference!.hash}` : null;
+
+  // 寸法を持つかもサーバの答えで決める（UI に「どの部品が持つか」を書かない）。
+  // 取込モデルの表示中は出さない —— 外部モデルは別の整列で入っているので、
+  // 設計形状の寸法を重ねる根拠が無い（重ね表示と同じ判断）。
+  const canDims = dimensions.length > 0 && !viewDerived;
+  const shownDims = canDims && showDims ? dimensions : null;
 
   // 右上のタブは段で重ねる。**段の番号は数えて出す** —— 決め打ちにすると
   // 段が 3 つになった瞬間に重なる（`.view-tabs` / `.second` / `.third`）。
@@ -287,12 +301,15 @@ export default function App() {
                           ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
                           : null}
                         overlaySrc={overlaySrc}
+                        dimensions={shownDims} hoverKey={hoverKey}
                         onBusy={setModelBusy} onOverlayBusy={setRefBusy} />
             </div>
           )}
           {project && viewMode === "section" && (
             <SectionEditor params={params} onChange={applyParams}
-                           onPreview={onPreview} modelBusy={modelBusy} />
+                           onPreview={onPreview} modelBusy={modelBusy}
+                           showDims={showDims} hoverKey={hoverKey}
+                           onToggleDims={() => setShowDims((v) => !v)} />
           )}
           <div className="badge">
             {project
@@ -326,13 +343,22 @@ export default function App() {
               </button>
             </div>
           )}
-          {canOverlay && viewMode === "3d" && (
+          {(canOverlay || canDims) && viewMode === "3d" && (
             <div className={tabRowClass(overlayRow)}>
-              <button className={showRef ? "active" : ""}
-                      onClick={() => setShowRef((v) => !v)}
-                      title="参照マウスピースを半透明で重ねる">
-                🫥 参照MP
-              </button>
+              {canOverlay && (
+                <button className={showRef ? "active" : ""}
+                        onClick={() => setShowRef((v) => !v)}
+                        title="参照マウスピースを半透明で重ねる">
+                  🫥 参照MP
+                </button>
+              )}
+              {canDims && (
+                <button className={showDims ? "active" : ""}
+                        onClick={() => setShowDims((v) => !v)}
+                        title="パラメータの寸法を図示する">
+                  📏 寸法
+                </button>
+              )}
             </div>
           )}
           {highlight && !viewDerived && viewMode === "3d" && (

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+from saxsketch.core.dimension import dim
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import loft_sections
@@ -615,6 +616,54 @@ class LigatureComponent(Component):
     def regions(self, params: dict) -> dict:
         m = self.ref_params()
         return lp.param_regions(m, params) if m else {}
+
+    def dimensions(self, params: dict) -> list[dict]:
+        """主要寸法の寸法線。座標は**マウスピースの系**（4-C.4 と同じ理由で共有）。
+
+        座位置オフセットは**実効値**を測る。要求値は後端（最大径）の壁で必ず
+        飲まれるので（4-C.3b: 既定 3.0/4.0/4.5 に対し実効 0.13/0.17/0.17）、
+        `dim()` が「指定 4.0」を併記して**報告されたクランプ**をそのまま図に出す。
+
+        スリットとネジ座はネジ式のときだけ。弾性バンド／テーパ圧入には存在しない。
+        """
+        m = self.ref_params()
+        if not m:
+            return []
+        from . import profiles
+
+        p = params
+        sp = {s.key: s for s in self.param_specs()}
+        reed = self.reed_params()
+        z0, z1 = lp.seat_range(m, p)
+        zm = 0.5 * (z0 + z1)
+        seat0, _ = profiles.ligature_seat_range(m)
+        r_in = lp.inner_radius(m, p)
+        r_out = r_in + p["band_thickness"]
+        UP, AFT = (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
+
+        out = [
+            dim([0.0, r_out, z0], [0.0, r_out, z1], UP,
+                spec=sp["band_width"], params=p, level=0),
+            dim([0.0, r_out, seat0], [0.0, r_out, z0], UP,
+                spec=sp["seat_offset"], params=p, level=1),
+            dim([0.0, r_in, zm], [0.0, r_out, zm], AFT,
+                spec=sp["band_thickness"], params=p, level=0),
+            dim([0.0, -r_in, zm], [0.0, r_in, zm], AFT,
+                key="inner_dia", label="内周径", unit="mm", level=1),
+        ]
+        if lp.has_screws(p):
+            base, tip = lp.ear_span(m, p, reed)
+            ear = lp.ear_thickness(p)
+            x_ear = p["slit_width"] / 2.0 + ear / 2.0
+            # スリットは耳の頂点で測る（そこが外から見える幅）。逆締めでは
+            # 耳が下（リード側）へ伸びるので、逃がす向きも一緒に反転する。
+            away = (0.0, 1.0 if tip >= base else -1.0, 0.0)
+            out.append(dim([-p["slit_width"] / 2.0, tip, zm],
+                           [p["slit_width"] / 2.0, tip, zm], away,
+                           spec=sp["slit_width"], params=p, level=2))
+            out.append(dim([x_ear, base, zm], [x_ear, tip, zm], AFT,
+                           spec=sp["boss_height"], params=p, level=2))
+        return out
 
     def bom(self, params: dict) -> list[dict]:
         p = params

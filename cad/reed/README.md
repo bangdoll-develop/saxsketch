@@ -491,3 +491,23 @@ PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto 8 6
 
 リードのビルドは軽い（1 通り 0.2 秒。4-C.2c でブーリアンが消えた）ので 3 サイズ
 通しでも VM は落ちない。それでも pytest と同時には走らせないこと。
+
+
+## 寸法の図示（Phase 4-C.5）
+
+**先端の寸法は z=0 に置けない。** 前縁カーブ（4-C.2b）のせいで z=0 の平面視幅は
+0.5mm の刃なので、幅の寸法は `tip_full_width_z` に置く:
+
+| | `tip_width`（公称） | `tip_full_width_z` | そこでの実幅 | `tip_curve_depth`（公称） |
+|---|---|---|---|---|
+| soprano | 12.9 | 1.862 | 12.919 | 1.4 |
+| alto | 13.4 | 1.852 | 13.416 | 1.3 |
+| tenor | 14.8 | 2.194 | 14.817 | 1.6 |
+
+寸法は「スライダ 1 目盛（`ParamSpec.step`）より大きく食い違うときだけ公称値を
+併記する」という 1 本の規則で出している。だから **`tip_curve_depth` はフィレットの
+逃げ（+0.46〜+0.59mm）ぶん併記され、`tip_width` のテーパ端数（+0.02mm、step 0.1）は
+併記されない**。前者は 4-C.2b で意図した造形なので警告ではなく報告として出す。
+
+厚み側（`tip_thickness` / `heel_thickness` / `heel_edge_thickness`）とヴァンプ長は
+法則と厳密一致（差 0.0）。

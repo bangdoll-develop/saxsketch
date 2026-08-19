@@ -348,6 +348,18 @@ def model_regions():
     return STATE.component.regions(dict(STATE.paramset.values))
 
 
+@app.get("/api/dimensions")
+def model_dimensions():
+    """パラメータの寸法（3D の図示用）。**CAD ビルドを伴わない**。
+
+    `/api/model/regions` と同じ形（引数なし・現在値）。断面のドラッグ中に
+    追従させる側は `/api/section` の `dimensions` が運ぶ（定義は同じ 1 か所）。
+    寸法を持たないコンポーネントは `[]`。UI はそれを見てトグルを出さない。
+    """
+    _require_project()
+    return STATE.component.dimensions(dict(STATE.paramset.values))
+
+
 @app.get("/api/section")
 def model_section(request: Request):
     """中央面の断面とドラッグハンドル。**CAD ビルドを伴わない**。
@@ -372,6 +384,11 @@ def model_section(request: Request):
     data = STATE.component.section(values)
     if data is None:
         raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
+    # 寸法はここで**ルート側が**足す。断面を持つ部品が増えたときに
+    # `section()` の中へ書き足し忘れる経路を作らないため（定義は `dimensions()`
+    # の 1 か所のまま）。ドラッグ中のクエリ上書きがそのまま効くので、寸法は
+    # 形と同じフレームで動く。
+    data["dimensions"] = STATE.component.dimensions(values)
     return data
 
 

@@ -122,6 +122,21 @@ class Component(ABC):
         """各パラメータの影響領域 {key: {z0, z1, side, label}}（3Dハイライト用）。"""
         return {}
 
+    def dimensions(self, params: dict) -> list[dict]:
+        """パラメータの寸法を図示するための線分。既定は無し。
+
+        要素は `saxsketch.core.dimension.dim()` が組み立てる（**値は線の両端から
+        測る**ので、ラベルと線が食い違わない）。座標はコンポーネント自身の
+        モデル座標で、3D も断面もそのまま描ける。
+
+        **CAD ビルドを伴わないこと**が要件。`section()` と同じくドラッグ中に
+        叩かれるので、形状法則の数値計算だけで組み立てる。
+
+        空リストなら UI は寸法トグルを出さない —— 「どの部品が寸法を持つか」を
+        UI に書かない（`GET /api/section` の 404 で断面タブを出し分けるのと同じ）。
+        """
+        return []
+
     def section(self, params: dict) -> dict | None:
         """中央面の断面と、そこで直接ドラッグできるハンドル。
 

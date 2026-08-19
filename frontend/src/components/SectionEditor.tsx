@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type SectionData, type SectionHandle } from "../api";
+import { api, inSectionPlane, type SectionData, type SectionHandle } from "../api";
 
 interface Props {
   /** 画面が持っている現在のパラメータ。そのままサーバへ渡して断面を描く */
@@ -12,6 +12,11 @@ interface Props {
   onPreview: (updates: Record<string, number> | null) => void;
   /** 3D 形状の再生成中か。断面タブからでも「まだ計算中」だと分かるように出す */
   modelBusy?: boolean;
+  /** 寸法を図示するか。状態は App が持ち、3D と共有する */
+  showDims?: boolean;
+  onToggleDims?: () => void;
+  /** hover 中のパラメータキー。一致する寸法だけ色を変える */
+  hoverKey?: string | null;
 }
 
 /** クエリに載せられる値だけ抜く（数値と選択肢）。 */
@@ -56,7 +61,9 @@ function valuesAt(h: SectionHandle, coord: number): Record<string, number> {
   return out;
 }
 
-export default function SectionEditor({ params, onChange, onPreview, modelBusy }: Props) {
+export default function SectionEditor({
+  params, onChange, onPreview, modelBusy, showDims, onToggleDims, hoverKey,
+}: Props) {
   const [data, setData] = useState<SectionData | null>(null);
   const [err, setErr] = useState("");
   const [zoomAll, setZoomAll] = useState(false);
@@ -164,13 +171,49 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
 
   // 表示範囲。既定はバッフル（ボア開始まで）に寄せる — 編集対象がそこだから。
   const zHi = zoomAll ? data.z_range[1] : (c.bore_top?.[0]?.[0] ?? data.z_range[1]);
-  const z0 = -1.5;
-  const z1 = zHi + 1.5;
-  const ys = [...c.outer_top, ...c.outer_bot].filter(([z]) => z >= z0 && z <= z1);
-  const yMax = Math.max(...ys.map(([, y]) => y)) + 1.0;
-  const yMin = Math.min(...ys.map(([, y]) => y)) - 1.0;
+  const zb0 = -1.5;
+  const zb1 = zHi + 1.5;
+  const ys = [...c.outer_top, ...c.outer_bot].filter(([z]) => z >= zb0 && z <= zb1);
+  let yMax = Math.max(...ys.map(([, y]) => y)) + 1.0;
+  let yMin = Math.min(...ys.map(([, y]) => y)) - 1.0;
+  let z0 = zb0;
+  let z1 = zb1;
+
+  // 寸法。x=0 に写せるものだけを描く（判定は座標から導く）。逃がし量は
+  // **本体の表示幅**から出す（サーバは向きと段だけを持つ）。
+  const dimBase = 0.05 * (zb1 - zb0);
+  const dims = (showDims ? data.dimensions ?? [] : [])
+    .filter(inSectionPlane)
+    // **表示中の z 範囲に収まるものだけ。** バッフル表示のまま全長の寸法を描くと、
+    // 表示範囲がそれに引きずられて拡大が効かなくなる（ハンドルをタブで
+    // 出し分けているのと同じ理由）。
+    .filter((d) => Math.min(d.a[2], d.b[2]) >= zb0 && Math.max(d.a[2], d.b[2]) <= zb1)
+    .map((d) => {
+      const off = dimBase * (d.level + 1);
+      const tz = d.dir[2] * dimBase * 0.12;
+      const ty = d.dir[1] * dimBase * 0.12;
+      return {
+        d,
+        az: d.a[2] + d.dir[2] * off, ay: d.a[1] + d.dir[1] * off,
+        bz: d.b[2] + d.dir[2] * off, by: d.b[1] + d.dir[1] * off,
+        tz, ty,
+      };
+    });
+  // **寸法線を表示範囲へ入れる。** 入れないと外へ逃がした線がそのまま画面外で
+  // 切れる（範囲は外形ポリラインと ±1.5mm の決め打ちだけから決まっていた）。
+  for (const g of dims) {
+    z0 = Math.min(z0, g.az, g.bz);
+    z1 = Math.max(z1, g.az, g.bz);
+    yMin = Math.min(yMin, g.ay, g.by);
+    yMax = Math.max(yMax, g.ay, g.by);
+  }
+  if (dims.length) {
+    const pad = dimBase * 0.6;      // 目盛とラベルのぶん
+    z0 -= pad; z1 += pad; yMin -= pad; yMax += pad;
+  }
   const vb = `${z0} ${-yMax} ${z1 - z0} ${yMax - yMin}`;
   const r = (z1 - z0) / 70;   // ハンドル半径（mm）。表示幅に対しほぼ一定
+  const fs = (z1 - z0) / 55;  // 寸法の文字（mm）。等方スケールなので歪まない
 
   return (
     <div className="section-editor">
@@ -187,6 +230,26 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
         <path d={path(c.reed)} className="sec-reed" />
         <path d={path(c.roof)} className="sec-roof" />
         <path d={path(c.floor)} className="sec-floor" />
+        {dims.map((g) => (
+          <g key={g.d.key}
+             className={"sec-dim" + (hoverKey && hoverKey === g.d.key ? " live" : "")}>
+            <line x1={g.d.a[2]} y1={-g.d.a[1]}
+                  x2={g.az + g.tz} y2={-(g.ay + g.ty)} />
+            <line x1={g.d.b[2]} y1={-g.d.b[1]}
+                  x2={g.bz + g.tz} y2={-(g.by + g.ty)} />
+            <line x1={g.az} y1={-g.ay} x2={g.bz} y2={-g.by} />
+            <line x1={g.az - g.tz} y1={-(g.ay - g.ty)}
+                  x2={g.az + g.tz} y2={-(g.ay + g.ty)} />
+            <line x1={g.bz - g.tz} y1={-(g.by - g.ty)}
+                  x2={g.bz + g.tz} y2={-(g.by + g.ty)} />
+            <text x={(g.az + g.bz) / 2 + g.tz * 2.2}
+                  y={-((g.ay + g.by) / 2 + g.ty * 2.2)}
+                  fontSize={fs} textAnchor="middle" dominantBaseline="middle">
+              {`${g.d.label} ${g.d.value.toFixed(2)}${g.d.unit ? " " + g.d.unit : ""}`}
+              {g.d.requested !== undefined && `（指定 ${g.d.requested.toFixed(2)}）`}
+            </text>
+          </g>
+        ))}
         {handles.map((h) => {
           const live = dragKey === h.key;
           return (
@@ -213,6 +276,12 @@ export default function SectionEditor({ params, onChange, onPreview, modelBusy }
             外形（全体）
           </button>
         </div>
+        {(data.dimensions ?? []).length > 0 && (
+          <button className={"sec-dim-toggle" + (showDims ? " active" : "")}
+                  onClick={onToggleDims} title="パラメータの寸法を図示する">
+            📏 寸法
+          </button>
+        )}
         {handles.map((h) => (
           <span key={h.key} className={"sec-chip" + (dragKey === h.key ? " live" : "")}>
             {h.label}

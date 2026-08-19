@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+from saxsketch.core.dimension import dim
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import (
@@ -360,6 +361,69 @@ class MouthpieceComponent(Component):
 
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
+
+    def dimensions(self, params: dict) -> list[dict]:
+        """主要寸法の寸法線。**値は法則から読む**（スライダの値をそのまま書かない）。
+
+        ここが `params[key]` を書き写す実装だったら、寸法図はスライダの複製に
+        なって何も新しく言わない。実際に食い違う量があるので測って出す ——
+        既定のソプラノで `window_length` を 44 にすると、形は **28.5mm** までしか
+        開かない（`window_length_effective`）。図はその 28.5 を引き、
+        `dim()` が「指定 44.0」を併記する。
+
+        **`reed_width` は寸法線にしない。** テーブルは平面カットなので実幅は
+        半径とカット深さから決まり z で変わる（座中央で 13.98/15.14/14.66mm）。
+        `reed_width` が決めているのは窓幅の公称値とリガチャーのタブ幅だけで、
+        マウスピースの面を 1 つも決めていない。代わりに実幅を出す。
+        """
+        p = params
+        sp = {s.key: s for s in self.param_specs()}
+        L = p["overall_length"]
+        hz = profiles.heel_z(p)
+        zb = profiles.bore_start_z(p)
+        z_bite = 0.25 * L                      # `beak_angle` と同じバイトポイント
+        s0, s1 = profiles.ligature_seat_range(p)
+        z_seat = 0.5 * (s0 + s1)
+        ty0 = profiles.table_plane_y(p, 0.0)
+        ty_seat = profiles.table_plane_y(p, z_seat)
+        ty_bite = profiles.table_plane_y(p, z_bite)
+        r_body = profiles.outer_radius(p, hz)
+        r_shank = profiles.outer_radius(p, L)
+        r_bore = profiles.bore_radius(p)
+        z_bore_mid = 0.5 * (zb + L)
+        fl = p["facing_length"]
+        w_flat = profiles.table_flat_width(p, z_seat)
+        DOWN, FWD, AFT = (0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (0.0, 0.0, 1.0)
+
+        return [
+            # --- 軸方向。テーブル側へ逃がす。z 範囲が重なるものは段を変える
+            dim([0.0, ty0, 0.0], [0.0, ty0, fl], DOWN,
+                spec=sp["facing_length"], params=p, level=0),
+            dim([0.0, ty0, profiles.window_front_z(p)],
+                [0.0, ty0, profiles.window_end_z(p)], DOWN,
+                spec=sp["window_length"], params=p, level=1),
+            dim([0.0, ty0, zb], [0.0, ty0, L], DOWN,
+                spec=sp["bore_length"], params=p, level=0),
+            dim([0.0, ty0, profiles.shank_start_z(p)], [0.0, ty0, L], DOWN,
+                spec=sp["shank_length"], params=p, level=1),
+            dim([0.0, ty0, 0.0], [0.0, ty0, L], DOWN,
+                spec=sp["overall_length"], params=p, level=2),
+            # --- 径・高さ。軸方向へ逃がす
+            dim([0.0, -r_body, hz], [0.0, r_body, hz], AFT,
+                spec=sp["body_dia"], params=p, level=0),
+            dim([0.0, -r_shank, L], [0.0, r_shank, L], AFT,
+                spec=sp["shank_dia"], params=p, level=0),
+            dim([0.0, -r_bore, z_bore_mid], [0.0, r_bore, z_bore_mid], AFT,
+                spec=sp["bore_dia"], params=p, level=0),
+            dim([0.0, ty0, 0.0], [0.0, profiles.cut_top_y(p, 0.0), 0.0], FWD,
+                spec=sp["tip_opening"], params=p, level=0),
+            dim([0.0, ty_bite, z_bite], [0.0, ty_bite + p["beak_height"], z_bite],
+                FWD, spec=sp["beak_height"], params=p, level=1),
+            # --- テーブル実幅（x 方向なので断面には写らない）
+            dim([-w_flat / 2.0, ty_seat, z_seat], [w_flat / 2.0, ty_seat, z_seat],
+                DOWN, key="table_flat_width", label="テーブル実幅", unit="mm",
+                level=3),
+        ]
 
     @staticmethod
     def _outer_shape_dims(p: dict) -> list[tuple[str, str]]:
