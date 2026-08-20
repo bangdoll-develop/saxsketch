@@ -334,6 +334,207 @@ def bore_rings(p: dict, si: dict, np_: dict) -> list[list[tuple[float, float, fl
             for s in stations(p, si, np_)]
 
 
+# --------------------------------------------------------------------------- 側孔
+
+#: 指孔をふさげる指の実用上限 [mm]。これを超えると押さえきれない。判定は
+#: `ParamSpec.max` ではなくカード（人差し指と小指で違うし、奏者で違う）。
+FINGER_PAD_DIA_MM = 12.0
+#: 両手で押さえられる指孔の実用スパン [mm]。**目安であって物理ではない。**
+#: リコーダ（約 200mm）とクラリネット（7 孔で約 230mm）の実測から採った。
+HAND_SPAN_MM = 200.0
+
+
+def is_holed(p: dict) -> bool:
+    return int(p["finger_holes"]) > 0 or p["thumb_vent"] == "on"
+
+
+def _cone_length_for(si: dict, f_hz: float) -> float:
+    """その周波数が鳴る円錐のスロート→開口長 [mm]（**0 次規則**）。
+
+    `openwind_bridge._calibrate_extension` をそのまま使う。管体の円錐長を
+    決めているのと**同じ関数**なので、円錐が 2 本になる経路が無い。
+    サイズ・音速・エンジンごとに `lru_cache` されるので、7 本ぶんの追加費用は初回だけ。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+
+    cone = ac_volume.missing_cone(si)
+    return 1000.0 * ob._calibrate_extension(
+        float(f_hz), cone["apex_distance_mm"] / 1000.0, cone["tan_theta"],
+        ob.C_SOUND, False)
+
+
+def hole_chimney_mm(s: float, p: dict, si: dict, np_: dict) -> float:
+    """側孔のチムニー長 [mm]。**ボア内面から天面まで**（壁の厚みを含む）。
+
+    `hole_chimney` パラメータは外面からの立ち上がりで、音響のチムニー長では
+    ない。ここを二重計上すると肉厚を動かしたときに音響が黙って置き去りになる。
+    **形から測る**ので、テーパでも受け口でも自動で正しくなる。
+    """
+    return (outer_radius_at(s, p, si, np_) + float(p["hole_chimney"])
+            - wall_inner_radius_at(s, p, si, np_))
+
+
+def hole_layout(p: dict, si: dict, np_: dict) -> list[dict]:
+    """側孔の並び（**弧長の昇順** ＝ マウスピース寄りが先頭）。
+
+    **4-B.2b の位置は 0 次規則の暫定値**で、実測でも解でもない。穴 k の目標音
+    `f_low·2^(step/12)` に対し「その音が鳴る円錐長」をそのまま弧長にしている。
+    有限径の穴は完全な開口端ではないので、実際に解いた共鳴はここより**低く**出る。
+    その差が 4-B.2c のソルバが潰す残差そのもの（`body.py` の音階カード）。
+
+    親指孔の位置は**指孔の本数に依らない** —— オクターブ（+12 半音）の位置から
+    `thumb_offset` だけ上流に置く。本数に紐づけると、本数 0 のときだけ穴が黙って
+    消える（この repo が 6 回踏んだ「黙ったクランプ」の形）。
+
+    各穴が `dia_mm` と `chimney_mm` を**個別に**持つのは 2c のため（2b では全穴同値）。
+    """
+    from saxsketch.acoustics import toneholes
+
+    n = int(p["finger_holes"])
+    f_low = float(si["low_note_sounding_hz"])
+    out: list[dict] = []
+    steps = toneholes.scale_steps(n)
+    # ベル寄り（+2 半音）が最も長い。昇順にするので高い音から並べる
+    for i, st in enumerate(reversed(steps)):
+        f = f_low * 2.0 ** (st / 12.0)
+        out.append({"label": f"hole{i + 1}", "role": "finger", "step": st,
+                    "target_hz": f, "s_mm": _cone_length_for(si, f),
+                    "dia_mm": float(p["hole_dia"]),
+                    "chimney_mm": 0.0})
+    if p["thumb_vent"] == "on":
+        s_oct = _cone_length_for(si, f_low * 2.0) - float(p["thumb_offset"])
+        out.append({"label": "thumb", "role": "thumb", "step": None,
+                    "target_hz": None, "s_mm": s_oct,
+                    "dia_mm": float(p["thumb_dia"]), "chimney_mm": 0.0})
+    out.sort(key=lambda h: h["s_mm"])
+    for h in out:
+        h["chimney_mm"] = hole_chimney_mm(h["s_mm"], p, si, np_)
+    return out
+
+
+def acoustic_holes(p: dict, si: dict, np_: dict) -> list[dict]:
+    """`hole_layout` を物差し円錐（`ideal_cone_geometry`）の座標へ写した穴リスト。
+
+    管体は**理想マウスピース**で評価する（`REQUIRES_REF` は neck 1 段だけで、
+    マウスピースのパラメータを持たない）。全閉の第1共鳴は校正により目標音に
+    合うので、音階カードに残るのは**穴だけの寄与**になる。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+
+    return [{"label": h["label"], "role": h["role"],
+             "x_m": ob.ideal_cone_hole_x(si, h["s_mm"]),
+             "radius_m": h["dia_mm"] / 2000.0,
+             "chimney_m": h["chimney_mm"] / 1000.0}
+            for h in hole_layout(p, si, np_)]
+
+
+def hole_placement(p: dict, si: dict, np_: dict) -> list[dict]:
+    """CAD 用の配置（中心点・軸・外半径）。build123d 非依存の座標だけ。
+
+    **指孔はボウの凸側（曲げの外）に揃える。** ストレートでも同じ規則を使うので、
+    曲げ角を変えても穴の面が飛ばない（同じパラメータから 2 通りの形が出る経路を
+    作らない）。親指孔はその反対側。
+
+    `inner_r` / `outer_r` は中心線からのボア内面／外面の半径。**チムニーは
+    `inner_r` から立ち上げる**（`body._apply_holes`）—— 外面に接する平面から
+    立てると、管が曲面なので底の円盤が接点以外どこも管の外に浮き、融合が
+    接触だけになる。掃引でボウの上の 2 本が実際に**ちぎれてソリッドが 3 個**に
+    なった（アルト・チムニー 8mm）。`inner_r` から立てれば必ず肉の中で重なり、
+    しかも `x ≥ inner_r` の円柱はボアへはみ出さない（軸から外れるほど中心線
+    からの距離は伸びるため）。
+    """
+    out = []
+    for h in hole_layout(p, si, np_):
+        s = h["s_mm"]
+        pt, _t, a = centerline_point(s, p, np_)
+        sign = 1.0 if h["role"] == "thumb" else -1.0
+        ri = wall_inner_radius_at(s, p, si, np_)
+        ro = outer_radius_at(s, p, si, np_)
+        ch = float(p["hole_chimney"])
+        out.append({"label": h["label"], "role": h["role"], "center": pt,
+                    "axis": (sign * a[0], sign * a[1], sign * a[2]),
+                    "dia": h["dia_mm"], "chimney_height": ch,
+                    "inner_r": ri, "outer_r": ro,
+                    # チムニーの円柱は中心線から `chimney_base_r` の位置で始まり
+                    # `chimney_len` だけ外へ伸びる。**始点は内面**（上の理由）。
+                    "chimney_base_r": ri, "chimney_len": ro + ch - ri,
+                    # 貫通穴は中心線から。反対側の壁には届かない長さに留める
+                    "cut_len": ro + ch + 2.0})
+    return out
+
+
+def hole_layout_error(p: dict, si: dict, np_: dict) -> str | None:
+    """側孔の並びが成立しないときに理由を返す（**黙ってクランプしない**）。"""
+    if not is_holed(p):
+        return None
+    s_lo, s_hi = part_start(p, np_), part_end(p, np_)
+    holes = hole_layout(p, si, np_)
+    for h in holes:
+        s = h["s_mm"]
+        if not (s_lo < s < s_hi):
+            where = "マウスピース側" if s <= s_lo else "ベル出口の先"
+            return (f"側孔 {h['label']} が管の外（{where}、弧長 {s:.0f}mm）に出ます。"
+                    f"この部品は弧長 {s_lo:.0f}〜{s_hi:.0f}mm です。"
+                    f"本体管長を伸ばすか、指孔の本数を減らしてください。")
+        r_bore = wall_inner_radius_at(s, p, si, np_)
+        if h["dia_mm"] / 2.0 >= r_bore:
+            return (f"側孔 {h['label']} の径 φ{h['dia_mm']:.1f} が、その位置のボア径 "
+                    f"φ{2 * r_bore:.1f} 以上です。分岐の式（短いチムニー近似）が"
+                    f"成り立たないうえ、管が輪切りになります。穴を細くするか、"
+                    f"もっとベル寄りへ動かしてください。")
+        if h["chimney_mm"] <= float(p["hole_chimney"]) + 1e-9:
+            return (f"側孔 {h['label']} のチムニーが壁を貫いていません "
+                    f"（{h['chimney_mm']:.2f}mm）。肉厚を確認してください。")
+    for i in range(len(holes) - 1):
+        a, b = holes[i], holes[i + 1]
+        gap = (b["s_mm"] - a["s_mm"]) - (a["dia_mm"] + b["dia_mm"]) / 2.0
+        if gap < 1.0:
+            return (f"側孔 {a['label']} と {b['label']} が重なります"
+                    f"（弧長 {a['s_mm']:.0f} と {b['s_mm']:.0f}、縁の隙間 {gap:.1f}mm）。"
+                    f"穴を細くするか、親指孔のオフセットを広げてください。")
+    return None
+
+
+def hole_span_mm(p: dict, si: dict, np_: dict) -> float:
+    """最上と最下の**指孔**の弧長差 [mm]。指が届くかはこれで決まる。"""
+    fs = [h["s_mm"] for h in hole_layout(p, si, np_) if h["role"] == "finger"]
+    return (max(fs) - min(fs)) if len(fs) >= 2 else 0.0
+
+
+def max_finger_holes_in_span(si: dict, span_mm: float = HAND_SPAN_MM) -> int:
+    """`span_mm` に収まる指孔の最大本数。**パラメータに依らない。**
+
+    スパンは音程だけで決まるので（実効長が 1/f に比例する管では位置比が
+    `f_高/f_低` そのもの）、これは楽器サイズと音階の並びの性質であって設計値では
+    ない。「届かないなら段数を減らす」と言うとき、**何段まで減らせるか**を
+    数字で出すのがこの関数。
+
+    実測（既定の長音階・両手 200mm）: soprano 4 本 / alto 3 本 / tenor 2 本。
+    つまりアルトなら「ド レ ミ ファ」の 4 音まで。
+    """
+    from saxsketch.acoustics import toneholes
+
+    f_low = float(si["low_note_sounding_hz"])
+    steps = toneholes.SCALE_STEPS
+    s_low = _cone_length_for(si, f_low * 2.0 ** (steps[0] / 12.0))
+    for k in range(len(steps), 0, -1):
+        s_hi = _cone_length_for(si, f_low * 2.0 ** (steps[k - 1] / 12.0))
+        if s_low - s_hi <= span_mm:
+            return k
+    return 1
+
+
+def hole_zone(s: float, p: dict, np_: dict) -> str:
+    """その弧長が直管／ボウ／ベルのどれに載るか（キーレスの実現性に効く）。"""
+    body0 = float(np_["neck_length"])
+    b_s0, b_arc, b_rb, _ang = _bow(p)
+    if float(p["bell_length"]) > 0.0 and s >= part_end(p, np_) - float(p["bell_length"]):
+        return "ベル"
+    if b_rb is not None and body0 + b_s0 <= s <= body0 + b_s0 + b_arc:
+        return "ボウ"
+    return "直管"
+
+
 # --------------------------------------------------------------------------- 音響
 
 def acoustic_geometry(p: dict, si: dict, np_: dict) -> list[list[float]]:
@@ -407,7 +608,7 @@ def layout_error(p: dict, si: dict, np_: dict) -> str | None:
         if sock_r + p["min_wall"] > outer_radius_at(part_start(p, np_) + 1e-3, p, si, np_):
             return (f"ネック受けの肉厚が下限を割ります（受け穴 φ{2*sock_r:.1f} に対し "
                     f"外径が足りない）。肉厚を上げるか、はめあい隙間を詰めてください。")
-    return _self_collision_error(p, si, np_)
+    return _self_collision_error(p, si, np_) or hole_layout_error(p, si, np_)
 
 
 def _self_collision_error(p: dict, si: dict, np_: dict) -> str | None:
@@ -507,6 +708,32 @@ def param_regions(p: dict, np_: dict) -> dict:
                 "label": "ネック受け"}
         reg["socket_length"] = sock
         reg["socket_clearance"] = dict(sock)
+    return reg
+
+
+def hole_regions(p: dict, si: dict, np_: dict) -> dict:
+    """側孔まわりの 3D ハイライト用ゾーン（曲げ後の実 z）。
+
+    `param_regions` から分けてあるのは、こちらが `size_info` を要る（穴の位置は
+    目標音から決まる）ため。`body.py` が 2 つを合わせて返す。
+    """
+    if not is_holed(p):
+        return {}
+    holes = hole_layout(p, si, np_)
+    zs = [centerline_point(h["s_mm"], p, np_)[0][2] for h in holes]
+    fz = [z for z, h in zip(zs, holes) if h["role"] == "finger"]
+    reg: dict = {}
+    if fz:
+        band = {"z0": min(fz) - 8.0, "z1": max(fz) + 8.0, "side": "all",
+                "label": "指孔"}
+        for k in ("finger_holes", "hole_dia", "hole_chimney"):
+            reg[k] = dict(band)
+    tz = [z for z, h in zip(zs, holes) if h["role"] == "thumb"]
+    if tz:
+        band = {"z0": tz[0] - 8.0, "z1": tz[0] + 8.0, "side": "all",
+                "label": "親指孔"}
+        for k in ("thumb_vent", "thumb_offset", "thumb_dia"):
+            reg[k] = dict(band)
     return reg
 
 

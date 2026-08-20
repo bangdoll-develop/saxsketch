@@ -27,11 +27,15 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
   sim: Simulation; compare?: Tier2 | null; paramsKey: string; onGoalSeek: () => void;
 }) {
   if (sim.kind !== "mouthpiece") {
-    // リード/リガチャー: 汎用カード。リードのみ音プレビューを出す
-    // （インピーダンスとゴールシークはマウスピース設計の機能なので出さない）
+    // リード/リガチャー/ネック/管体: 汎用カード。リードのみ音プレビューを出す
+    // （ゴールシークはマウスピース設計の機能なので出さない）。
+    // インピーダンスは **サーバが has_impedance を立てた部品だけ** ——
+    // どの部品が音響を持つかを UI 側に書くと、部品が増えるたびにここを直す
+    // ことになる（断面タブを 404 で出し分けているのと同じ約束）。
     return (
       <div>
         {sim.cards.map((c) => <Card key={c.title} card={c} />)}
+        {sim.has_impedance && <ImpedancePanel paramsKey={paramsKey} />}
         {sim.harmonics && <SoundPreview harmonics={sim.harmonics} />}
       </div>
     );

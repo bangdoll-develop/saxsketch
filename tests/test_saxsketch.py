@@ -4816,7 +4816,11 @@ def test_body_dropping_the_neck_is_caught_as_a_short_cone():
     for tid in SIZES:
         # ボウは畳んだままだと短くした管に収まらず、**別の理由**で弾かれてしまう。
         # ここで見たいのは円錐の長さだけなので、ストレートにして切り分ける。
-        comp, p, n = _body(tid, neck_joint="integrated", bow_angle=0.0)
+        # 側孔も同じ理由で外す —— 管を 1 本ぶん詰めるとベル寄りの穴が管の外へ
+        # 出て、`hole_layout_error` が（正しく）弾いてしまう。穴が弾くこと自体は
+        # `test_body_hole_layout_errors_instead_of_clamping` が見ている。
+        comp, p, n = _body(tid, neck_joint="integrated", bow_angle=0.0,
+                           finger_holes=0, thumb_vent="off")
         dropped = dict(p, body_arc_length=p["body_arc_length"] - float(n["neck_length"]))
         assert comp.params_error(dropped) is None, tid       # 形としては作れる
         card = comp._cone_card(dropped)
@@ -5132,3 +5136,311 @@ def test_section_and_dimensions_agree():
     for cid in ("neck", "body"):
         assert new(cid).status_code == 200
         assert c.get("/api/dimensions").json() == []
+
+
+# ------------------------------------------------------------------ 側孔（Phase 4-B.2b）
+
+#: 0 次配置（開孔位置＝その音が鳴る円錐長）のまま解いたときの、最も外れる運指の
+#: セント。**これは「設計が外れている量」ではなく 4-B.2c のソルバが潰す残差**。
+#: 全部マイナス（低い）なのは物理で、有限径の穴は完全な開口端ではないうえ、
+#: ベル寄りの開孔列が実効長を伸ばすため。
+ZEROTH_ORDER_WORST_CENTS = {"soprano": -177.0, "alto": -225.0, "tenor": -246.0}
+
+#: 指孔のスパン [mm]（最上と最下の指孔の弧長差）。**両手（目安 200mm）に
+#: 収まらない。** これは配置の失敗ではなく、このサイズでキーレス全音階が
+#: 成立しないという結論。
+HOLE_SPAN_MM = {"soprano": 317.0, "alto": 476.0, "tenor": 637.0}
+
+
+def test_holes_do_not_move_anything_that_was_already_recorded():
+    """側孔を足しても、**穴を持たない管の数字は 1 つも動かない**こと。
+
+    `_tmm_impedance` を区間行列＋分岐行列へ組み替えたので、穴が無いときに
+    以前と違う経路を通っていないかをここで固定する。マウスピース・リードの
+    記録値（`TIER1_RESIDUAL_CENTS` など）はこの上に載っている。
+    """
+    import numpy as np
+
+    from saxsketch.acoustics import openwind_bridge as ob
+    for tid in SIZES:
+        si = _size_info(tid)
+        p = _template_params("mouthpiece", tid)
+        geo = ob.build_resonator(p, si, use_openwind=False)
+        freqs = np.geomspace(50.0, 2000.0, 200)
+        a = ob._tmm_impedance(geo, freqs)
+        b = ob._tmm_impedance(geo, freqs, holes=[])
+        assert np.array_equal(a, b), tid                     # ビット一致
+        assert ob.first_resonance_cents(p, si) == pytest.approx(
+            TIER1_RESIDUAL_CENTS[tid], abs=2.0), tid
+
+
+def test_tone_hole_junction_matrix_is_reciprocal():
+    """分岐行列の行列式が恒等的に 1（可逆・相反）であること。
+
+    T 型の 2 本の直列腕が同じ Za/2 になっていない、といった組み立て間違いは
+    ここに出る。物理の当否ではなく**式の写し間違い**を捕まえる網。
+    """
+    import numpy as np
+
+    from saxsketch.acoustics import toneholes
+    freqs = np.geomspace(80.0, 1600.0, 40)
+    for open_ in (False, True):
+        a11, a12, a21, a22 = toneholes.junction_matrix(
+            freqs, 0.012, 0.004, 0.003, open_)
+        det = a11 * a22 - a12 * a21
+        assert np.allclose(det, 1.0, atol=1e-12), (open_, det[:3])
+
+
+def test_tone_hole_model_adds_no_engine_disagreement():
+    """**TMM と OpenWind が同じ側孔を解いていること。**
+
+    合っているかは文献ではなく OpenWind と突き合わせて測る（`sound_speed()` が
+    `Physics` の式を写しているのと同じ扱い）。見るのは差の絶対値ではなく、
+    **穴を足したことで差が増えるか**。穴が無くても 2 エンジンは 3 セント前後
+    違う（損失と放射モデルの違い）ので、そこを基準にする。
+    """
+    import math
+
+    import numpy as np
+
+    from saxsketch.acoustics import openwind_bridge as ob
+    if not ob.HAS_OPENWIND:
+        pytest.skip("OpenWind 未導入")
+    from openwind import ImpedanceComputation
+    si = _size_info("alto")
+    f1 = float(si["low_note_sounding_hz"])
+    geo = ob.ideal_cone_geometry(si, use_openwind=False)
+    freqs = np.geomspace(0.6 * f1, 3.0 * f1, 600)
+    holes = [{"label": "h1", "role": "finger",
+              "x_m": ob.ideal_cone_hole_x(si, 600.0),
+              "radius_m": 0.004, "chimney_m": 0.002}]
+    rows = ob.ow_hole_rows(holes)
+    chart = [["label", "closed", "open"], ["h1", "x", "o"]]
+
+    def diff(flags, hs, kw):
+        ft = ob._lowest_peak_hz(freqs, ob._tmm_impedance(geo, freqs, hs, flags))
+        r = ImpedanceComputation(freqs, geo, temperature=ob.TEMPERATURE_C,
+                                 source_location="entrance", **kw)
+        fo = ob._lowest_peak_hz(freqs, np.asarray(r.impedance))
+        return 1200.0 * math.log2(ft / fo)
+
+    base = diff([], [], {})
+    for note, flags in (("closed", [False]), ("open", [True])):
+        d = diff(flags, holes,
+                 {"holes_valves": rows, "fingering_chart": chart, "note": note})
+        assert abs(d - base) < 1.5, (note, d, base)
+
+
+def test_open_hole_raises_chimney_lowers_width_raises():
+    """**4-B.2c が使うつまみが 3 本とも効いていること**（向きの拘束）。
+
+    開けると上がる／チムニーを足すと下がる／太くすると上がる。どれか 1 本でも
+    効かなければ 2c は解けない。値ではなく向きだけを固定する。
+    """
+    comp, base, _n = _body("alto")
+    solver, holes = comp._solver(base)
+    closed = solver.scale()[0]["freq"]
+    one_open = solver.scale()[1]["freq"]
+    assert one_open > closed * 1.01                          # 開けると上がる
+    taller = solver.scale(comp._shifted(holes, d_chimney_mm=2.0))[1]["freq"]
+    assert taller < one_open                                 # チムニーで下がる
+    wider = solver.scale(comp._shifted(holes, d_dia_mm=2.0))[1]["freq"]
+    assert wider > one_open                                  # 太いと上がる
+
+
+def test_zeroth_order_placement_is_flat_and_by_how_much():
+    """0 次配置の残差を記録値に固定する。**2c が潰す量そのもの。**
+
+    向きは 3 サイズとも**低い側**（有限径の穴は完全な開口端ではなく、しかも
+    ベル寄りの開孔列が実効長を伸ばす）。ここが正になったら物理ではなく実装の
+    バグを疑うこと。
+    """
+    for tid in SIZES:
+        comp, base, _n = _body(tid)
+        rows = comp._solver(base)[0].scale()
+        assert abs(rows[0]["cents"]) < 3.0, (tid, rows[0])   # 全閉は物差しどおり
+        worst = min(r["cents"] for r in rows)
+        assert worst == pytest.approx(ZEROTH_ORDER_WORST_CENTS[tid], abs=8.0), tid
+        assert all(r["cents"] < 0.0 for r in rows[1:]), tid
+
+
+def test_hole_chimney_is_measured_from_the_bore_not_from_the_outside():
+    """音響のチムニー長が**壁の厚みを含む**こと（二重計上・置き去りの検出）。
+
+    `hole_chimney` は外面からの立ち上がりで、音響のチムニー長ではない。
+    肉厚を動かしたときに音響が黙って置き去りになる経路が無いことを見る。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    comp, base, n = _body("alto")
+    si = comp.size_info
+    s = bpf.hole_layout(base, si, n)[0]["s_mm"]
+    c0 = bpf.hole_chimney_mm(s, base, si, n)
+    assert c0 == pytest.approx(base["wall_thickness"] + base["hole_chimney"], abs=1e-6)
+    thick = dict(base, wall_thickness=base["wall_thickness"] + 1.0)
+    assert bpf.hole_chimney_mm(s, thick, si, n) == pytest.approx(c0 + 1.0, abs=1e-6)
+    tall = dict(base, hole_chimney=base["hole_chimney"] + 2.0)
+    assert bpf.hole_chimney_mm(s, tall, si, n) == pytest.approx(c0 + 2.0, abs=1e-6)
+
+
+def test_hole_span_is_set_by_the_interval_not_by_the_layout():
+    """**指孔のスパンは音程で決まる。穴を寄せることはできない。**
+
+    全閉から 1 オクターブ上までの位置比はボア形に依らず f_高/f_低 そのもので、
+    頂点から測った管の 1 − 2^(-10/12) = 44.1% にあたる。だから「届かない」は
+    配置の失敗ではなく**このサイズでキーレス全音階が成立しないという結論**。
+    カードがそう言うことを、数字の側から固定する。
+    """
+    from saxsketch.acoustics import volume as ac_volume
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        comp, base, n = _body(tid)
+        si = comp.size_info
+        span = bpf.hole_span_mm(base, si, n)
+        assert span == pytest.approx(HOLE_SPAN_MM[tid], rel=0.02), tid
+        apex = ac_volume.missing_cone(si)["apex_distance_mm"]
+        lowest = max(h["s_mm"] for h in bpf.hole_layout(base, si, n)
+                     if h["role"] == "finger")
+        assert span / (apex + lowest) == pytest.approx(
+            1.0 - 2.0 ** (-10.0 / 12.0), rel=0.01), tid
+        assert span > bpf.HAND_SPAN_MM, tid                  # 3 サイズとも届かない
+        assert comp._reach_card(base)["big"] == "届きません", tid
+
+
+def test_body_hole_layout_errors_instead_of_clamping():
+    """成立しない穴の組は**理由を返して弾く**（黙ってクランプしない）。"""
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    comp, base, _n = _body("alto")
+    assert comp.params_error(base) is None
+    # 管を詰めるとベル寄りの穴が外へ出る（ボウは**別の理由**で先に弾かれるので
+    # ストレートにして切り分ける）
+    err = comp.params_error(dict(base, body_arc_length=400.0, bow_angle=0.0))
+    assert err is not None and "管の外" in err
+    # 親指孔を指孔にぶつける
+    err = comp.params_error(dict(base, thumb_offset=0.0))
+    assert err is not None and "重なります" in err
+    # 穴がその位置のボアより太い（ソプラノの上の方は細い）
+    comp_s, ps, ns = _body("soprano")
+    top = min(h["s_mm"] for h in bpf.hole_layout(ps, comp_s.size_info, ns))
+    r_bore = bpf.wall_inner_radius_at(top, ps, comp_s.size_info, ns)
+    err = comp_s.params_error(dict(ps, hole_dia=2.0 * r_bore + 1.0))
+    assert err is not None and "ボア径" in err
+
+
+def test_body_without_holes_touches_no_boolean():
+    """穴が 0 本のとき、ソリッドに**手を触れない**こと。
+
+    `finger_holes=0` かつ親指孔 off は 4-B.2a の形そのもの。ここで空の融合や
+    空の差分を回すと、ブーリアンの費用と壊れ方だけが増える。
+    """
+    comp, _p, _n = _body("alto")
+    p0 = _body("alto", finger_holes=0, thumb_vent="off")[1]
+    sentinel = object()
+    assert comp._apply_holes(sentinel, p0) is sentinel
+    assert [c["title"] for c in comp.simulate(p0)["cards"]] == [
+        "ネック接続", "円錐リーチ（音響は未接続）", "印刷・肉厚・気密"]
+
+
+def test_body_holes_are_actually_bored():
+    """穴が実際にソリッドから材料を抜いていること（ストレートで軽く回す）。"""
+    comp, p, _n = _body("soprano")
+    holed = comp.build(p)
+    assert len(holed.solids()) == 1
+    plain = comp.build(dict(p, finger_holes=0, thumb_vent="off"))
+    assert plain.volume > holed.volume + 100.0               # 8 穴ぶん減っている
+
+
+def test_scale_reuses_the_span_matrices():
+    """運指・穴径・チムニーを振っても**区間行列は 1 回しか作らない**こと。
+
+    ここが壊れると音階カードが `simulate` の予算（50ms）を割る。実測で区間行列が
+    費用のほぼ全部（アルト既定で 557 スライス × 400 周波数）。
+    """
+    from saxsketch.acoustics import openwind_bridge as ob
+    comp, base, _n = _body("alto")
+    calls = {"n": 0}
+    orig = ob._span_matrix
+
+    def counted(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    ob._span_matrix = counted
+    try:
+        solver, holes = comp._solver(base)
+        after_init = calls["n"]
+        solver.scale()
+        solver.scale(comp._shifted(holes, d_chimney_mm=1.0))
+        solver.scale(comp._shifted(holes, d_dia_mm=1.0))
+    finally:
+        ob._span_matrix = orig
+    assert after_init == len(holes) + 1                      # 穴の数 + 1 区間
+    assert calls["n"] == after_init                          # そのあと 1 回も作らない
+
+
+def test_hole_variant_with_a_moved_hole_is_refused():
+    """**位置を変えた変種は使い回せない**ことを明示的に拒むこと。
+
+    区間の切れ目が変わるので、黙って古い区間行列を使うと嘘の答えが出る。
+    """
+    comp, base, _n = _body("alto")
+    solver, holes = comp._solver(base)
+    moved = [dict(h) for h in holes]
+    moved[0]["x_m"] += 0.01
+    with pytest.raises(ValueError):
+        solver.scale(moved)
+
+
+def test_chimney_rises_from_the_bore_side_not_from_the_outer_surface():
+    """チムニーの円柱が**ボア内面から**始まること。
+
+    外面に接する平面から立てると、管が曲面なので底の円盤は接点以外どこも管の
+    外に浮く（サジッタは既定アルトで 0.36〜0.62mm）。融合が接触だけになり、
+    **掃引でボウの上の 2 本が実際にちぎれてソリッドが 3 個になった**
+    （アルト・チムニー 8mm）。内面から立てれば必ず肉の中で重なり、しかも
+    `x ≥ inner_r` の円柱は気柱に入らない（軸から外れるほど中心線からの距離は
+    伸びるため）。
+
+    **ここで見るのは規則だけ。** 実体（ソリッドが 1 個か）はビルドが 13 秒
+    かかるので `cad/body/sweep_holes.py build alto` の仕事。
+    """
+    import math
+
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    from saxsketch.instruments.saxophone.components.body import CHIMNEY_RIM_MM
+    comp, base, n = _body("alto", hole_chimney=8.0)
+    si = comp.size_info
+    for hp in bpf.hole_placement(base, si, n):
+        assert hp["chimney_base_r"] == pytest.approx(hp["inner_r"], abs=1e-9)
+        # 天面の高さは「外面 + 立ち上がり」のまま（内面から立てても外へは伸びない）
+        assert hp["chimney_base_r"] + hp["chimney_len"] == pytest.approx(
+            hp["outer_r"] + hp["chimney_height"], abs=1e-9)
+        # 底の円盤の縁は気柱の外（＝肉の中）にある
+        rim = hp["dia"] / 2.0 + CHIMNEY_RIM_MM
+        assert math.hypot(hp["chimney_base_r"], rim) >= hp["inner_r"]
+        # 肉を跨いで重なっている（接触だけではない）
+        assert hp["chimney_base_r"] < hp["outer_r"]
+
+
+#: 両手（200mm）に収まる指孔の本数。**設計値ではなくサイズと音階の性質。**
+#: 全閉を入れると soprano 5 音 / alto 4 音 / tenor 3 音まで。
+HOLES_THAT_FIT = {"soprano": 4, "alto": 3, "tenor": 2}
+
+
+def test_how_many_holes_fit_in_two_hands():
+    """「段数を減らせ」と言うなら**何段まで減らせるか**を数字で出すこと。
+
+    スパンは音程だけで決まるので、これは設計値ではなくサイズと音階の並びの性質。
+    4-B.2c はここから始まる（位置を解く前に、解ける本数が決まっている）。
+    """
+    from saxsketch.instruments.saxophone.components import body_profiles as bpf
+    for tid in SIZES:
+        comp, base, n = _body(tid)
+        si = comp.size_info
+        fit = bpf.max_finger_holes_in_span(si)
+        assert fit == HOLES_THAT_FIT[tid], tid
+        # その本数なら実際に収まり、1 本足すと溢れる
+        assert bpf.hole_span_mm(dict(base, finger_holes=fit), si, n) <= bpf.HAND_SPAN_MM
+        assert bpf.hole_span_mm(dict(base, finger_holes=fit + 1), si, n) > bpf.HAND_SPAN_MM
+        # カードにも出る
+        rows = dict(tuple(r) for r in comp._reach_card(base)["rows"])
+        assert f"{fit} 本" in rows[f"{bpf.HAND_SPAN_MM:.0f}mm に収まる本数"], tid

@@ -42,6 +42,9 @@ export interface MouthpieceSimulation {
 export interface CardSimulation {
   kind: "reed" | "ligature" | "neck" | "body";
   cards: SimCard[];
+  /** インピーダンス曲線を出せるか。**UI に部品名を書かない**ため、
+   *  「どの部品が音響を持つか」はサーバ（コンポーネント）が宣言する。 */
+  has_impedance?: boolean;
   /** リードのみ。音プレビュー（印象合成）用 */
   harmonics?: Harmonics;
 }

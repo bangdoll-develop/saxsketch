@@ -15,8 +15,12 @@
 代償は姿勢を調整できないこと（実機のネックは回して銜え角を合わせる）と、壊れたときに
 全部作り直しになること。
 
-**正直な範囲（4-B.2a）**:
-  - トーンホールは無い（4-B.2b/2c）。いま出るのは管とベルだけ。
+**正直な範囲（4-B.2b）**:
+  - **側孔は付いたが、位置は解いていない。** 0 次規則（開孔位置＝その音が鳴る
+    円錐長）で置いた暫定値で、実測でも最適解でもない。実際に解いた共鳴が各音で
+    何セント外れるかは音階カードが出す —— それが 4-B.2c のソルバが潰す残差。
+  - 運指表は「全閉 → ベル寄りから順に開ける」だけ。フォーク運指は無い。
+  - 親指孔は**胴側のオクターブベントの幾何だけ**で、キー機構は無い（4-B.4）。
   - **ベルのフレアは 3 サイズとも未実測**。形も出口径も仮定で、実物照合は無い。
     だから**音響へ接続していない** —— 接続すると全閉の第1共鳴が +38〜+106 セント
     動く（K.0 の測定）。共鳴管は今までどおり校正済みの直線円錐のまま。
@@ -26,6 +30,7 @@
 """
 from __future__ import annotations
 
+from saxsketch.acoustics import toneholes
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 
@@ -89,6 +94,25 @@ def _specs(t: dict) -> list[ParamSpec]:
           "開口の内径。円錐終端より細くはできない（実物のベルは細らない）"),
         f("flare_power", "フレアの鋭さ", "ベル", "-", 1.0, 6.0, 0.1,
           "大きいほど終端近くで急に開く。1で直線的に広がる"),
+        # --- 側孔 ---
+        ParamSpec(key="finger_holes", label="指孔の本数", category="側孔",
+                  type="int", unit="本", default=t["finger_holes"],
+                  min=0, max=len(toneholes.SCALE_STEPS), step=1,
+                  effect=("全閉から順に開けて音階を作る（リコーダと同じ並び）。"
+                          "0 で穴なし＝管だけ。上限は音階の段数で決まる")),
+        f("hole_dia", "指孔径", "側孔", "mm", 4.0, 14.0, 0.1,
+          "太いほど開けたときの音が高く（＝完全な開口端に近く）なる。"
+          f"指でふさげる実用上限は φ{bpf.FINGER_PAD_DIA_MM:.0f} 前後"),
+        f("hole_chimney", "チムニー高さ", "側孔", "mm", 0.0, 8.0, 0.1,
+          "外面からの立ち上がり。高いほど開孔音が下がる。**位置を動かせない"
+          "キーレスで音程を合わせる主なつまみ**（4-B.2c）"),
+        onoff("thumb_vent", "親指孔", "側孔",
+              "胴側のオクターブベント（左親指）。実機は 1 つのキーでネック側と"
+              "切り替える。音階の段ではないので運指表では常に閉じたまま扱う"),
+        f("thumb_offset", "親指孔オフセット", "側孔", "mm", 0.0, 60.0, 0.5,
+          "オクターブ（+12半音）の位置から上流へ。指孔の本数には依らない", adv=True),
+        f("thumb_dia", "親指孔径", "側孔", "mm", 2.0, 8.0, 0.1,
+          "レジスタ用なので指孔より細い", adv=True),
         # --- 製造 ---
         f("min_wall", "最小肉厚（検査）", "製造", "mm", 1.0, 4.0, 0.1,
           "印刷強度の下限。肉厚がこれ未満で警告", adv=True),
@@ -105,6 +129,16 @@ def _specs(t: dict) -> list[ParamSpec]:
 #: 円錐リーチ（スロート→ベル出口の弧長）が目標からこれ以上ずれたら警告 [mm]。
 #: 20mm はアルトで約 31 セントに当たる。半音（100 セント）の 1/3。
 CONE_REACH_TOL_MM = 20.0
+
+#: チムニーの縁の肉 [mm]（穴の縁から外周まで）。ネックのベント（`neck.py`）が
+#: パッド座ありで 1.6 / なしで 0.9 を使っているのに合わせ、キーレスの指孔は
+#: パッドが載らないので 0.9 側を採る。
+CHIMNEY_RIM_MM = 0.9
+
+#: 音階のずれがこれ以内なら ok 扱い [セント]。**調律の保証ではない** ——
+#: 4-B.2b の穴位置は 0 次規則の暫定値なので、ここに出るのは
+#: 「4-B.2c のソルバが潰す残差」。
+SCALE_TOL_CENTS = 10.0
 
 
 class BodyComponent(Component):
@@ -163,14 +197,192 @@ class BodyComponent(Component):
         else:
             outer = loft_3d_rings(bpf.outer_rings(p, si, n))
             bore = loft_3d_rings(bpf.bore_rings(p, si, n))
-        return outer - bore
+        return self._apply_holes(outer - bore, p)
+
+    def _apply_holes(self, part, params: dict):
+        """側孔を開ける。**融合も差分も 1 回ずつしかやらない。**
+
+        曲げのある管のブーリアンは 1 回 7〜17 秒かかり、7〜8 回積むと WSL2 の
+        VM ごと落ちる（`cad/body/README.md`）。穴ごとに `part - cyl` を回すと
+        本数だけブーリアンが増えるので、チムニーは全部まとめて 1 回の和、
+        貫通穴は全部まとめて 1 回の差にする（build123d の `+` / `-` は
+        Shape の列を受ける）。
+        """
+        from build123d import Plane, Solid, Vector
+
+        pls = bpf.hole_placement(params, self.size_info, self._neck())
+        if not pls:
+            return part
+        chimneys, cuts = [], []
+        for hp in pls:
+            c = Vector(*hp["center"])
+            ax = Vector(*hp["axis"])
+            r = hp["dia"] / 2.0
+            if hp["chimney_height"] > 0.0:
+                # **ボア内面から立ち上げる。** 外面に接する平面から立てると、
+                # 管が曲面なので底の円盤が接点以外どこも管の外に浮き、融合が
+                # 接触だけになって**ちぎれる**（掃引でボウの上の 2 本が実際に
+                # 外れ、ソリッドが 3 個になった）。内面から立てれば必ず肉の中で
+                # 重なる。ボアへはみ出す心配は無い —— 軸から外れるほど中心線
+                # からの距離は伸びるので、`x ≥ inner_r` の円柱は気柱に入らない。
+                base = c + ax * hp["chimney_base_r"]
+                chimneys.append(Solid.make_cylinder(
+                    r + CHIMNEY_RIM_MM, hp["chimney_len"],
+                    Plane(origin=base, z_dir=ax)))
+            # 中心線から外側へ。反対側の壁には届かない長さに留め、単一孔にする
+            cuts.append(Solid.make_cylinder(
+                r, hp["cut_len"], Plane(origin=c, z_dir=ax)))
+        if chimneys:
+            part = part + chimneys
+        return part - cuts
 
     # ------------------------------------------------------------ シミュレーション
 
     def simulate(self, params: dict) -> dict:
-        return {"kind": "body",
-                "cards": [self._joint_card(params), self._cone_card(params),
-                          self._print_card(params)]}
+        cards = [self._joint_card(params), self._cone_card(params)]
+        if bpf.is_holed(params):
+            cards.append(self._scale_card(params))
+            cards.append(self._reach_card(params))
+        cards.append(self._print_card(params))
+        # 側孔が付いて初めて「管体のインピーダンス」に意味が出る（穴が無ければ
+        # マウスピース側で見ているのと同じ直線円錐）。UI に部品名を書かないため、
+        # 曲線を出せるかどうかはここが宣言する。
+        return {"kind": "body", "cards": cards,
+                "has_impedance": bpf.is_holed(params)}
+
+    # ------------------------------------------------------------ 側孔（4-B.2b）
+
+    def _ideal_geometry(self) -> list[list[float]]:
+        """側孔を載せる物差し（**理想マウスピースの円錐**）。
+
+        管体は `REQUIRES_REF = "neck"` の 1 段しか参照を持たず、マウスピースの
+        パラメータを知らない。だから「このマウスピースが完璧だったら」の円錐
+        （`ideal_cone_geometry`、Tier1 が既に使っている物差し）の上で穴を評価する。
+        全閉の第1共鳴は校正により目標音そのものになるので、音階カードに残るのは
+        **穴だけの寄与**になる —— マウスピース由来のずれは混ざらない。
+
+        **ベルは載せない。** 4-B.2a の判断のまま（フレアは 3 サイズとも未実測で、
+        接続すると全閉の第1共鳴が +38〜+106 セント動く）。
+        """
+        from saxsketch.acoustics import openwind_bridge as ob
+        return ob.ideal_cone_geometry(self.size_info, use_openwind=False)
+
+    def _solver(self, params: dict):
+        from saxsketch.acoustics import openwind_bridge as ob
+        holes = bpf.acoustic_holes(params, self.size_info, self._neck())
+        return ob.HoleSolver(self._ideal_geometry(), holes,
+                             float(self.size_info["low_note_sounding_hz"]),
+                             toneholes.scale_steps(int(params["finger_holes"]))), holes
+
+    @staticmethod
+    def _shifted(holes: list[dict], d_dia_mm: float = 0.0,
+                 d_chimney_mm: float = 0.0) -> list[dict]:
+        """穴の**位置はそのまま**に径／チムニーだけ振った変種（感度用）。
+
+        位置が同じなので `HoleSolver` の区間行列をそのまま使える ＝ 感度 2 本が
+        ただで出る。
+        """
+        return [dict(h, radius_m=h["radius_m"] + d_dia_mm / 2000.0,
+                     chimney_m=h["chimney_m"] + d_chimney_mm / 1000.0)
+                for h in holes]
+
+    def _scale_card(self, params: dict) -> dict:
+        """全閉から順に開けたときの音階と、4-B.2c が使うつまみの効き。"""
+        solver, holes = self._solver(params)
+        rows_scale = solver.scale()
+        rows = [[f"{r['name']}（目標 {r['target_note']}）",
+                 f"{r['freq']:.1f} Hz  {r['cents']:+.0f} c"] for r in rows_scale]
+        opened = [r for r in rows_scale if r["name"] != "全閉"]
+        if opened:
+            base = [r["cents"] for r in opened]
+            for label, kw in (("チムニー +1mm", {"d_chimney_mm": 1.0}),
+                              ("指孔径 +1mm", {"d_dia_mm": 1.0})):
+                got = solver.scale(self._shifted(holes, **kw))
+                d = [g["cents"] - b for g, b in
+                     zip([g for g in got if g["name"] != "全閉"], base)]
+                rows.append([label,
+                             f"平均 {sum(d) / len(d):+.1f} c "
+                             f"（{min(d):+.1f}〜{max(d):+.1f}）"])
+        worst = max(rows_scale, key=lambda r: abs(r["cents"]))
+        note = ("**調律の保証ではありません。** 4-B.2b の穴位置は 0 次規則"
+                "（開孔位置＝その音が鳴る円錐長）で置いた**暫定値**で、実測でも解でも"
+                "ありません。有限径の穴は完全な開口端ではないので、実際の共鳴は"
+                "0 次の予測より低く出ます。ここに出ているセントは「設計が外れている量」"
+                "ではなく、**4-B.2c のソルバが潰す残差**そのものです。"
+                "評価は理想マウスピース＋直線円錐（ベル未接続）の上で、"
+                "TMM 固定・全閉が目標音ちょうどになる物差しで行っています。")
+        if abs(worst["cents"]) <= SCALE_TOL_CENTS:
+            return {"title": "音階（側孔・暫定配置）",
+                    "big": f"最大 {worst['cents']:+.0f} c", "status": "ok",
+                    "rows": rows, "advice": note}
+        return {"title": "音階（側孔・暫定配置）",
+                "big": f"最大 {worst['cents']:+.0f} c（{worst['name']}）",
+                "status": "warn", "rows": rows,
+                "advice": (f"0 次配置のままだと {worst['name']} が "
+                           f"{worst['cents']:+.0f} セント外れます。"
+                           f"チムニーと穴径の効きは上の 2 行です。 ") + note}
+
+    def _reach_card(self, params: dict) -> dict:
+        """指が届くか。**キーレスで最初に効く拘束はここ。**"""
+        p, si, n = params, self.size_info, self._neck()
+        holes = bpf.hole_layout(p, si, n)
+        fingers = [h for h in holes if h["role"] == "finger"]
+        span = bpf.hole_span_mm(p, si, n)
+        zones: dict[str, int] = {}
+        for h in holes:
+            z = bpf.hole_zone(h["s_mm"], p, n)
+            zones[z] = zones.get(z, 0) + 1
+        rows = [
+            ["指孔の本数", f"{len(fingers)} 本"
+             + ("＋親指孔" if len(holes) > len(fingers) else "")],
+            ["指孔の弧長スパン", f"{span:.0f} mm"],
+            ["両手の実用スパン目安", f"{bpf.HAND_SPAN_MM:.0f} mm"],
+            ["載る区間", " / ".join(f"{k} {v}本" for k, v in sorted(zones.items()))],
+            ["指孔径 / ふさげる目安",
+             f"φ{p['hole_dia']:.1f} / φ{bpf.FINGER_PAD_DIA_MM:.0f} mm"],
+        ]
+        if fingers:
+            rows.insert(1, ["最上 → 最下（スロートから）",
+                            f"{min(h['s_mm'] for h in fingers):.0f} → "
+                            f"{max(h['s_mm'] for h in fingers):.0f} mm"])
+        common = ("スパンは音程で決まります —— 実効長が 1/f に比例する管"
+                  "（円錐も円筒もそう）では、全閉から 1 オクターブ上までの位置比は"
+                  "`f_高/f_低` そのもので、頂点から測った管の 44.1% にあたります。"
+                  "だから**「穴を寄せる」ことはできません**。"
+                  f"目安の {bpf.HAND_SPAN_MM:.0f}mm はリコーダ（約200）と"
+                  "クラリネット（7孔で約230）の実測から採った値で、物理ではありません。")
+        if float(p["hole_dia"]) > bpf.FINGER_PAD_DIA_MM and fingers:
+            rows.append(["注意", "指では塞ぎきれない太さです"])
+        fit = bpf.max_finger_holes_in_span(si)
+        rows.append([f"{bpf.HAND_SPAN_MM:.0f}mm に収まる本数",
+                     f"{fit} 本（＝全閉を入れて {fit + 1} 音）"])
+        if span > bpf.HAND_SPAN_MM:
+            return {"title": "指の届く範囲", "big": "届きません", "status": "warn",
+                    "rows": rows,
+                    "advice": (f"指孔が {span:.0f}mm に広がっており、両手では"
+                               f"押さえられません（目安の {span / bpf.HAND_SPAN_MM:.1f} 倍）。"
+                               "**これは配置の失敗ではなく、このサイズでキーレス全音階が"
+                               "成立しないという結論です。** 逃げ道は 3 つ ——"
+                               f"(1) 音階の段数を減らす（このサイズなら {fit} 孔まで）、"
+                               "(2) フォーク運指で穴を減らす、"
+                               "(3) もっと小さい楽器にする。"
+                               "**キー機構で延ばす**のは 4-B.4 の話で、そうすると"
+                               "「キーレス」ではなくなります。 ") + common}
+        return {"title": "指の届く範囲", "big": "届きます", "status": "ok",
+                "rows": rows,
+                "advice": ("指孔が両手のスパンに収まります。ボウやベルに載った穴は"
+                           "面が傾くので、実物では押さえにくいことがあります。 ") + common}
+
+    def impedance(self, params: dict) -> dict:
+        """全閉のインピーダンス曲線（理想マウスピース＋側孔）。
+
+        OpenWind があればそちらで解く（`holes_valves` を渡す）。無ければ TMM。
+        """
+        from saxsketch.acoustics import openwind_bridge as ob
+        return ob.impedance(None, self.size_info,
+                            geometry=self._ideal_geometry(),
+                            holes=bpf.acoustic_holes(params, self.size_info,
+                                                     self._neck()))
 
     def _joint_card(self, params: dict) -> dict:
         """ネックとの接続。一体型はマウスピース適合まで、別体は受け口の噛み合い。"""
@@ -323,7 +535,9 @@ class BodyComponent(Component):
     # ------------------------------------------------------------ 領域 / BOM / 仕様書
 
     def regions(self, params: dict) -> dict:
-        return bpf.param_regions(params, self._neck())
+        reg = bpf.param_regions(params, self._neck())
+        reg.update(bpf.hole_regions(params, self.size_info, self._neck()))
+        return reg
 
     def bom(self, params: dict) -> list[dict]:
         p, n = params, self._neck()
@@ -336,7 +550,9 @@ class BodyComponent(Component):
             {"type": "3Dプリント", "name": f"{kind}（{size_label}）", "qty": 1,
              "material": MAT_LABELS.get(p["material"], p["material"]),
              "note": (f"材料体積 約{vol_cc:.0f}cc・弧長 {arc:.0f}mm。"
-                      f"ベッド目安では {segs} 分割（分割は 4-B.3）")},
+                      f"ベッド目安では {segs} 分割（分割は 4-B.3）"
+                      + (f"。側孔 {len(bpf.hole_layout(p, self.size_info, n))} 個"
+                         f"（一体造形・後加工なし）" if bpf.is_holed(p) else ""))},
         ]
         if bpf.is_integrated(p):
             rows.append({"type": "市販品", "name": "テノン コルクストリップ", "qty": 1,
@@ -360,6 +576,7 @@ class BodyComponent(Component):
     def spec_extras(self, params: dict) -> dict:
         p, n = params, self._neck()
         vol_cc = bpf.body_volume_mm3(p, self.size_info, n) / 1000.0
+        holes = bpf.hole_layout(p, self.size_info, n)
         dims = [
             ("ネックの繋ぎ方", "一体（1部品）" if bpf.is_integrated(p) else "別体（テノン）"),
             ("部品の弧長", f"{bpf.part_arc(p, n):.0f} mm"),
@@ -372,5 +589,13 @@ class BodyComponent(Component):
             ("肉厚", f"{p['wall_thickness']:.1f} mm"),
             ("材料体積", f"{vol_cc:.0f} cc"),
         ]
+        if holes:
+            fingers = [h for h in holes if h["role"] == "finger"]
+            dims.append(("側孔", f"指孔 {len(fingers)} 本 φ{p['hole_dia']:.1f} / "
+                                 f"チムニー {p['hole_chimney']:.1f} mm"
+                                 + ("＋親指孔" if len(holes) > len(fingers) else "")))
+            dims.append(("側孔の弧長（スロートから）",
+                         " / ".join(f"{h['s_mm']:.0f}" for h in holes) + " mm"
+                         + "（0 次規則の暫定配置）"))
         return {"dimensions": dims,
                 "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}
