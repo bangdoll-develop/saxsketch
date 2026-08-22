@@ -23,9 +23,13 @@ function Card({ card }: { card: SimCard }) {
   );
 }
 
-export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
-  sim: Simulation; compare?: Tier2 | null; paramsKey: string; onGoalSeek: () => void;
+export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek }: {
+  sim: Simulation; setCard?: SimCard | null;
+  compare?: Tier2 | null; paramsKey: string; onGoalSeek: () => void;
 }) {
+  // セットの適合は**どの部品を見ていても同じ**（3 部品が揃わないと決まらない量）
+  // なので、部品ごとのカードより先に出す。
+  const setCardEl = setCard ? <Card card={setCard} /> : null;
   if (sim.kind !== "mouthpiece") {
     // リード/リガチャー/ネック/管体: 汎用カード。リードのみ音プレビューを出す
     // （ゴールシークはマウスピース設計の機能なので出さない）。
@@ -34,6 +38,7 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
     // ことになる（断面タブを 404 で出し分けているのと同じ約束）。
     return (
       <div>
+        {setCardEl}
         {sim.cards.map((c) => <Card key={c.title} card={c} />)}
         {sim.has_impedance && <ImpedancePanel paramsKey={paramsKey} />}
         {sim.harmonics && <SoundPreview harmonics={sim.harmonics} />}
@@ -45,6 +50,7 @@ export default function SimPanel({ sim, compare, paramsKey, onGoalSeek }: {
   const sugg = sim.sensitivity?.suggestions ?? {};
   return (
     <div>
+      {setCardEl}
       <div className="simcard">
         {/* 主指標はセントではなく「合う挿し込み量」。コーク挿入深さは寸法ではなく
             演奏者が抜き差しするチューニングそのものなので、固定した状態のセントを

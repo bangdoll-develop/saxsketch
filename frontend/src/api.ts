@@ -57,6 +57,10 @@ export interface ProjectData {
   manual_edit: ManualEdit;
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
+  /** セット情報（単体プロジェクトでは null。UI は部品タブの有無をこれで決める） */
+  set: SetInfo | null;
+  /** 部品どうしでしか出せない量の判定。単体では null */
+  set_card: SimCard | null;
   survey: SurveyState;
   /** 旧プロジェクトを開いたときのパラメータ変換報告（黙って値を変えないため） */
   notices?: string[];
@@ -98,8 +102,36 @@ export interface ExternalLoad {
   notes: string[];
   align: AlignInfo;
 }
+/** セットの構成部品 1 行。`present=false` は「まだ足していない部品」 */
+export interface SetMember {
+  component_id: string; label: string; name: string | null;
+  present: boolean; required: boolean; master: boolean;
+}
+export interface SetInfo {
+  set_id: string | null; label: string;
+  /** 実際に組になっているか。false = 単体だが部品を足せる状態 */
+  is_set: boolean;
+  active: string;
+  members: SetMember[];
+  /** まだ居ない部品のID（「＋追加」に出す） */
+  addable: string[];
+}
+/** 合わせ表示の配置 1 部品ぶん。**編集中の部品を基準にした相対変換**で、
+ *  `rotate_x_deg` → `origin` の順に適用する。 */
+export interface PlacedPart {
+  component_id: string; label: string;
+  origin: [number, number, number]; rotate_x_deg: number; hash: string;
+}
+export interface SetPlacement {
+  active: string | null;
+  parts: PlacedPart[];
+  /** 置き場所を宣言していない部品の表示名（合わせ表示に出せない） */
+  unplaced: string[];
+}
 export interface ReferenceInfo {
   component_id: string; label: string; source: string | null;
+  /** セットの兄弟メンバーから束ねた参照か（true なら設計中の値に追従する） */
+  live: boolean;
   dims: [string, string][];
   /** 参照の形をそのまま重ねられるか（座標系が一致するコンポーネントだけ true） */
   overlay: boolean;
@@ -110,6 +142,12 @@ export interface InstrumentSummary {
   id: string; label: string;
   templates: { id: string; label: string }[];
   components: { id: string; label: string; available: boolean }[];
+  /** セットで組める構成（descriptor の sets）。無い楽器では空配列 */
+  sets: {
+    id: string; label: string;
+    members: { component: string; label: string;
+               required: boolean; master: boolean }[];
+  }[];
 }
 export interface GoalSeekResult {
   proposal: Record<string, number>; current: Record<string, number>;
@@ -197,6 +235,9 @@ export interface Impedance {
 export interface ExportResult {
   out_dir: string; files: Record<string, string>; package: string | null;
   mesh_quality: { watertight: boolean; faces: number; volume_cc: number | null } | null;
+  /** 何を出したか（"set" = 一式、"member" = 編集中の部品だけ） */
+  scope?: "set" | "member";
+  members?: string[];
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -240,6 +281,17 @@ export const api = {
   recent: () => req<string[]>("/api/recent"),
   setReference: (component: string, path: string | null) =>
     req<ProjectData>("/api/project/reference", json({ component, path })),
+  setActive: (component_id: string) =>
+    req<ProjectData>("/api/set/active", json({ component_id })),
+  addMember: (component_id: string) =>
+    req<ProjectData>("/api/set/member/add", json({ component_id })),
+  removeMember: (component_id: string) =>
+    req<ProjectData>("/api/set/member/remove", json({ component_id })),
+  importMember: (path: string) =>
+    req<ProjectData>("/api/set/member/import", json({ path })),
+  exportMember: (component_id: string, path: string) =>
+    req<{ ok: boolean; path: string }>(
+      "/api/set/member/export", json({ component_id, path })),
   survey: () => req<SurveyState>("/api/survey"),
   surveyCommit: (b: { measured: Record<string, number>;
                       measured_size: Record<string, number>; note: string }) =>
@@ -251,6 +303,7 @@ export const api = {
   capabilities: () => req<Capabilities>("/api/capabilities"),
   dialog: (mode: DialogMode, suggested = "") =>
     req<DialogResult>("/api/dialog", json({ mode, suggested })),
+  setPlacement: () => req<SetPlacement>("/api/set/placement"),
   regions: () => req<Record<string, Region>>("/api/model/regions"),
   dimensions: () => req<Dimension[]>("/api/dimensions"),
   /** override を渡すと「もしこの値にしたら」の断面を返す（プロジェクトは変えない）。

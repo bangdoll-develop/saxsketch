@@ -93,10 +93,47 @@ def _acoustics_section(sim: dict) -> str:
     return f"<h2>4. 設計時シミュレーション</h2>\n{blocks}"
 
 
-def spec_html(project_name: str, instrument_label: str, component_label: str,
-              template_label: str, params: dict, specs: list, dimensions: list,
-              bom_rows: list[dict], sim: dict, sections: list[dict],
-              material: str) -> str:
+_STYLE = """
+ body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; margin: 32px; color: #222; }
+ h1 { font-size: 22px; border-bottom: 3px solid #0066cc; padding-bottom: 6px; }
+ h1.part { margin-top: 42px; border-bottom-color: #7fa8d8; }
+ h2 { font-size: 16px; border-left: 5px solid #0066cc; padding-left: 8px; margin-top: 28px; }
+ table { border-collapse: collapse; width: 100%; font-size: 13px; }
+ th, td { border: 1px solid #bbb; padding: 5px 9px; text-align: left; }
+ th { background: #eef4fb; white-space: nowrap; }
+ .meta td { border: none; padding: 2px 12px 2px 0; color: #555; }
+ .note { color: #777; font-size: 12px; }
+ @media print { body { margin: 12mm; } }
+"""
+
+_DATA_SECTION = """<h2>7. 入稿データ</h2>
+<ul>
+ <li>STL: 汎用（全サービス対応）。単位 mm</li>
+ <li>STEP: 精密加工・寸法検証用（ロスレス）</li>
+ <li>3MF: 単位・メタ情報付き（対応サービス向け）</li>
+</ul>"""
+
+
+def _page(title: str, meta: str, body: str) -> str:
+    """自己完結 HTML の外枠。**単体もセットも同じ枠**（体裁が 2 つに割れない）。"""
+    return f"""<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>仕様書 - {title}</title>
+<style>{_STYLE}</style></head><body>
+<h1>製作仕様書　{title}</h1>
+{meta}
+{body}
+</body></html>"""
+
+
+def _member_body(component_label: str, params: dict, specs: list, dimensions: list,
+                 bom_rows: list[dict], sim: dict, sections: list[dict],
+                 material: str, heading: str = "") -> str:
+    """部品 1 つぶんの本文（見出し 1〜6）。
+
+    **単体の仕様書もセットの仕様書もここを通る。** 体裁を 2 か所に書くと、
+    片方だけ直った仕様書が出る。
+    """
     rec = PRINT_RECOMMENDATIONS.get(material, PRINT_RECOMMENDATIONS["resin"])
 
     spec_map = {s.key: s for s in specs}
@@ -121,28 +158,9 @@ def spec_html(project_name: str, instrument_label: str, component_label: str,
     rec_items = "".join(f"<li>{i}</li>\n" for i in rec["items"])
     section_html = "\n".join(f"<h3>{s['title']}</h3>\n{s['svg']}" for s in sections) \
         or '<p class="note">この部品には断面図がありません。</p>'
+    title = f'<h1 class="part">{heading}</h1>\n' if heading else ""
 
-    return f"""<!DOCTYPE html>
-<html lang="ja"><head><meta charset="utf-8">
-<title>仕様書 - {project_name}</title>
-<style>
- body {{ font-family: "Yu Gothic UI", "Meiryo", sans-serif; margin: 32px; color: #222; }}
- h1 {{ font-size: 22px; border-bottom: 3px solid #0066cc; padding-bottom: 6px; }}
- h2 {{ font-size: 16px; border-left: 5px solid #0066cc; padding-left: 8px; margin-top: 28px; }}
- table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
- th, td {{ border: 1px solid #bbb; padding: 5px 9px; text-align: left; }}
- th {{ background: #eef4fb; white-space: nowrap; }}
- .meta td {{ border: none; padding: 2px 12px 2px 0; color: #555; }}
- .note {{ color: #777; font-size: 12px; }}
- @media print {{ body {{ margin: 12mm; }} }}
-</style></head><body>
-<h1>製作仕様書　{project_name}</h1>
-<table class="meta"><tr>
- <td>楽器: {instrument_label}</td><td>コンポーネント: {component_label}</td>
- <td>テンプレート: {template_label}</td><td>発行日: {date.today().isoformat()}</td>
- <td>作成: SaxSketch</td></tr></table>
-
-<h2>1. 主要寸法</h2>
+    return f"""{title}<h2>1. 主要寸法</h2>
 <table>{dim_rows}</table>
 
 <h2>2. 断面図</h2>
@@ -158,14 +176,60 @@ def spec_html(project_name: str, instrument_label: str, component_label: str,
 <table><tr><th>区分</th><th>品名</th><th>数量</th><th>材料</th><th>備考</th></tr>
 {bom_body}</table>
 
-<h2>6. 3Dプリント推奨条件 — {rec['label']}</h2>
+<h2>6. 3Dプリント推奨条件 — {rec['label']}（{component_label}）</h2>
 <ul>{rec_items}</ul>
 <p class="note">※ 口に触れる部品です。材料の食品接触適合性・洗浄を必ず確認してください。</p>
+"""
 
-<h2>7. 入稿データ</h2>
-<ul>
- <li>STL: 汎用（全サービス対応）。単位 mm</li>
- <li>STEP: 精密加工・寸法検証用（ロスレス）</li>
- <li>3MF: 単位・メタ情報付き（対応サービス向け）</li>
-</ul>
-</body></html>"""
+
+def spec_html(project_name: str, instrument_label: str, component_label: str,
+              template_label: str, params: dict, specs: list, dimensions: list,
+              bom_rows: list[dict], sim: dict, sections: list[dict],
+              material: str) -> str:
+    """部品 1 つの仕様書（従来どおり）。"""
+    meta = f"""<table class="meta"><tr>
+ <td>楽器: {instrument_label}</td><td>コンポーネント: {component_label}</td>
+ <td>テンプレート: {template_label}</td><td>発行日: {date.today().isoformat()}</td>
+ <td>作成: SaxSketch</td></tr></table>"""
+    body = _member_body(component_label, params, specs, dimensions, bom_rows,
+                        sim, sections, material) + "\n" + _DATA_SECTION
+    return _page(project_name, meta, body)
+
+
+def _card_table(card: dict) -> str:
+    rows = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>\n" for k, v in card["rows"])
+    big = f"<p><b>{card['big']}</b></p>\n" if card.get("big") else ""
+    return (f"<h3>{card['title']}</h3>\n{big}<table>{rows}</table>\n"
+            f'<p class="note">{card.get("advice", "")}</p>')
+
+
+def spec_html_set(set_name: str, instrument_label: str, template_label: str,
+                  members: list[dict], set_card: dict | None) -> str:
+    """セット 1 式ぶんの仕様書。部品ごとの本文を 1 枚に並べる。
+
+    Args:
+        members: `_member_body` の引数一式に `label`（部品の種類名）・`name`
+                 （プロジェクト上の名前）・`dir`（出力先サブフォルダ）を足した dict の列。
+        set_card: 部品どうしの適合カード（`set_check.set_card`）。無ければ省く。
+    """
+    parts = "、".join(m["label"] for m in members)
+    meta = f"""<table class="meta"><tr>
+ <td>楽器: {instrument_label}</td><td>構成: {parts}</td>
+ <td>テンプレート: {template_label}</td><td>発行日: {date.today().isoformat()}</td>
+ <td>作成: SaxSketch</td></tr></table>"""
+
+    listing = "".join(f"<tr><th>{m['label']}</th><td>{m['name']}</td>"
+                      f"<td>{m['dir']}/model.*</td></tr>" for m in members)
+    body = f"<h2>0. 同梱の構成</h2>\n<table>{listing}</table>\n"
+    if set_card:
+        body += f"<h2>0-2. セットの適合（部品どうし）</h2>\n{_card_table(set_card)}\n"
+    for m in members:
+        body += _member_body(
+            m["label"], m["params"], m["specs"], m["dimensions"], m["bom_rows"],
+            m["sim"], m["sections"], m["material"],
+            heading=f"{m['label']} — {m['name']}") + "\n"
+    body += _DATA_SECTION + (
+        '\n<p class="note">部品ごとに '
+        + "、".join(f"{m['dir']}/" for m in members)
+        + " のフォルダへ分かれています。</p>")
+    return _page(set_name, meta, body)

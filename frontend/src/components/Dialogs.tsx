@@ -25,6 +25,10 @@ export function NewProjectDialog({ onCreated, onClose, allowClose }: {
   const [instrumentId, setInstrumentId] = useState("saxophone");
   const [templateId, setTemplateId] = useState("alto");
   const [componentId, setComponentId] = useState("mouthpiece");
+  // セットで作るか単体で作るか。**既定はセット** —— 一式を作るのが主目的で、
+  // 単体はそこから外れる作り方（管体・ネックは当面ずっと単体）。
+  const [asSet, setAsSet] = useState(true);
+  const [setId, setSetId] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
   const [err, setErr] = useState("");
   const pickPath = usePathPicker();
@@ -35,11 +39,19 @@ export function NewProjectDialog({ onCreated, onClose, allowClose }: {
   }, []);
 
   const inst = instruments.find((i) => i.id === instrumentId);
+  const sets = inst?.sets ?? [];
+  // セットを持たない楽器では単体しか作れない（UI に楽器名を書かないための分岐）
+  const canSet = sets.length > 0;
+  const chosenSet = sets.find((s) => s.id === setId) ?? sets[0];
 
   const create = async () => {
     try {
-      await api.newProject({ instrument_id: instrumentId, template_id: templateId,
-                             component_id: componentId });
+      await api.newProject(
+        canSet && asSet
+          ? { instrument_id: instrumentId, template_id: templateId,
+              set_id: chosenSet?.id }
+          : { instrument_id: instrumentId, template_id: templateId,
+              component_id: componentId });
       onCreated();
     } catch (e) { setErr(String((e as Error).message)); }
   };
@@ -69,14 +81,44 @@ export function NewProjectDialog({ onCreated, onClose, allowClose }: {
           {inst?.templates.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
       </div>
-      <div className="drow">
-        <label>コンポーネント</label>
-        <select value={componentId} onChange={(e) => setComponentId(e.target.value)}>
-          {inst?.components.map((c) => (
-            <option key={c.id} value={c.id} disabled={!c.available}>{c.label}</option>
-          ))}
-        </select>
-      </div>
+      {canSet && (
+        <div className="drow">
+          <label>作り方</label>
+          <label style={{ minWidth: 0 }}>
+            <input type="radio" checked={asSet} onChange={() => setAsSet(true)} />
+            {" "}セット（一式）
+          </label>
+          <label style={{ minWidth: 0 }}>
+            <input type="radio" checked={!asSet} onChange={() => setAsSet(false)} />
+            {" "}単体
+          </label>
+        </div>
+      )}
+      {canSet && asSet ? (
+        <div className="drow">
+          <label>セット構成</label>
+          <select value={chosenSet?.id ?? ""} onChange={(e) => setSetId(e.target.value)}>
+            {sets.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+        </div>
+      ) : (
+        <div className="drow">
+          <label>コンポーネント</label>
+          <select value={componentId} onChange={(e) => setComponentId(e.target.value)}>
+            {inst?.components.map((c) => (
+              <option key={c.id} value={c.id} disabled={!c.available}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {canSet && asSet && chosenSet && (
+        <div className="note">
+          {chosenSet.members.map((m) => m.label
+            + (m.required ? "" : "（任意・後から追加）")).join(" ＋ ")}
+          。土台は{chosenSet.members.find((m) => m.master)?.label ?? "先頭の部品"}で、
+          下流の部品はその設計値に追従します。
+        </div>
+      )}
       {err && <div style={{ color: "var(--err)" }}>{err}</div>}
       <div className="actions">
         {allowClose && <button onClick={onClose}>キャンセル</button>}
@@ -191,9 +233,15 @@ export function GoalSeekDialog({ tier2, schema, onApply, onClose }: {
 
 // ------------------------------------------------------------------ エクスポート
 
-export function ExportDialog({ onClose }: { onClose: () => void }) {
+export function ExportDialog({ onClose, setInfo }: {
+  onClose: () => void;
+  /** セットなら部品の一覧（単体では null）。範囲の選択を出すかの判断に使う */
+  setInfo?: { label: string; members: { label: string; present: boolean }[] } | null;
+}) {
   const [formats, setFormats] = useState<Record<string, boolean>>(
     { stl: true, step: true, "3mf": true });
+  // セットなら既定は一式。個別に出したいときだけ切り替える。
+  const [scope, setScope] = useState<"set" | "member">("set");
   const [outDir, setOutDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -212,6 +260,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       setResult(await api.export_({
         formats: Object.keys(formats).filter((f) => formats[f]),
         out_dir: outDir || null, make_package: true,
+        scope: setInfo ? scope : "member",
       }));
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setBusy(false); }
@@ -220,6 +269,23 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   return (
     <Backdrop onClose={onClose}>
       <h2>エクスポート / 入稿データ生成</h2>
+      {setInfo && (
+        <div className="drow">
+          <label>出力範囲</label>
+          <label style={{ minWidth: 0 }}>
+            <input type="radio" checked={scope === "set"}
+                   onChange={() => setScope("set")} />
+            {" "}セット一式（
+            {setInfo.members.filter((m) => m.present).map((m) => m.label).join("＋")}
+            ）
+          </label>
+          <label style={{ minWidth: 0 }}>
+            <input type="radio" checked={scope === "member"}
+                   onChange={() => setScope("member")} />
+            {" "}いま編集中の部品だけ
+          </label>
+        </div>
+      )}
       <div className="drow">
         <label>3Dモデル形式</label>
         {(["stl", "step", "3mf"] as const).map((f) => (
@@ -238,6 +304,9 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         <button onClick={browse}>参照…</button>
       </div>
       <div className="note">
+        {setInfo && scope === "set" && (
+          <>部品ごとのフォルダに分かれ、仕様書と部品表は<b>1 式で 1 枚</b>にまとまります。<br /></>
+        )}
         仕様書(spec.html)・部品表(bom.csv)・入稿パッケージZIPも同時に生成されます。
         ZIPはオンライン3Dプリントサービス（JLC3DP / PCBWay / Shapeways 等）へ
         そのままアップロードできます。

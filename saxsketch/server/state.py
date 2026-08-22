@@ -9,7 +9,7 @@ import os
 import threading
 from pathlib import Path
 
-from saxsketch.core.project import Project
+from saxsketch.core.project import Member, Project
 from saxsketch.core.registry import get_registry
 from saxsketch.core.schema import ParamSet
 
@@ -84,27 +84,99 @@ def _existing(paths) -> list[str]:
     return [p for p in paths if p and Path(p).exists()]
 
 
+class MemberState:
+    """部品 1 つぶんの実行時状態（コンポーネント実体・現在値・キャッシュ）。
+
+    **キャッシュは部品ごとに持つ。** セットでは 3 部品が同時に生きていて、
+    どれか 1 つを触っただけで全部を作り直すと、マウスピース 5.6〜6.2 秒 ＋
+    リガチャー 1.3 秒 を毎回払うことになる。鍵（`AppState._member_key`）に
+    **束ねた参照**が入っているので、マウスピースを動かしたときだけ従属部品の
+    鍵も変わる ＝ 無効化の条件を別に書かなくてよい。
+    """
+
+    def __init__(self, component, paramset: ParamSet):
+        self.component = component
+        self.paramset = paramset
+        # 採寸ワークフロー（Phase 4-A）。音響基準定数(size_info)への局所上書き。
+        self.size_overrides: dict = {}
+        self.base_size: dict = {}   # コンポーネント既定の size_info（descriptor 由来のコピー）
+        self.pending_derived: dict | None = None
+        self.stl_cache: dict[str, bytes] = {}
+        # 参照コンポーネントの STL（重ね表示）。鍵は `ref_hash()` なので
+        # パラメータを動かしても消えない（参照が変わったときだけ作り直す）。
+        self.ref_stl_cache: dict[str, bytes] = {}
+        self.sim_cache: dict[str, dict] = {}
+        self.imp_cache: dict[str, dict] = {}
+        self.wav_cache: dict[str, tuple] = {}
+
+    def clear_caches(self) -> None:
+        self.stl_cache.clear()
+        self.ref_stl_cache.clear()
+        self.sim_cache.clear()
+        self.imp_cache.clear()
+        self.wav_cache.clear()
+
+    def bind_size(self) -> None:
+        """コンポーネント既定の size_info を控え、局所上書きを重ねて再束縛する。
+
+        `component.size_info` は descriptor の dict 参照そのものなので、控えは必ず
+        コピーする。上書きは新しい dict を割り当てて行い、descriptor は汚さない。
+        """
+        base = getattr(self.component, "size_info", None)
+        self.base_size = dict(base) if base else {}
+        self.apply_size_overrides()
+
+    def apply_size_overrides(self) -> None:
+        if not hasattr(self.component, "size_info"):
+            return
+        self.component.size_info = {**self.base_size, **self.size_overrides}
+
+
 class AppState:
     def __init__(self):
         self.registry = get_registry()
         self.project: Project | None = None
-        self.component = None
-        self.paramset: ParamSet | None = None
+        #: 部品ID → 実行時状態。`component` / `paramset` は active への委譲。
+        self.members: dict[str, MemberState] = {}
         self.build_lock = threading.Lock()
-        self._stl_cache: dict[str, bytes] = {}
-        # 参照コンポーネントの STL（重ね表示）。鍵は `ref_hash()` なので
-        # パラメータを動かしても消えない（参照が変わったときだけ作り直す）。
-        self._ref_stl_cache: dict[str, bytes] = {}
-        self._sim_cache: dict[str, dict] = {}
-        self._imp_cache: dict[str, dict] = {}
-        self._wav_cache: dict[str, tuple] = {}
-        # 採寸ワークフロー（Phase 4-A）。音響基準定数(size_info)へのプロジェクト局所上書き。
-        self.size_overrides: dict = {}
-        self._base_size: dict = {}   # コンポーネント既定の size_info（descriptor 由来のコピー）
-        # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）。
+        # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）や、
+        # セットの部品を足し引きしたときの形状変化の報告。
         # 黙って値を変えないための経路なので、利用者が何か触るまで残す。
         self.notices: list[str] = []
         self.settings = self._load_settings()
+
+    # ---------------------------------------------------------- active への委譲
+    # 単体しか無かった頃の呼び出し（`STATE.component` / `STATE.paramset` …）が
+    # そのまま動く。セットで増えたのは「どのメンバーを見ているか」だけなので、
+    # 全経路を書き換えるより委譲で吸収するほうが壊す面が小さい。
+
+    @property
+    def member_state(self) -> MemberState:
+        return self.members[self.project.active]
+
+    @property
+    def component(self):
+        return self.members[self.project.active].component if self.project else None
+
+    @property
+    def paramset(self) -> ParamSet | None:
+        return self.members[self.project.active].paramset if self.project else None
+
+    @property
+    def size_overrides(self) -> dict:
+        return self.member_state.size_overrides
+
+    @size_overrides.setter
+    def size_overrides(self, value: dict) -> None:
+        self.member_state.size_overrides = value
+
+    @property
+    def _pending_derived(self) -> dict | None:
+        return self.member_state.pending_derived
+
+    @_pending_derived.setter
+    def _pending_derived(self, value: dict | None) -> None:
+        self.member_state.pending_derived = value
 
     # ---------------------------------------------------------- 設定
 
@@ -144,57 +216,392 @@ class AppState:
 
     # ---------------------------------------------------------- プロジェクト
 
-    def new_project(self, instrument_id: str, template_id: str, component_id: str,
-                    name: str | None = None) -> None:
+    def _new_member(self, component_id: str, name: str | None = None) -> Member:
+        """テンプレート既定値で部品 1 つを起こす（実行時状態はまだ作らない）。"""
+        inst = self.registry.get(self.project.instrument_id)
+        component = inst.make_component(component_id, self.project.template_id)
+        ps = ParamSet(component.param_specs(),
+                      component.template.get(component_id, {}))
+        tmpl_label = inst.templates[self.project.template_id].get(
+            "label", self.project.template_id)
+        return Member(component_id=component_id,
+                      name=name or f"{tmpl_label} {component.label}",
+                      params=dict(ps.values))
+
+    def _mount(self, member: Member) -> list[str]:
+        """メンバーの実行時状態を作って束ねる。変換報告（あれば）を返す。
+
+        **`ParamSet.apply` の前に `migrate_params` を通す。** apply は未知キーを
+        黙って捨てるので、後では旧値が残っていない。
+        """
+        inst = self.registry.get(self.project.instrument_id)
+        component = inst.make_component(member.component_id, self.project.template_id)
+        paramset = ParamSet(component.param_specs(),
+                            component.template.get(member.component_id, {}))
+        values, notices = component.migrate_params(dict(member.params))
+        paramset.apply(values)
+        member.params = dict(paramset.values)
+        ms = MemberState(component, paramset)
+        # 採寸チェックポイントに保存された音響基準の上書きを復元する。
+        ms.size_overrides = dict(
+            (member.survey or {}).get("checkpoint", {}).get("size_overrides", {}))
+        self.members[member.component_id] = ms
+        ms.bind_size()
+        return notices
+
+    def _mount_all(self) -> list[str]:
+        self.members = {}
+        notices: list[str] = []
+        for member in self.project.members.values():
+            notices += self._mount(member)
+        self._bind_all_refs()
+        return notices
+
+    def new_project(self, instrument_id: str, template_id: str,
+                    component_id: str | None = None, name: str | None = None,
+                    set_id: str | None = None) -> None:
+        """単体（`component_id`）またはセット（`set_id`）を新規に起こす。
+
+        セットは descriptor の `sets` 定義を読むだけで、どの部品が組になるかを
+        ここには書かない（コアは楽器を知らない）。**必須メンバーだけ**作る ——
+        任意の部品は「まだ設計していない」が正しい初期状態で、先に作ると設計して
+        いない物の寸法が設計値のように従属部品へ流れる。
+        """
         inst = self.registry.get(instrument_id)
-        component = inst.make_component(component_id, template_id)
-        specs = component.param_specs()
-        template_values = component.template.get(component_id, {})
-        paramset = ParamSet(specs, template_values)
         tmpl_label = inst.templates[template_id].get("label", template_id)
-        self.project = Project(
-            instrument_id=instrument_id, template_id=template_id,
-            component_id=component_id,
-            name=name or f"{tmpl_label} {component.label}",
-            params=dict(paramset.values))
-        self.component = component
-        self.paramset = paramset
+        if set_id:
+            sdef = inst.set_def(set_id)
+            member_ids = [m["component"] for m in sdef["members"]
+                          if m.get("required", True)]
+            active = inst.set_master(set_id)
+            set_name = name or f"{tmpl_label} {sdef.get('label', set_id)}"
+        else:
+            if component_id is None:
+                raise ValueError("component_id か set_id のどちらかが必要です")
+            member_ids = [component_id]
+            active = component_id
+            set_name = name or (
+                f"{tmpl_label} {inst.component_classes[component_id].label}")
+
+        self.project = Project(instrument_id=instrument_id, template_id=template_id,
+                               name=set_name, members={}, active=active,
+                               set_id=set_id)
+        for cid in member_ids:
+            self.project.add_member(self._new_member(cid))
+        self._mount_all()
         self.notices = []
-        self._bind_refs()
-        self.size_overrides = {}
-        self._bind_size()
-        self._clear_caches()
-        self._pending_derived = None
 
     def open_project(self, path: str) -> None:
-        proj = Project.load(path)
-        inst = self.registry.get(proj.instrument_id)
-        component = inst.make_component(proj.component_id, proj.template_id)
-        specs = component.param_specs()
-        paramset = ParamSet(specs, component.template.get(proj.component_id, {}))
-        # パラメータを作り替えたぶんをここで移す。**apply の前**でなければ意味が
-        # ない（apply は未知キーを黙って捨てるので、後では旧値が残っていない）。
-        values, notices = component.migrate_params(dict(proj.params))
-        paramset.apply(values)
-        proj.params = dict(paramset.values)
-        self.project = proj
-        self.component = component
-        self.paramset = paramset
-        self.notices = notices
-        self._bind_refs()
-        # 採寸チェックポイントに保存された音響基準の上書きを復元する。
-        self.size_overrides = dict(
-            (proj.survey or {}).get("checkpoint", {}).get("size_overrides", {}))
-        self._bind_size()
-        self._clear_caches()
-        self._pending_derived = None
+        self.project = Project.load(path)
+        self.notices = self._mount_all()
         self.push_recent(path)
 
     def save_project(self, path: str) -> None:
         assert self.project is not None
-        self.project.params = dict(self.paramset.values)
+        self._sync_params()
         self.project.save(path)
         self.push_recent(path)
+
+    def _sync_params(self) -> None:
+        """各メンバーの現在値をプロジェクトへ書き戻す（保存・参照束ねの前）。"""
+        for cid, ms in self.members.items():
+            self.project.member(cid).params = dict(ms.paramset.values)
+
+    # ---------------------------------------------------------- セット（メンバー操作）
+
+    def set_definition(self) -> dict | None:
+        """このプロジェクトが属するセット定義。
+
+        `set_id` が入っていればそれ。入っていない（＝単体で作った）場合は、
+        **編集中の部品を含むセット定義**を探す —— これが無いと、あとから
+        「リガチャーを足す」ができない（管体・ネックのようにセットを持たない
+        部品では見つからず、UI は部品タブを出さない）。
+        """
+        if self.project is None:
+            return None
+        inst = self.registry.get(self.project.instrument_id)
+        if self.project.set_id:
+            try:
+                return inst.set_def(self.project.set_id)
+            except KeyError:
+                return None  # 定義が消えた楽器でも開けなくならないように
+        for s in inst.sets:
+            if any(m["component"] in self.project.members for m in s["members"]):
+                return s
+        return None
+
+    def set_summary(self) -> dict | None:
+        """フロント表示用のセット情報。
+
+        **セットに育てられる単体プロジェクトでも返す**（部品タブに「＋リガチャー」が
+        出て、そこから一式にできる）。どのセットにも属さない部品（管体・ネック）では
+        None で、UI は部品タブを出さない。
+        """
+        if self.project is None:
+            return None
+        sdef = self.set_definition()
+        if sdef is None and not self.project.is_set:
+            return None
+        inst = self.registry.get(self.project.instrument_id)
+        sdef = sdef or {}
+        defined = {m["component"]: m for m in sdef.get("members", [])}
+        # 定義に無い部品（単体プロジェクトから部品を足した場合）も並べる
+        order = list(defined) + [c for c in self.project.members if c not in defined]
+        members = []
+        for cid in order:
+            cls = inst.component_classes.get(cid)
+            if cls is None:
+                continue
+            present = self.project.has(cid)
+            members.append({
+                "component_id": cid,
+                "label": cls.label,
+                "name": self.project.member(cid).name if present else None,
+                "present": present,
+                "required": bool(defined.get(cid, {}).get("required", False)),
+                "master": defined.get(cid, {}).get("role") == "master",
+            })
+        return {
+            "set_id": self.project.set_id,
+            "label": sdef.get("label", "セット"),
+            # 実際に組になっているか（単体だが育てられる状態は False）
+            "is_set": self.project.is_set,
+            "active": self.project.active,
+            "members": members,
+            # 追加できる部品（この楽器のセット定義に載っていて、まだ居ないもの）
+            "addable": [m["component_id"] for m in members if not m["present"]],
+        }
+
+    def set_card(self) -> dict | None:
+        """セット全体の適合カード（部品どうしでしか出せない量）。
+
+        **コンポーネント実体も渡す。** 「リガチャーがどのリードを想定しているか」は
+        部品側の規則（セットのリード → 無ければテンプレート）なので、判定側で
+        同じ分岐を書き直すと出所が 2 か所になる。
+        """
+        if self.project is None or not self.project.is_set:
+            return None
+        inst = self.registry.get(self.project.instrument_id)
+        members = {cid: {"params": dict(ms.paramset.values), "component": ms.component}
+                   for cid, ms in self.members.items()}
+        size_info: dict = {}
+        for ms in self.members.values():
+            size_info = getattr(ms.component, "size_info", None) or {}
+            if size_info:
+                break
+        return inst.set_card(size_info, members)
+
+    def assembly_placements(self) -> dict:
+        """合わせ表示用の配置。**編集中の部品を基準**にした相対変換で返す。
+
+        3D の本体（編集中の部品）は従来どおり自分のモデル座標で描く —— 寸法線も
+        影響領域のハイライトもその座標で作られているので、本体を動かすと全部
+        ずれる。動かすのは重ねる側だけにする。
+
+        土台座標での配置を `R(θ_i)·v + t_i` とすると、基準 a から見た配置は
+        `R(θ_i − θ_a)·v + R(−θ_a)·(t_i − t_a)`。回転は X 軸だけなので
+        （`Component.assembly_placement`）、この合成も X 軸まわりで閉じる。
+
+        置き場所を返さない部品（`None`）は**出さない**。間違った位置に置くより
+        出さないほうが安全で、出せなかったことは `unplaced` で伝える。
+        """
+        if self.project is None or not self.project.is_set:
+            return {"active": None, "parts": [], "unplaced": []}
+        import math
+
+        active = self.project.active
+        place: dict[str, dict] = {}
+        unplaced: list[str] = []
+        for cid, ms in self.members.items():
+            pl = ms.component.assembly_placement(dict(ms.paramset.values))
+            if pl is None:
+                unplaced.append(ms.component.label)
+            else:
+                place[cid] = pl
+        base = place.get(active)
+        if base is None:
+            # 基準そのものが置けない ＝ 相対変換を作れない
+            return {"active": active, "parts": [], "unplaced": unplaced}
+
+        th_a = math.radians(base["rotate_x_deg"])
+        ca, sa = math.cos(-th_a), math.sin(-th_a)
+        parts = []
+        for cid, pl in place.items():
+            if cid == active:
+                continue
+            dy = pl["origin"][1] - base["origin"][1]
+            dz = pl["origin"][2] - base["origin"][2]
+            parts.append({
+                "component_id": cid,
+                "label": self.members[cid].component.label,
+                "origin": [pl["origin"][0] - base["origin"][0],
+                           dy * ca - dz * sa,
+                           dy * sa + dz * ca],
+                "rotate_x_deg": pl["rotate_x_deg"] - base["rotate_x_deg"],
+                # 形の同一性。ブラウザのキャッシュ鍵（`?v=`）に使う。
+                "hash": self._member_key(cid)[:12],
+            })
+        return {"active": active, "parts": parts, "unplaced": unplaced}
+
+    def set_active(self, component_id: str) -> None:
+        """編集対象の部品を切り替える。"""
+        assert self.project is not None
+        if not self.project.has(component_id):
+            raise ValueError(f"この プロジェクト に「{component_id}」はありません")
+        self.project.active = component_id
+        self._bind_all_refs()
+        self.notices = []
+
+    def add_member(self, component_id: str) -> None:
+        """セットに部品を足す（テンプレート既定値から）。
+
+        足した部品を参照する側（リガチャー → リード）は**形が変わる**。黙って
+        変えないために報告を積む（`notices`）。
+        """
+        assert self.project is not None
+        inst = self.registry.get(self.project.instrument_id)
+        cls = inst.component_classes.get(component_id)
+        if cls is None or not cls.available():
+            raise ValueError("このコンポーネントは未実装です")
+        if self.project.has(component_id):
+            raise ValueError(f"「{cls.label}」は既にこのセットにあります")
+        self.project.add_member(self._new_member(component_id))
+        self._mount(self.project.member(component_id))
+        self._adopt_set_id(component_id)
+        notices = self._affected_by(component_id)
+        self._bind_all_refs()
+        self.project.active = component_id
+        self.notices = notices
+
+    def remove_member(self, component_id: str) -> None:
+        assert self.project is not None
+        inst = self.registry.get(self.project.instrument_id)
+        for cid, ms in self.members.items():
+            if cid == component_id:
+                continue
+            if getattr(ms.component, "REQUIRES_REF", None) == component_id:
+                raise ValueError(
+                    f"「{ms.component.label}」が「"
+                    f"{inst.component_classes[component_id].label}」に従属しています。"
+                    f"先にそちらを外してください。")
+        notices = self._affected_by(component_id, removing=True)
+        self.project.remove_member(component_id)
+        self.members.pop(component_id, None)
+        self._bind_all_refs()
+        self.notices = notices
+
+    def _adopt_set_id(self, component_id: str) -> None:
+        """単体プロジェクトに部品を足したら、そのセット定義の一員として名乗る。
+
+        名乗らないと、出力の既定範囲もセットの適合カードも「単体」のままになる
+        （**部品は 2 つ入っているのに**）。既に `set_id` があれば触らない。
+        """
+        if self.project.set_id:
+            return
+        inst = self.registry.get(self.project.instrument_id)
+        for s in inst.sets:
+            ids = {m["component"] for m in s["members"]}
+            if component_id in ids and set(self.project.members) <= ids:
+                self.project.set_id = s["id"]
+                return
+
+    def _affected_by(self, component_id: str, removing: bool = False) -> list[str]:
+        """`component_id` を参照している部品への影響報告。
+
+        **必須参照も報告する。** 取り込んだ参照スナップショットを持つ部品
+        （例: 単体で作ったリガチャー）にマウスピースを足すと、以後はセットの
+        マウスピースが正になり**形が変わる**。黙って変えない。
+        """
+        inst = self.registry.get(self.project.instrument_id)
+        label = inst.component_classes[component_id].label
+        out = []
+        for cid, ms in self.members.items():
+            if cid == component_id:
+                continue
+            if getattr(ms.component, "REQUIRES_REF", None) == component_id:
+                had = bool(self.project.member(cid).refs.get(component_id, {})
+                           .get("source"))
+                out.append(
+                    f"「{ms.component.label}」は{label}に従属します。"
+                    f"これ以降はセットの{label}に追従します"
+                    + ("（取り込んでいた参照は使われなくなります）" if had else ""))
+            elif component_id in getattr(ms.component, "OPTIONAL_REFS", ()):
+                out.append(
+                    f"「{ms.component.label}」は{label}の寸法を参照します。"
+                    + (f"{label}を外したので、同サイズのテンプレート値へ戻ります"
+                       if removing else
+                       f"これ以降は設計中の{label}の実寸に合わせた形になります"))
+        return out
+
+    def import_member(self, path: str) -> str:
+        """既存の単体 .wproj をセットのメンバーとして取り込む。
+
+        検証は `set_reference` と同じ（楽器・サイズ違いを弾く）。セットは
+        テンプレートを 1 か所しか持たないので、取り込む側だけ確認すればよい。
+        取込後は**セットの値が正**（元ファイルとは切り離される）。
+        """
+        assert self.project is not None
+        src = Project.load(path)
+        if len(src.members) != 1:
+            raise ValueError("セットのプロジェクトはメンバーとして取り込めません。"
+                             "取り込みたい部品を単体 .wproj へ書き出してください。")
+        if (src.instrument_id != self.project.instrument_id
+                or src.template_id != self.project.template_id):
+            raise ValueError(
+                f"このプロジェクトは「{self._template_label(src)}」用です。"
+                f"「{self._template_label(self.project)}」のものを選んでください。")
+        cid = src.component_id
+        inst = self.registry.get(self.project.instrument_id)
+        if cid not in inst.component_classes:
+            raise ValueError(f"未知のコンポーネントです: {cid}")
+        if self.project.has(cid):
+            # **黙って置き換えない。** 上書きすると、いまセットで設計している
+            # ぶんが戻せないまま消える（取り消しの仕組みは無い）。
+            raise ValueError(
+                f"このセットには既に「{inst.component_classes[cid].label}」があります。"
+                f"取り込んだもので置き換えるなら、先に今の"
+                f"「{inst.component_classes[cid].label}」を外してください"
+                f"（残しておきたい場合は単体 .wproj へ書き出してから）。")
+        member = src.active_member
+        member.refs = {}          # セット内では兄弟メンバーが正（生きた参照）
+        self.project.add_member(member)
+        self._adopt_set_id(cid)
+        notices = self._mount(member)
+        notices += self._affected_by(cid)
+        self._bind_all_refs()
+        self.project.active = cid
+        self.notices = notices
+        return cid
+
+    def export_member(self, component_id: str, path: str) -> str:
+        """セットの部品 1 つを単体 .wproj として書き出す。
+
+        **束ねた参照を凍結スナップショットとして持たせる。** 単体で開いたときに
+        参照が空だと、テンプレート既定値へ落ちて別の形になる（書き出した本人が
+        見ていた形と違う物が出てくる）。
+        """
+        assert self.project is not None
+        if not self.project.has(component_id):
+            raise ValueError(f"この プロジェクト に「{component_id}」はありません")
+        self._sync_params()
+        src = self.project.member(component_id)
+        refs = copy.deepcopy(self.members[component_id].component.refs)
+        for entry in refs.values():
+            if entry.get("source") == "set":
+                entry["source"] = None
+                entry["label"] = f"{entry.get('label', '')}（セットから書出）".strip()
+        member = Member(
+            component_id=component_id, name=src.name, params=dict(src.params),
+            refs=refs, notes=src.notes, frozen=copy.deepcopy(src.frozen),
+            derived=copy.deepcopy(src.derived), derived_stl=src.derived_stl,
+            survey=copy.deepcopy(src.survey))
+        out = Project(instrument_id=self.project.instrument_id,
+                      template_id=self.project.template_id,
+                      name=src.name, members={component_id: member},
+                      active=component_id)
+        out.save(path)
+        self.push_recent(path)
+        return path
 
     # ---------------------------------------------------------- 参照コンポーネント
 
@@ -224,12 +631,51 @@ class AppState:
         except KeyError:
             return proj.template_id
 
-    def _bind_refs(self) -> None:
-        """コンポーネントに参照を結び付ける。未設定なら既定値を入れる。"""
-        ref_id = getattr(self.component, "REQUIRES_REF", None)
-        if ref_id and not self.project.refs.get(ref_id):
-            self.project.refs[ref_id] = self._default_ref(ref_id)
-        self.component.set_refs(self.project.refs)
+    def _bind_all_refs(self) -> None:
+        """全メンバーの参照を束ね直す。
+
+        **セット内は「生きた参照」**。兄弟メンバーの現在値をそのつど束ねるので、
+        マウスピースを触ればリガチャー側の形も判定も追従する（取込操作が要らない）。
+        セットに居ない参照だけが、従来どおりの凍結スナップショット。
+
+        パラメータを触るたびに呼ぶが、やっているのは dict のコピーだけで CAD は
+        走らない。無効化はキャッシュ鍵（`_member_key`）が束ねた参照を含むことで
+        自動的に効く。
+        """
+        if self.project is None:
+            return
+        self._sync_params()
+        for cid in self.members:
+            self._bind_refs(cid)
+
+    def _bind_refs(self, component_id: str | None = None) -> None:
+        """コンポーネントに参照を結び付ける。
+
+        1. 同じセットに兄弟メンバーが居ればその**現在値**
+        2. 居なければメンバーが持つ取込スナップショット
+        3. それも無ければ **必須参照のときだけ**テンプレート既定値を作って持たせる
+           （任意参照は「まだ設計していない」が正しいので束ねない）
+        """
+        cid = component_id or self.project.active
+        ms = self.members[cid]
+        comp = ms.component
+        member = self.project.member(cid)
+        required = getattr(comp, "REQUIRES_REF", None)
+        refs: dict = {}
+        for ref_id in ([required] if required else []) + list(
+                getattr(comp, "OPTIONAL_REFS", ())):
+            if ref_id is None or ref_id == cid:
+                continue
+            if self.project.has(ref_id):
+                sib = self.project.member(ref_id)
+                refs[ref_id] = {"source": "set", "label": sib.name,
+                                "params": dict(sib.params)}
+            elif member.refs.get(ref_id):
+                refs[ref_id] = member.refs[ref_id]
+            elif ref_id == required:
+                member.refs[ref_id] = self._default_ref(ref_id)
+                refs[ref_id] = member.refs[ref_id]
+        comp.set_refs(refs)
 
     def set_reference(self, ref_id: str, path: str | None) -> None:
         """参照コンポーネントを .wproj から取込む。path=None で既定値へ戻す。"""
@@ -237,6 +683,12 @@ class AppState:
         if required != ref_id:
             raise ValueError(
                 f"{self.component.label} は「{ref_id}」を参照しません")
+        if self.project.has(ref_id):
+            # セット内に本体が居る。取り込むと「どちらが正か」が 2 つになる。
+            raise ValueError(
+                f"このセットの{self.members[ref_id].component.label}が参照元です"
+                f"（設計中の値に追従します）。別のものを使いたい場合は、"
+                f"セットの{self.members[ref_id].component.label}側で取り込んでください。")
         if path is None:
             self.project.refs[ref_id] = self._default_ref(ref_id)
         else:
@@ -259,19 +711,22 @@ class AppState:
             ps.apply(src.params)
             self.project.refs[ref_id] = {
                 "source": path, "label": src.name, "params": dict(ps.values)}
-        self.component.set_refs(self.project.refs)
-        self._clear_caches()
+        self._bind_refs()
+        self.member_state.clear_caches()
 
     def reference_summary(self) -> dict | None:
         """フロント表示用の参照情報。参照不要なコンポーネントでは None。"""
         ref_id = getattr(self.component, "REQUIRES_REF", None)
         if not ref_id:
             return None
-        entry = self.project.refs.get(ref_id, {})
+        entry = self.component.refs.get(ref_id, {})
         return {
             "component_id": ref_id,
             "label": entry.get("label", "-"),
-            "source": entry.get("source"),
+            # セットの兄弟から束ねたぶんは取込元ファイルを持たない。UI は
+            # `live` を見て「追従中」と出し、取込ボタンを引っ込める。
+            "live": entry.get("source") == "set",
+            "source": None if entry.get("source") == "set" else entry.get("source"),
             "dims": [list(d) for d in self.component.ref_dimensions()],
             # 参照の形をそのまま重ねられるか（`Component.REF_SHARES_FRAME`）と、
             # その参照の同一性。フロントはこの 2 つだけでトグルと URL を決める
@@ -296,48 +751,69 @@ class AppState:
             self.paramset.apply(keep)
             raise ValueError(bad)
         self.project.params = dict(applied)
+        # 従属する部品（リガチャー・リード）の参照を追従させる。dict のコピーだけで
+        # CAD は走らない。ここを飛ばすと、マウスピースを動かしても従属側の形と
+        # 判定が古い値のまま残る。
+        self._bind_all_refs()
         self.notices = []      # 利用者が値を触った時点で変換報告は役目を終える
         return applied
 
     # ---------------------------------------------------------- 形状
 
-    def _params_key(self) -> str:
+    def _member_key(self, component_id: str | None = None) -> str:
+        """部品 1 つのキャッシュ鍵。
+
+        **束ねた参照（`component.refs`）を含める。** セットではマウスピースを
+        動かすと従属部品の参照が変わるので、鍵もそこで変わる ＝ 無効化の条件を
+        別に書かなくてよい。
+        """
+        cid = component_id or self.project.active
+        ms = self.members[cid]
         payload = json.dumps(
             {"i": self.project.instrument_id, "t": self.project.template_id,
-             "c": self.project.component_id, "p": self.paramset.values,
-             "r": self.project.refs, "so": self.size_overrides},
+             "c": cid, "p": ms.paramset.values,
+             "r": ms.component.refs, "so": ms.size_overrides},
             sort_keys=True, default=str)
         return hashlib.md5(payload.encode()).hexdigest()
 
+    def _params_key(self) -> str:
+        return self._member_key()
+
     def _clear_caches(self) -> None:
-        self._stl_cache.clear()
-        self._ref_stl_cache.clear()
-        self._sim_cache.clear()
-        self._imp_cache.clear()
-        self._wav_cache.clear()
+        for ms in self.members.values():
+            ms.clear_caches()
 
-    def build_part(self):
+    def build_part(self, component_id: str | None = None):
+        ms = self.members[component_id or self.project.active]
         with self.build_lock:
-            return self.component.build(dict(self.paramset.values))
+            return ms.component.build(dict(ms.paramset.values))
 
-    def build_part_cad(self):
+    def build_part_cad(self, component_id: str | None = None):
         """STEP 出力用のソリッド。面を1枚ずつに畳んだ版（`Component.build_cad`）。
 
         プレビュー・STL・シミュレーションは `build_part()` のまま。STEP だけ
         分けるのは、プリミティブ表現はブーリアンが数倍遅い代わりに FreeCAD で
         面選択とフィレットができるという、出力先でしか意味の無い差だから。
         """
+        ms = self.members[component_id or self.project.active]
         with self.build_lock:
-            return self.component.build_cad(dict(self.paramset.values))
+            return ms.component.build_cad(dict(ms.paramset.values))
 
-    def build_spec(self, tolerance: float, cad: bool = False) -> dict:
-        """ビルドに必要な入力だけを取り出した、プロセス間で運べる辞書。"""
+    def build_spec(self, tolerance: float, cad: bool = False,
+                   component_id: str | None = None) -> dict:
+        """ビルドに必要な入力だけを取り出した、プロセス間で運べる辞書。
+
+        `component_id` を渡すとそのメンバーぶん（セットの合わせ表示・一括出力）。
+        既定は編集中の部品。
+        """
+        cid = component_id or self.project.active
+        ms = self.members[cid]
         return {
             "instrument_id": self.project.instrument_id,
             "template_id": self.project.template_id,
-            "component_id": self.project.component_id,
-            "refs": copy.deepcopy(self.project.refs),
-            "params": dict(self.paramset.values),
+            "component_id": cid,
+            "refs": copy.deepcopy(ms.component.refs),
+            "params": dict(ms.paramset.values),
             "tolerance": tolerance,
             "cad": cad,
         }
@@ -357,19 +833,22 @@ class AppState:
         with self.build_lock:
             return build_from_spec(spec)
 
-    def get_stl_bytes(self, tolerance: float = 0.03) -> bytes:
-        """プレビュー/エクスポート用の STL。"""
-        key = self._params_key() + f":{tolerance}"
-        cached = self._stl_cache.get(key)
+    def get_stl_bytes(self, tolerance: float = 0.03,
+                      component_id: str | None = None) -> bytes:
+        """プレビュー/エクスポート用の STL。`component_id` でメンバー指定。"""
+        cid = component_id or self.project.active
+        ms = self.members[cid]
+        key = self._member_key(cid) + f":{tolerance}"
+        cached = ms.stl_cache.get(key)
         if cached is not None:
             return cached
 
-        data = self._build_stl(self.build_spec(tolerance))
+        data = self._build_stl(self.build_spec(tolerance, component_id=cid))
 
         # キャッシュは直近3件のみ保持
-        if len(self._stl_cache) > 3:
-            self._stl_cache.clear()
-        self._stl_cache[key] = data
+        if len(ms.stl_cache) > 3:
+            ms.stl_cache.clear()
+        ms.stl_cache[key] = data
         return data
 
     # ---------------------------------------------------------- 参照の重ね表示
@@ -381,7 +860,7 @@ class AppState:
         同じ値を使う（別々の条件で無効化される状態を作らないため）。
         """
         ref_id = getattr(self.component, "REQUIRES_REF", None)
-        entry = self.project.refs.get(ref_id or "") if self.project else None
+        entry = self.component.refs.get(ref_id or "") if self.project else None
         if not ref_id or not entry:
             return None
         payload = json.dumps(
@@ -402,12 +881,13 @@ class AppState:
         """
         assert self.project is not None and self.component is not None
         ref_id = getattr(self.component, "REQUIRES_REF", None)
-        entry = self.project.refs.get(ref_id or "", {})
+        entry = self.component.refs.get(ref_id or "", {})
         if not ref_id or not entry.get("params"):
             raise ValueError("参照コンポーネントがありません")
 
+        ms = self.member_state
         key = f"{self.ref_hash()}:{tolerance}"
-        cached = self._ref_stl_cache.get(key)
+        cached = ms.ref_stl_cache.get(key)
         if cached is not None:
             return cached
 
@@ -417,11 +897,11 @@ class AppState:
         spec = self.build_spec(tolerance)
         spec.update(component_id=ref_id, params=dict(entry["params"]), refs={})
         data = self._build_stl(spec)
-        self._ref_stl_cache.clear()      # 参照は 1 つしか要らない
-        self._ref_stl_cache[key] = data
+        ms.ref_stl_cache.clear()      # 参照は 1 つしか要らない
+        ms.ref_stl_cache[key] = data
         return data
 
-    def simulate(self) -> dict:
+    def simulate(self, component_id: str | None = None) -> dict:
         """シミュレーション結果。同じパラメータなら作り直さない。
 
         `GET /api/project` と `PUT /api/project/params` の両方から呼ばれるので、
@@ -430,34 +910,36 @@ class AppState:
         size_overrides のどれかが変われば鍵が変わり、明示的な `_clear_caches()`
         でも消える。
         """
-        key = self._params_key()
-        cached = self._sim_cache.get(key)
+        ms = self.members[component_id or self.project.active]
+        key = self._member_key(component_id)
+        cached = ms.sim_cache.get(key)
         if cached is not None:
             return cached
-        res = self.component.simulate(dict(self.paramset.values))
-        if len(self._sim_cache) > 4:
-            self._sim_cache.clear()
-        self._sim_cache[key] = res
+        res = ms.component.simulate(dict(ms.paramset.values))
+        if len(ms.sim_cache) > 4:
+            ms.sim_cache.clear()
+        ms.sim_cache[key] = res
         return res
 
     # ---------------------------------------------------------- Tier3（インピーダンス・音合成）
 
     def impedance(self) -> dict:
         """入力インピーダンス（重い→パラメータハッシュでキャッシュ）。"""
+        ms = self.member_state
         key = self._params_key() + ":imp"
-        cached = self._imp_cache.get(key)
+        cached = ms.imp_cache.get(key)
         if cached is not None:
             return cached
-        res = self.component.impedance(dict(self.paramset.values))
-        if len(self._imp_cache) > 4:
-            self._imp_cache.clear()
-        self._imp_cache[key] = res
+        res = ms.component.impedance(dict(ms.paramset.values))
+        if len(ms.imp_cache) > 4:
+            ms.imp_cache.clear()
+        ms.imp_cache[key] = res
         return res
 
     def synthesize_wav(self, embouchure: str) -> tuple[bytes, dict]:
         """単音の物理モデル音（数秒〜かかる→キャッシュ＋ビルドと直列化）。"""
         key = self._params_key() + f":wav:{embouchure}"
-        cached = self._wav_cache.get(key)
+        cached = self.member_state.wav_cache.get(key)
         if cached is not None:
             return cached
         with self.build_lock:
@@ -467,7 +949,7 @@ class AppState:
 
     def scale_wav(self) -> tuple[bytes, dict]:
         key = self._params_key() + ":scale"
-        cached = self._wav_cache.get(key)
+        cached = self.member_state.wav_cache.get(key)
         if cached is not None:
             return cached
         with self.build_lock:
@@ -476,13 +958,14 @@ class AppState:
         return res
 
     def _cache_wav(self, key: str, res: tuple) -> None:
-        if len(self._wav_cache) > 4:
-            self._wav_cache.clear()
-        self._wav_cache[key] = res
+        cache = self.member_state.wav_cache
+        if len(cache) > 4:
+            cache.clear()
+        cache[key] = res
 
     # ---------------------------------------------------------- 外部編集（凍結・再取込）
 
-    def is_stale(self) -> bool:
+    def is_stale(self, component_id: str | None = None) -> bool:
         """凍結後にパラメータ**または参照コンポーネント**が変更されたか。
 
         リード/リガチャーは参照マウスピースの寸法で形が決まるため、自パラメータが
@@ -491,30 +974,32 @@ class AppState:
         """
         if self.project is None:
             return False
+        cid = component_id or self.project.active
+        member = self.project.member(cid)
         # 外部取込モデルは凍結パラメータから派生していないので陳腐化しない
         # （自分の設計を後からいじっても、取込んだ市販モデルは無関係のまま）。
-        if (self.project.derived or {}).get("kind") == "external":
+        if (member.derived or {}).get("kind") == "external":
             return False
-        if self.project.frozen is None:
+        if member.frozen is None:
             return False
-        frozen_params = self.project.frozen["params"]
-        cur = self.paramset.values
-        for k, v in frozen_params.items():
+        cur = self.members[cid].paramset.values
+        for k, v in member.frozen["params"].items():
             if cur.get(k) != v:
                 return True
-        return self._refs_changed()
+        return self._refs_changed(cid)
 
-    def _refs_changed(self) -> bool:
+    def _refs_changed(self, component_id: str | None = None) -> bool:
         """凍結時の参照パラメータと現在の差分。
 
         比較するのは `params` だけ（`source`/`label` は形状に影響しない）。
         `refs` を持たない Phase 3 以前の凍結スナップショットは比較をスキップする。
         """
-        frozen_refs = self.project.frozen.get("refs")
+        cid = component_id or self.project.active
+        frozen_refs = self.project.member(cid).frozen.get("refs")
         if frozen_refs is None:
             return False
         for ref_id, entry in frozen_refs.items():
-            cur = self.project.refs.get(ref_id, {})
+            cur = self.members[cid].component.refs.get(ref_id, {})
             if entry.get("params") != cur.get("params"):
                 return True
         return False
@@ -544,8 +1029,10 @@ class AppState:
         self.project.frozen = {
             "frozen_at": datetime.now(timezone.utc).isoformat(),
             "params": dict(self.paramset.values),
-            # 参照も凍結する。リード/リガチャーは参照マウスピースで形が決まるため
-            "refs": copy.deepcopy(self.project.refs),
+            # 参照も凍結する。リード/リガチャーは参照マウスピースで形が決まるため。
+            # **束ねた参照**（`component.refs`）で見る —— セットでは兄弟メンバーの
+            # 現在値が正で、メンバー自身の `refs` は空のことがある。
+            "refs": copy.deepcopy(self.component.refs),
             "solid_volume_cc": solid_volume_cc,
             "export_dir": export_dir,
         }
@@ -697,20 +1184,8 @@ class AppState:
 
     # ---------------------------------------------------------- 採寸ワークフロー（Phase 4-A）
 
-    def _bind_size(self) -> None:
-        """コンポーネント既定の size_info を控え、局所上書きを重ねて再束縛する。
-
-        `component.size_info` は descriptor の dict 参照そのものなので、控えは必ず
-        コピーする。上書きは新しい dict を割り当てて行い、descriptor は汚さない。
-        """
-        base = getattr(self.component, "size_info", None)
-        self._base_size = dict(base) if base else {}
-        self._apply_size_overrides()
-
     def _apply_size_overrides(self) -> None:
-        if not hasattr(self.component, "size_info"):
-            return
-        self.component.size_info = {**self._base_size, **self.size_overrides}
+        self.member_state.apply_size_overrides()
 
     def survey_state(self) -> dict:
         """フロント採寸パネル用の状態。現在の設計値/基準値でフィールドを埋める。"""
@@ -783,7 +1258,7 @@ class AppState:
             "measured_size": {**prev.get("measured_size", {}), **m_size},
             "checkpoint": {
                 "params": dict(self.paramset.values),
-                "refs": copy.deepcopy(self.project.refs),
+                "refs": copy.deepcopy(self.component.refs),
                 "size_overrides": dict(self.size_overrides),
             },
             "card": card,
@@ -800,8 +1275,10 @@ class AppState:
             raise ValueError("復元点がありません。先に採寸を確定してください。")
         self.apply_params(dict(cp["params"]))
         if cp.get("refs") is not None:
+            # セット内の参照は兄弟メンバーが正なので、復元しても束ね直しで上書き
+            # される（復元点が意味を持つのは取込スナップショットの場合だけ）。
             self.project.refs = copy.deepcopy(cp["refs"])
-            self.component.set_refs(self.project.refs)
+            self._bind_all_refs()
         self.size_overrides = dict(cp.get("size_overrides", {}))
         self._apply_size_overrides()
         self._clear_caches()

@@ -20,10 +20,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from saxsketch.acoustics import goalseek as gs
-from saxsketch.export.bom import bom_csv
+from saxsketch.export.bom import bom_csv, bom_csv_set
 from saxsketch.export.models import check_mesh, export_model
-from saxsketch.export.package import build_package, readme_text
-from saxsketch.export.spec import spec_html
+from saxsketch.export.package import build_package, readme_text, readme_text_set
+from saxsketch.export.spec import spec_html, spec_html_set
 from . import filedialog
 from .hostenv import IS_WSL, host_kind
 from .hostenv import to_win_path as _to_win_path
@@ -116,18 +116,33 @@ def instruments():
 class NewProject(BaseModel):
     instrument_id: str
     template_id: str
-    component_id: str
+    component_id: str | None = None   # 単体プロジェクト
+    set_id: str | None = None         # セット（descriptor の sets[].id）
     name: str | None = None
 
 
 @app.post("/api/project/new")
 def project_new(req: NewProject):
     inst = STATE.registry.get(req.instrument_id)
-    cls = inst.component_classes.get(req.component_id)
-    if cls is None or not cls.available():
-        raise HTTPException(status_code=400,
-                            detail="このコンポーネントは未実装です（後フェーズで追加予定）")
-    STATE.new_project(req.instrument_id, req.template_id, req.component_id, req.name)
+    if req.set_id:
+        try:
+            sdef = inst.set_def(req.set_id)
+        except KeyError:
+            raise HTTPException(status_code=400, detail="未知のセットです")
+        missing = [m["component"] for m in sdef["members"]
+                   if m.get("required", True)
+                   and not (inst.component_classes.get(m["component"])
+                            and inst.component_classes[m["component"]].available())]
+        if missing:
+            raise HTTPException(status_code=400,
+                                detail="このセットの部品に未実装のものがあります")
+    else:
+        cls = inst.component_classes.get(req.component_id or "")
+        if cls is None or not cls.available():
+            raise HTTPException(status_code=400,
+                                detail="このコンポーネントは未実装です（後フェーズで追加予定）")
+    STATE.new_project(req.instrument_id, req.template_id, req.component_id,
+                      req.name, set_id=req.set_id)
     return project_get()
 
 
@@ -148,6 +163,10 @@ def project_get():
         "simulation": STATE.simulate(),
         "manual_edit": STATE.manual_edit_summary(),
         "reference": STATE.reference_summary(),
+        # セット情報。単体プロジェクトでは None（UI は部品タブを出さない）。
+        "set": STATE.set_summary(),
+        # 部品どうしでしか出せない量の判定（`set_check`）。単体では None。
+        "set_card": STATE.set_card(),
         "survey": STATE.survey_state(),
         # 旧プロジェクトを開いたときの変換報告（`Component.migrate_params`）。
         # 黙って値が変わらないための経路なので、パラメータを触るまで残る。
@@ -173,6 +192,78 @@ def project_reference(req: ReferenceReq):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
     return project_get()
+
+
+class MemberReq(BaseModel):
+    component_id: str
+
+
+@app.post("/api/set/active")
+def set_active(req: MemberReq):
+    """編集対象の部品を切り替える。"""
+    _require_project()
+    try:
+        STATE.set_active(req.component_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return project_get()
+
+
+@app.post("/api/set/member/add")
+def set_member_add(req: MemberReq):
+    """セットに部品を足す（テンプレート既定値から）。"""
+    _require_project()
+    try:
+        STATE.add_member(req.component_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return project_get()
+
+
+@app.post("/api/set/member/remove")
+def set_member_remove(req: MemberReq):
+    _require_project()
+    try:
+        STATE.remove_member(req.component_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return project_get()
+
+
+class MemberImportReq(BaseModel):
+    path: str
+
+
+@app.post("/api/set/member/import")
+def set_member_import(req: MemberImportReq):
+    """既存の単体 .wproj をセットのメンバーとして取り込む。"""
+    _require_project()
+    if not Path(req.path).exists():
+        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+    try:
+        STATE.import_member(req.path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+    return project_get()
+
+
+class MemberExportReq(BaseModel):
+    component_id: str
+    path: str
+
+
+@app.post("/api/set/member/export")
+def set_member_export(req: MemberExportReq):
+    """セットの部品 1 つを単体 .wproj として書き出す。"""
+    _require_project()
+    path = req.path if req.path.lower().endswith(".wproj") else req.path + ".wproj"
+    try:
+        STATE.export_member(req.component_id, path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "path": path}
 
 
 class ParamUpdate(BaseModel):
@@ -336,6 +427,33 @@ async def ref_model_stl():
         data = await asyncio.to_thread(STATE.ref_stl_bytes)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.get("/api/set/placement")
+def set_placement():
+    """セット合わせ表示の配置。**編集中の部品を基準にした相対変換**。
+
+    置き場所を宣言しない部品は出さない（`unplaced` に名前だけ返す）。
+    単体プロジェクトでは `parts` が空。
+    """
+    _require_project()
+    return STATE.assembly_placements()
+
+
+@app.get("/api/set/model.stl")
+async def set_model_stl(member: str):
+    """セットの部品 1 つの STL（合わせ表示用）。**常にプレビュー品質**。
+
+    位置関係を見るためのもので、寸法を測る用途には出さない（参照の重ねと同じ扱い）。
+    """
+    _require_project()
+    if not STATE.project.has(member):
+        raise HTTPException(status_code=404, detail="この部品はセットにありません")
+    try:
+        data = await asyncio.to_thread(STATE.get_stl_bytes, 0.05, member)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
     return Response(content=data, media_type="application/octet-stream")
@@ -549,40 +667,50 @@ class ExportReq(BaseModel):
     make_package: bool = True
     freeze: bool = False        # 出力と同時に凍結スナップショット記録（外部編集用）
     use_derived: bool = True    # 派生モデル登録済みなら STL をそれに差し替え
+    #: "member" = 編集中の部品だけ（従来）。"set" = セットの全部品を 1 フォルダへ。
+    scope: str = "member"
 
 
 def _safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]+', "_", name).strip() or "project"
 
 
-@app.post("/api/export")
-async def export(req: ExportReq):
-    _require_project()
-    proj = STATE.project
-    comp = STATE.component
-    params = dict(STATE.paramset.values)
+MATERIAL_LABELS = {"resin": "レジン(光造形)", "pla": "PLA", "petg": "PETG",
+                   "nylon_sls": "ナイロンPA12(SLS)", "tpu": "TPU95A(FDM・弾性)",
+                   "resin_flex": "フレキシブルレジン(光造形)", "pp": "ポリプロピレン",
+                   "cane": "ケーン(切削・参考)"}
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    base = Path(req.out_dir) if req.out_dir else STATE.export_root()
-    out_dir = base / f"{_safe_name(proj.name)}-{stamp}"
+
+async def _write_member_models(cid: str, out_dir: str | Path, formats: list[str],
+                               use_derived: bool) -> dict:
+    """部品 1 つのモデルを書き出す。**単体出力もセット出力もここを通る。**
+
+    Returns:
+        {"files": {ファイル名: Path}, "part": Part, "used_derived": bool,
+         "quality": dict|None}
+    """
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    member = STATE.project.member(cid)
+    comp = STATE.members[cid].component
 
-    part = await asyncio.to_thread(STATE.build_part)
+    part = await asyncio.to_thread(STATE.build_part, cid)
 
     # 派生モデル（外部編集済み）があれば STL はそれを採用（陳腐化していなければ）
     used_derived = False
-    derived_stl = STATE.project.derived_stl
-    if req.use_derived and derived_stl is not None:
-        if STATE.is_stale():
+    derived_stl = member.derived_stl
+    if use_derived and derived_stl is not None:
+        if STATE.is_stale(cid):
             raise HTTPException(
                 status_code=409,
-                detail="凍結後にパラメータが変更されています。編集済みモデルは古い形状です。"
-                       "外部編集をやり直すか、派生モデルを破棄してください。")
+                detail=f"「{comp.label}」は凍結後にパラメータ（または参照する部品）が"
+                       f"変更されています。編集済みモデルは古い形状です。"
+                       f"外部編集をやり直すか、派生モデルを破棄してください。")
         used_derived = True
 
     files: dict[str, Path] = {}
     part_cad = None
-    for fmt in req.formats:
+    for fmt in formats:
         f = out_dir / f"model.{fmt}"
         if fmt == "stl" and used_derived:
             f = out_dir / "model_edited.stl"
@@ -593,7 +721,7 @@ async def export(req: ExportReq):
         # 生成に十数秒かかるので、STEP を要求されたときだけ組む。
         if fmt == "step":
             if part_cad is None:
-                part_cad = await asyncio.to_thread(STATE.build_part_cad)
+                part_cad = await asyncio.to_thread(STATE.build_part_cad, cid)
             await asyncio.to_thread(export_model, part_cad, f, fmt)
         else:
             await asyncio.to_thread(export_model, part, f, fmt)
@@ -603,55 +731,114 @@ async def export(req: ExportReq):
     stl_key = "model_edited.stl" if used_derived else "model.stl"
     if stl_key in files:
         quality = check_mesh(files[stl_key])
+    return {"files": files, "part": part, "used_derived": used_derived,
+            "quality": quality}
 
+
+@app.post("/api/export")
+async def export(req: ExportReq):
+    _require_project()
+    proj = STATE.project
     inst = STATE.registry.get(proj.instrument_id)
-    extras = comp.spec_extras(params)
-    sim = STATE.simulate()
-    bom_rows = comp.bom(params)
+    template_label = inst.templates[proj.template_id].get("label", proj.template_id)
+    instrument_label = inst.descriptor.get("label", proj.instrument_id)
 
-    html = spec_html(
-        project_name=proj.name,
-        instrument_label=inst.descriptor.get("label", proj.instrument_id),
-        component_label=comp.label,
-        template_label=inst.templates[proj.template_id].get("label", proj.template_id),
-        params=params, specs=comp.param_specs(),
-        dimensions=extras.get("dimensions", []),
-        bom_rows=bom_rows, sim=sim,
-        sections=extras.get("sections", []),
-        material=params.get("material", "resin"))
+    as_set = req.scope == "set" and proj.is_set
+    member_ids = list(proj.members) if as_set else [proj.active]
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = Path(req.out_dir) if req.out_dir else STATE.export_root()
+    out_dir = base / f"{_safe_name(proj.name)}-{stamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    files: dict[str, Path] = {}      # アーカイブ内の名前 → 実ファイル
+    built: dict[str, dict] = {}
+    spec_members: list[dict] = []
+    bom_by_member: list[tuple[str, list[dict]]] = []
+    readme_members: list[dict] = []
+
+    for cid in member_ids:
+        sub = out_dir / cid if as_set else out_dir
+        res = await _write_member_models(cid, sub, req.formats, req.use_derived)
+        built[cid] = res
+        prefix = f"{cid}/" if as_set else ""
+        for name, path in res["files"].items():
+            files[prefix + name] = path
+
+        comp = STATE.members[cid].component
+        params = dict(STATE.members[cid].paramset.values)
+        extras = comp.spec_extras(params)
+        bom_rows = comp.bom(params)
+        bom_by_member.append((comp.label, bom_rows))
+        spec_members.append({
+            "label": comp.label, "name": proj.member(cid).name, "dir": cid,
+            "params": params, "specs": comp.param_specs(),
+            "dimensions": extras.get("dimensions", []), "bom_rows": bom_rows,
+            "sim": STATE.simulate(cid), "sections": extras.get("sections", []),
+            "material": params.get("material", "resin"),
+        })
+        readme_members.append({
+            "label": comp.label, "dir": cid,
+            "material_label": MATERIAL_LABELS.get(params.get("material"), "-"),
+            "dims": extras.get("dimensions", []),
+        })
+
+    # 仕様書と部品表は**セットで 1 枚**（部品ごとに割らない）
+    if as_set:
+        html = spec_html_set(proj.name, instrument_label, template_label,
+                             spec_members, STATE.set_card())
+        csv_text = bom_csv_set(bom_by_member, proj.name)
+    else:
+        m = spec_members[0]
+        html = spec_html(
+            project_name=proj.name, instrument_label=instrument_label,
+            component_label=m["label"], template_label=template_label,
+            params=m["params"], specs=m["specs"], dimensions=m["dimensions"],
+            bom_rows=m["bom_rows"], sim=m["sim"], sections=m["sections"],
+            material=m["material"])
+        csv_text = bom_csv(m["bom_rows"], proj.name)
+
     (out_dir / "spec.html").write_text(html, encoding="utf-8")
     files["spec.html"] = out_dir / "spec.html"
-
-    csv_text = bom_csv(bom_rows, proj.name)
     (out_dir / "bom.csv").write_bytes(csv_text.encode("utf-8-sig"))
     files["bom.csv"] = out_dir / "bom.csv"
 
     package_path = None
     if req.make_package:
-        mat_label = {"resin": "レジン(光造形)", "pla": "PLA", "petg": "PETG",
-                     "nylon_sls": "ナイロンPA12(SLS)"}.get(params.get("material"), "-")
-        readme = readme_text(proj.name, extras.get("dimensions", []), mat_label)
-        if used_derived:
+        if as_set:
+            readme = readme_text_set(proj.name, readme_members)
+        else:
+            readme = readme_text(proj.name, readme_members[0]["dims"],
+                                 readme_members[0]["material_label"])
+        edited = [STATE.members[cid].component.label
+                  for cid in member_ids if built[cid]["used_derived"]]
+        if edited:
             readme += ("\n\n[外部編集済みモデル]\n"
                        "model_edited.stl は外部ツールで手動編集したモデルです。\n"
                        "印刷にはこのファイルを使用してください。\n"
-                       f"編集元: {STATE.project.derived.get('source_file', '-')}\n")
+                       f"対象: {'、'.join(edited)}\n")
         package_path = out_dir / f"{_safe_name(proj.name)}_入稿パッケージ.zip"
         build_package(package_path, {k: v for k, v in files.items()}, readme)
 
-    # 凍結: STEP出力とセットでスナップショット記録（外部編集ワークフローの起点）
+    # 凍結: STEP出力とセットでスナップショット記録（外部編集ワークフローの起点）。
+    # **凍結は部品単位のまま** —— 外部編集は部品ごとに往復するので、まとめて
+    # 凍結すると触っていない部品まで「編集待ち」の状態になる。
     manual_edit = None
     if req.freeze:
-        vol_cc = float(part.volume / 1000.0)
-        manual_edit = STATE.freeze(str(out_dir), round(vol_cc, 2))
+        vol_cc = float(built[proj.active]["part"].volume / 1000.0)
+        target = out_dir / proj.active if as_set else out_dir
+        manual_edit = STATE.freeze(str(target), round(vol_cc, 2))
 
+    active = built[proj.active]
     return {
         "out_dir": str(out_dir),
         "files": {k: str(v) for k, v in files.items()},
         "package": str(package_path) if package_path else None,
-        "mesh_quality": quality,
-        "used_derived": used_derived,
+        "mesh_quality": active["quality"],
+        "used_derived": active["used_derived"],
         "manual_edit": manual_edit,
+        "scope": "set" if as_set else "member",
+        "members": member_ids,
     }
 
 

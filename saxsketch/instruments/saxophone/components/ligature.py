@@ -124,6 +124,10 @@ class LigatureComponent(Component):
     id = "ligature"
     label = "リガチャー"
     REQUIRES_REF = "mouthpiece"
+    #: 同じセットにリードが居れば、その**実寸**で当たり面を作る（居なければ
+    #: 同サイズのテンプレート値）。必須にしないのは、リードを設計せずに市販品を
+    #: 使う作り方が普通にあるから。
+    OPTIONAL_REFS = ("reed",)
     #: 断面はマウスピースの z でそのまま張られている（`lp.outer_sections` /
     #: `inner_sections` が z ごとに `profiles.outer_radius` と `table_plane_y` を
     #: 引く。`build()` に平行移動も回転も無い）ので、参照の形をそのまま重ねられる。
@@ -142,16 +146,27 @@ class LigatureComponent(Component):
     def reed_params(self) -> dict:
         """挟むリードの形（踵の幅・中央厚・側端厚）。
 
-        リード プロジェクトと同じ .wproj には入らないため、寸法の根拠は
-        テンプレート（同じサイズのリード規格）とする。背面がカマボコなので
-        厚み 1 つでは足りない —— 接触の頂点は `rp.cane_top` から起こす。
+        **出所は 2 通りで、どちらかは常にはっきりしている**:
+          - 同じセットにリードが居る → その実寸（`OPTIONAL_REFS` の参照）
+          - 居ない → 同じサイズのテンプレート（＝リード規格の代表値）
+
+        背面がカマボコなので厚み 1 つでは足りない —— 接触の頂点は
+        `rp.cane_top` から起こす。
+
+        セットのリードを触れば当たり面の形が変わる。**黙って変えない**ために、
+        リードを足した/外した時点で `AppState` が通知を出し、セットの適合カードに
+        どちらを使っているかを書く。
         """
-        r = self.template.get("reed", {})
+        r = self.refs.get("reed", {}).get("params") or self.template.get("reed", {})
         return {
             "heel_thickness": float(r.get("heel_thickness", 2.8)),
             "heel_width": float(r.get("heel_width", 14.0)),
             "heel_edge_thickness": float(r.get("heel_edge_thickness", 0.9)),
         }
+
+    def reed_is_from_set(self) -> bool:
+        """当たり面の寸法がセットのリード由来か（テンプレート既定なら False）。"""
+        return bool(self.refs.get("reed", {}).get("params"))
 
     def reed_thickness(self) -> float:
         """挟むリードの踵の**中央**厚（表示用）。"""
@@ -612,6 +627,11 @@ class LigatureComponent(Component):
                           "しない）にすると層間剥離を避けられます。"}
 
     # ------------------------------------------------------------ 領域・BOM・仕様書
+
+    def assembly_placement(self, params: dict) -> dict | None:
+        """恒等。断面が参照マウスピースの z でそのまま張られている
+        （`REF_SHARES_FRAME` と同じ根拠。`build()` に平行移動も回転も無い）。"""
+        return {"origin": [0.0, 0.0, 0.0], "rotate_x_deg": 0.0}
 
     def regions(self, params: dict) -> dict:
         m = self.ref_params()

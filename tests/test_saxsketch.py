@@ -3869,6 +3869,606 @@ def test_frozen_without_refs_is_backward_compatible():
     assert STATE.is_stale() is False
 
 
+# ------------------------------------------------------------------ セット（Phase 4-D）
+
+
+def _new_set(c, template_id="alto"):
+    return c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                            "template_id": template_id,
+                                            "set_id": "mouthpiece_set"})
+
+
+def test_set_new_creates_required_members_only():
+    """セット新規は**必須メンバーだけ**作り、土台を選択状態にすること。
+
+    任意の部品（リード）を先に作ると、設計していない物の寸法が設計値の顔をして
+    従属部品へ流れる。「まだ設計していない」が正しい初期状態。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    r = _new_set(c)
+    assert r.status_code == 200
+    info = r.json()["set"]
+    assert info["active"] == "mouthpiece"
+    present = {m["component_id"]: m["present"] for m in info["members"]}
+    assert present == {"mouthpiece": True, "ligature": True, "reed": False}
+    assert info["addable"] == ["reed"]
+    assert list(STATE.project.members) == ["mouthpiece", "ligature"]
+    # 単体で作ったマウスピースは「まだセットではないが育てられる」状態
+    # （`is_set` が False。部品タブには ＋リガチャー / ＋リード が出る）
+    single = c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                              "template_id": "alto",
+                                              "component_id": "mouthpiece"})
+    info = single.json()["set"]
+    assert info["is_set"] is False and info["addable"] == ["ligature", "reed"]
+
+
+def test_single_project_can_grow_into_a_set():
+    """単体で作った部品に、あとから部品を足してセットにできること。
+
+    セットを持たない部品（管体・ネック）では部品タブを出さない ——
+    「どの部品が組になるか」は descriptor の `sets` だけが決める。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    r = c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                         "template_id": "alto",
+                                         "component_id": "mouthpiece"})
+    info = r.json()["set"]
+    assert info is not None and info["is_set"] is False
+    assert info["addable"] == ["ligature", "reed"]
+    c.put("/api/project/params", json={"params": {"body_dia": 29.8}})
+
+    added = c.post("/api/set/member/add", json={"component_id": "ligature"})
+    assert added.status_code == 200
+    assert added.json()["set"]["is_set"] is True
+    assert STATE.project.set_id == "mouthpiece_set"     # セットとして名乗る
+    # 足した部品は、いま設計している値にそのまま追従する
+    assert STATE.component.refs["mouthpiece"]["params"]["body_dia"] == 29.8
+
+    # どのセットにも属さない部品では部品タブを出さない
+    body = c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                            "template_id": "alto",
+                                            "component_id": "body"})
+    assert body.json()["set"] is None
+
+
+def test_set_reference_is_live():
+    """セット内の参照は**取込操作なしで**マウスピースの現在値に追従すること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.put("/api/project/params", json={"params": {"body_dia": 30.0}})
+
+    r = c.post("/api/set/active", json={"component_id": "ligature"})
+    assert r.status_code == 200
+    ref = STATE.component.refs["mouthpiece"]
+    assert ref["source"] == "set"
+    assert ref["params"]["body_dia"] == 30.0
+    assert r.json()["reference"]["live"] is True
+
+    # 参照が変われば従属部品のキャッシュ鍵も変わる（無効化の条件を別に書かない）
+    before = STATE._member_key("ligature")
+    c.post("/api/set/active", json={"component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 28.0}})
+    assert STATE._member_key("ligature") != before
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    assert STATE.component.refs["mouthpiece"]["params"]["body_dia"] == 28.0
+
+
+def test_set_reference_import_is_refused_inside_set():
+    """セットに本体が居る参照は取込めないこと（正が 2 つになる）。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    r = c.post("/api/project/reference",
+               json={"component": "mouthpiece", "path": None})
+    assert r.status_code == 400
+    assert "セット" in r.json()["detail"]
+
+
+def test_set_roundtrip(tmp_path):
+    """3 メンバーの保存 → 読込で、値・active・生きた参照が保たれること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.put("/api/project/params", json={"params": {"body_dia": 29.7}})
+    c.post("/api/set/member/add", json={"component_id": "reed"})
+    c.put("/api/project/params", json={"params": {"tip_thickness": 0.11}})
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    c.put("/api/project/params", json={"params": {"band_width": 13.5}})
+
+    f = tmp_path / "set.wproj"
+    assert c.post("/api/project/save", json={"path": str(f)}).status_code == 200
+    r = c.post("/api/project/open", json={"path": str(f)})
+    assert r.status_code == 200
+    assert r.json()["set"]["active"] == "ligature"
+    assert STATE.project.member("mouthpiece").params["body_dia"] == 29.7
+    assert STATE.project.member("reed").params["tip_thickness"] == 0.11
+    assert STATE.paramset.values["band_width"] == 13.5
+    assert STATE.component.refs["mouthpiece"]["params"]["body_dia"] == 29.7
+
+
+def test_set_member_export_freezes_reference(tmp_path):
+    """部品を単体 .wproj へ書き出すと、束ねた参照が凍結値として残ること。
+
+    参照が空のまま出すと、単体で開いた瞬間にテンプレート既定値へ落ちて、
+    書き出した本人が見ていた形と違う物が出てくる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.put("/api/project/params", json={"params": {"body_dia": 30.2}})
+    c.post("/api/set/active", json={"component_id": "ligature"})
+
+    out = tmp_path / "lig.wproj"
+    r = c.post("/api/set/member/export",
+               json={"component_id": "ligature", "path": str(out)})
+    assert r.status_code == 200 and out.exists()
+
+    opened = c.post("/api/project/open", json={"path": str(out)})
+    assert opened.status_code == 200
+    assert opened.json()["set"]["is_set"] is False       # 単体として開く
+    ref = STATE.component.refs["mouthpiece"]
+    assert ref["source"] is None                          # もう追従しない
+    assert ref["params"]["body_dia"] == 30.2
+    assert opened.json()["reference"]["live"] is False
+
+    # 書き出した単体にマウスピースを足すと、以後はセット側が正になる。
+    # **形が変わるので黙ってやらない**（凍結値 30.2 → テンプレート既定）。
+    added = c.post("/api/set/member/add", json={"component_id": "mouthpiece"})
+    assert any("追従します" in n for n in added.json()["notices"])
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    assert STATE.component.refs["mouthpiece"]["source"] == "set"
+    assert STATE.component.refs["mouthpiece"]["params"]["body_dia"] != 30.2
+
+
+def test_set_member_import(tmp_path):
+    """既存の単体 .wproj をセットのメンバーとして取り込めること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    # 先に単体のリードを作って保存
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "reed"})
+    c.put("/api/project/params", json={"params": {"tip_thickness": 0.13}})
+    src = tmp_path / "reed.wproj"
+    c.post("/api/project/save", json={"path": str(src)})
+
+    _new_set(c)
+    r = c.post("/api/set/member/import", json={"path": str(src)})
+    assert r.status_code == 200
+    assert STATE.project.member("reed").params["tip_thickness"] == 0.13
+    assert STATE.project.active == "reed"
+
+    # 既にある部品は**黙って置き換えない**（今の設計が戻せないまま消える）
+    dup = c.post("/api/set/member/import", json={"path": str(src)})
+    assert dup.status_code == 400 and "既に" in dup.json()["detail"]
+
+    # サイズ違いは弾く（セットはテンプレートを 1 か所しか持たない）
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "tenor",
+                                     "component_id": "reed"})
+    other = tmp_path / "tenor_reed.wproj"
+    c.post("/api/project/save", json={"path": str(other)})
+    _new_set(c)
+    bad = c.post("/api/set/member/import", json={"path": str(other)})
+    assert bad.status_code == 400 and "テナー" in bad.json()["detail"]
+
+
+def test_set_remove_blocked_when_depended_on():
+    """必須参照の相手（マウスピース）は、従属部品が居るうちは外せないこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    r = c.post("/api/set/member/remove", json={"component_id": "mouthpiece"})
+    assert r.status_code == 400
+    assert "従属" in r.json()["detail"]
+    # 任意メンバーは外せる
+    c.post("/api/set/member/add", json={"component_id": "reed"})
+    assert c.post("/api/set/member/remove",
+                  json={"component_id": "reed"}).status_code == 200
+
+
+def test_v1_project_opens_as_single_member_set(tmp_path):
+    """v1 の .wproj が、値・凍結・採寸・編集済みモデルを保ったまま開けること。"""
+    import json
+    import zipfile
+    from saxsketch.core.project import Project
+    old = tmp_path / "v1.wproj"
+    with zipfile.ZipFile(old, "w") as zf:
+        zf.writestr("project.json", json.dumps({
+            "schema_version": 1, "instrument_id": "saxophone",
+            "template_id": "tenor", "component_id": "ligature", "name": "旧",
+            "params": {"band_width": 12.5},
+            "refs": {"mouthpiece": {"source": "/tmp/mp.wproj", "label": "M",
+                                    "params": {"body_dia": 30.8}}},
+            "notes": "メモ",
+            "frozen": {"frozen_at": "2026-01-01T00:00:00Z",
+                       "params": {"band_width": 12.5}, "solid_volume_cc": 3.0,
+                       "export_dir": None},
+            "derived": {"imported_at": "2026-01-02T00:00:00Z",
+                        "source_file": "x.stl", "quality": {}, "analysis": {}},
+            "survey": {"surveyed_at": "2026-01-03T00:00:00Z", "note": "n",
+                       "measured": {}, "measured_size": {}, "checkpoint": {},
+                       "card": None}}, ensure_ascii=False))
+        zf.writestr("derived/model.stl", b"STLBYTES")
+
+    p = Project.load(old)
+    assert p.schema_version == 2 and list(p.members) == ["ligature"]
+    assert p.is_set is False                      # 単体は単体のまま
+    assert p.params["band_width"] == 12.5
+    assert p.refs["mouthpiece"]["params"]["body_dia"] == 30.8
+    assert p.notes == "メモ" and p.frozen["solid_volume_cc"] == 3.0
+    assert p.survey["note"] == "n" and p.derived_stl == b"STLBYTES"
+
+    # v2 で保存し直しても中身が保たれる（derived は部品ごとの場所へ移る）
+    new = tmp_path / "v2.wproj"
+    p.save(new)
+    with zipfile.ZipFile(new) as zf:
+        assert "derived/ligature/model.stl" in zf.namelist()
+    q = Project.load(new)
+    assert q.params == p.params and q.derived_stl == b"STLBYTES"
+    assert q.refs == p.refs and q.frozen == p.frozen
+
+
+def test_future_schema_version_is_refused(tmp_path):
+    """未来バージョンの .wproj は理由付きで拒否されること。"""
+    import json
+    import zipfile
+    from saxsketch.core.project import Project
+    f = tmp_path / "future.wproj"
+    with zipfile.ZipFile(f, "w") as zf:
+        zf.writestr("project.json", json.dumps({
+            "schema_version": 99, "instrument_id": "saxophone",
+            "template_id": "alto", "members": {}, "active": ""}))
+    with pytest.raises(ValueError, match="新しいバージョン"):
+        Project.load(f)
+
+
+def test_set_freeze_stales_on_master_edit(tmp_path):
+    """セットで凍結後にマウスピースを触ると、従属部品の凍結が陳腐化すること。
+
+    参照が「生きた」ぶん、取込操作をしなくても形が変わる。凍結が追いつかないと
+    古い外部編集モデルが入稿に混ざる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    e = c.post("/api/export", json={"formats": ["stl"], "make_package": False,
+                                    "out_dir": str(tmp_path / "frozen"),
+                                    "freeze": True})
+    assert e.status_code == 200 and not STATE.is_stale()
+
+    c.post("/api/set/active", json={"component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 30.4}})
+    r = c.post("/api/set/active", json={"component_id": "ligature"})
+    assert STATE.is_stale(), "マウスピースを変えたのに凍結が陳腐化していない"
+    assert r.json()["manual_edit"]["stale"] is True
+
+
+def test_ligature_uses_set_reed_dimensions():
+    """リガチャーの当たり面が、セットのリードの実寸に従うこと。
+
+    以前はテンプレート固定で、実際に設計したリードと接触寸法が食い違ったまま
+    作れてしまった（`ligature.reed_params` の注記）。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/member/add", json={"component_id": "reed"})
+    c.put("/api/project/params", json={"params": {"heel_thickness": 3.2,
+                                                  "heel_width": 12.5}})
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    lig = STATE.component
+    assert lig.reed_is_from_set() is True
+    assert lig.reed_params()["heel_thickness"] == 3.2
+    assert lig.reed_params()["heel_width"] == 12.5
+
+    # リードを外せばテンプレート既定へ戻る（＝規則は 1 か所だけ）
+    c.post("/api/set/member/remove", json={"component_id": "reed"})
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    tmpl = STATE.component.template["reed"]
+    assert STATE.component.reed_is_from_set() is False
+    assert STATE.component.reed_params()["heel_thickness"] == tmpl["heel_thickness"]
+
+
+def test_adding_reed_notifies_shape_change():
+    """リードの足し引きで形が変わることを**黙って**やらないこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    added = c.post("/api/set/member/add", json={"component_id": "reed"}).json()
+    assert any("リガチャー" in n and "リード" in n for n in added["notices"])
+    removed = c.post("/api/set/member/remove",
+                     json={"component_id": "reed"}).json()
+    assert any("テンプレート" in n for n in removed["notices"])
+
+
+def test_template_reed_in_set_is_bit_identical():
+    """セットのリードがテンプレート値のとき、リガチャーの形が従来と一致すること。
+
+    出所を変えた（テンプレート → セットのリード）だけで、**同じ値なら同じ形**で
+    なければならない。ここが崩れると、既存プロジェクトの形が理由なく変わる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+
+    _new_set(c)                                    # リード無し（テンプレート想定）
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    p = dict(STATE.paramset.values)
+    without = STATE.component.build(p)
+    sec_without = STATE.component.section(p)
+    dim_without = STATE.component.dimensions(p)
+
+    c.post("/api/set/member/add", json={"component_id": "reed"})   # 既定値のまま
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    assert STATE.component.reed_is_from_set() is True
+    with_reed = STATE.component.build(p)
+
+    assert with_reed.volume == without.volume
+    assert len(with_reed.vertices()) == len(without.vertices())
+    assert STATE.component.section(p) == sec_without
+    assert STATE.component.dimensions(p) == dim_without
+
+    # 3 サイズとも「テンプレート値」と「ParamSet を通した既定値」が一致すること。
+    # ここがずれると、リードを足しただけでリガチャーの形が黙って変わる
+    # （`ParamSpec.validate` はレンジ外を黙ってクランプする）。
+    from saxsketch.core.schema import ParamSet
+    for tid in SIZES:
+        reed = get_registry().get("saxophone").make_component("reed", tid)
+        raw = reed.template["reed"]
+        normalized = ParamSet(reed.param_specs(), raw).values
+        for k in ("heel_thickness", "heel_width", "heel_edge_thickness"):
+            assert raw[k] == normalized[k], f"{tid}.{k} がクランプされている"
+
+
+def test_set_card_rows_and_source():
+    """セットの適合カードが、部品どうしでしか出せない量と想定リードの出所を出すこと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    r = _new_set(c)
+    card = r.json()["set_card"]
+    assert card is not None
+    labels = [row[0] for row in card["rows"]]
+    assert "想定リード" in labels
+    assert "テンプレート" in dict(card["rows"])["想定リード"]
+
+    r = c.post("/api/set/member/add", json={"component_id": "reed"})
+    card = r.json()["set_card"]
+    rows = dict(card["rows"])
+    assert "このセットのリード" in rows["想定リード"]
+    assert "リード全長 / 帯の後端" in rows
+    assert "リード踵幅 / テーブル実幅（帯の中央）" in rows
+    assert card["status"] == "ok"
+
+    # 踵をテーブルからはみ出させると乖離が出る（マウスピース側の実幅で判定する）
+    c.put("/api/project/params", json={"params": {"heel_width": 18.0}})
+    bad = c.get("/api/project").json()["set_card"]
+    assert bad["status"] == "bad"
+    assert "乖離" in dict(bad["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
+
+    # 単体プロジェクトでは出さない（部品が 1 つでは決まらない）
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "ligature"})
+    assert c.get("/api/project").json()["set_card"] is None
+    assert STATE.set_card() is None
+
+
+def test_set_card_table_width_not_reed_width():
+    """テーブル幅の判定に `reed_width` を使っていないこと。
+
+    `reed_width` は窓幅の公称値で、マウスピースの面を 1 つも決めていない
+    （`profiles.table_flat_width` の注記）。実幅は z で変わる。
+    """
+    from saxsketch.instruments.saxophone.components import profiles, set_check
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    lig = reg.make_component("ligature", "alto")
+    m = _template_params("mouthpiece", "alto")
+    p = _template_params("ligature", "alto")
+    reed = _template_params("reed", "alto")
+    lig.set_refs({"mouthpiece": {"params": m}, "reed": {"params": reed}})
+
+    card = set_check.set_card(lig.size_info, {
+        "mouthpiece": {"params": m, "component": reg.make_component("mouthpiece", "alto")},
+        "ligature": {"params": p, "component": lig},
+        "reed": {"params": reed, "component": reg.make_component("reed", "alto")},
+    })
+    z_mid = sum(lp.seat_range(m, p)) / 2.0
+    flat = profiles.table_flat_width(m, z_mid)
+    assert f"{flat:.2f}" in dict(card["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
+    assert abs(flat - m["reed_width"]) > 0.5      # 公称と実幅は別物
+
+
+def test_reed_assembly_placement_lies_on_table():
+    """リードの配置が、底面をテーブル平面に載せること。
+
+    向きも位置も `table_plane_y` から出しているので、**平面の定義が変われば
+    置き場所も一緒に動く**。ここが符号だけ別に決め打たれていると、片方だけ
+    直った状態が作れる。
+    """
+    import math
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        m = _template_params("mouthpiece", tid)
+        reed = reg.make_component("reed", tid)
+        reed.set_refs({"mouthpiece": {"params": m}})
+        r = _template_params("reed", tid)
+        pl = reed.assembly_placement(r)
+        th = math.radians(pl["rotate_x_deg"])
+        # 傾きはテーブル平面の傾き（実測 4.18°）と一致する
+        assert pl["rotate_x_deg"] == pytest.approx(
+            math.degrees(profiles.table_angle(m)), abs=1e-6)
+        # 底面（リード局所 y=0）の各点がテーブル平面の上に来る
+        for length in (0.0, 10.0, 30.0, r["reed_length"]):
+            y = pl["origin"][1] - length * math.sin(th)
+            z = pl["origin"][2] + length * math.cos(th)
+            assert y == pytest.approx(profiles.table_plane_y(m, z), abs=1e-9)
+        # 先端はティップレールの前縁（中央）に合う
+        assert pl["origin"][2] == pytest.approx(profiles.tip_contour_z(m, 0.0))
+
+    # 参照マウスピースが無ければ置き場所は決まらない（出さない）
+    bare = reg.make_component("reed", "alto")
+    bare.set_refs({})
+    assert bare.assembly_placement(_template_params("reed", "alto")) is None
+
+
+def test_set_placement_is_relative_to_active():
+    """配置が編集中の部品を基準にした相対変換で、基準を替えると逆変換になること。"""
+    import math
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/member/add", json={"component_id": "reed"})
+
+    c.post("/api/set/active", json={"component_id": "mouthpiece"})
+    from_mp = c.get("/api/set/placement").json()
+    assert from_mp["active"] == "mouthpiece" and from_mp["unplaced"] == []
+    parts = {p["component_id"]: p for p in from_mp["parts"]}
+    assert set(parts) == {"ligature", "reed"}
+    # 同じ座標系の部品は恒等（リガチャーは参照 MP の z でそのまま張られている）
+    assert parts["ligature"]["rotate_x_deg"] == 0.0
+    assert parts["ligature"]["origin"] == [0.0, 0.0, 0.0]
+
+    c.post("/api/set/active", json={"component_id": "reed"})
+    from_reed = {p["component_id"]: p
+                 for p in c.get("/api/set/placement").json()["parts"]}
+    fwd, inv = parts["reed"], from_reed["mouthpiece"]
+    assert inv["rotate_x_deg"] == pytest.approx(-fwd["rotate_x_deg"])
+    # 往復して原点へ戻る: R(-θ)·(R(θ)·0 + t) + t' == 0
+    th = math.radians(fwd["rotate_x_deg"])
+    y = inv["origin"][1] + fwd["origin"][1] * math.cos(th) + fwd["origin"][2] * math.sin(th)
+    z = inv["origin"][2] - fwd["origin"][1] * math.sin(th) + fwd["origin"][2] * math.cos(th)
+    assert (y, z) == (pytest.approx(0.0, abs=1e-9), pytest.approx(0.0, abs=1e-9))
+
+
+def test_set_member_stl_endpoint(tmp_path):
+    """合わせ表示用に部品ごとの STL が取れ、居ない部品は 404 になること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/active", json={"component_id": "mouthpiece"})
+    r = c.get("/api/set/model.stl?member=ligature")
+    assert r.status_code == 200 and len(r.content) > 1000
+    assert c.get("/api/set/model.stl?member=reed").status_code == 404
+
+    # 単体プロジェクトでは配置が空（UI はトグルを出さない）
+    c.post("/api/project/new", json={"instrument_id": "saxophone",
+                                     "template_id": "alto",
+                                     "component_id": "mouthpiece"})
+    empty = c.get("/api/set/placement").json()
+    assert empty["parts"] == []
+
+
+def test_set_export_one_folder(tmp_path):
+    """セット出力が 1 フォルダに部品ごとのサブフォルダ＋共通の仕様書/BOM/ZIP を作ること。"""
+    import zipfile
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/member/add", json={"component_id": "reed"})
+
+    r = c.post("/api/export", json={"formats": ["stl"], "scope": "set",
+                                    "out_dir": str(tmp_path), "make_package": True})
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert res["scope"] == "set"
+    assert set(res["members"]) == {"mouthpiece", "ligature", "reed"}
+
+    out = Path(res["out_dir"])
+    for cid in ("mouthpiece", "ligature", "reed"):
+        assert (out / cid / "model.stl").exists(), cid
+    assert (out / "spec.html").exists() and (out / "bom.csv").exists()
+
+    # 仕様書は 1 枚に 3 部品ぶん。部品どうしの適合カードも入る。
+    html = (out / "spec.html").read_text(encoding="utf-8")
+    for label in ("マウスピース", "リガチャー", "リード"):
+        assert f'<h1 class="part">{label}' in html
+    assert "セットの適合" in html
+
+    # 部品表は先頭列でどの部品の行かが分かる
+    csv_text = (out / "bom.csv").read_bytes().decode("utf-8-sig")
+    assert csv_text.splitlines()[1].startswith("部品,区分,")
+    assert any(line.startswith("リード,") for line in csv_text.splitlines())
+
+    # 入稿 ZIP は 1 本で、中もサブフォルダ構成
+    with zipfile.ZipFile(res["package"]) as zf:
+        names = zf.namelist()
+    assert "mouthpiece/model.stl" in names and "reed/model.stl" in names
+    assert "spec.html" in names and "README.txt" in names
+
+
+def test_member_scope_export_is_unchanged(tmp_path):
+    """単体範囲の出力は従来どおり（サブフォルダを作らない）こと。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    r = c.post("/api/export", json={"formats": ["stl"], "scope": "member",
+                                    "out_dir": str(tmp_path), "make_package": False})
+    assert r.status_code == 200
+    out = Path(r.json()["out_dir"])
+    assert r.json()["scope"] == "member"
+    assert (out / "model.stl").exists()
+    assert not (out / "mouthpiece").exists()
+    html = (out / "spec.html").read_text(encoding="utf-8")
+    assert '<h1 class="part">' not in html      # 部品見出しは付かない
+
+
+def test_set_export_blocked_by_stale_member(tmp_path):
+    """セット出力でも、陳腐化した編集済みモデルを持つ部品があれば止まること。"""
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    _new_set(c)
+    c.post("/api/set/active", json={"component_id": "ligature"})
+    c.post("/api/export", json={"formats": ["stl"], "make_package": False,
+                                "out_dir": str(tmp_path / "f"), "freeze": True})
+    STATE.project.derived_stl = b"dummy"
+    STATE.project.derived = {"imported_at": "x", "source_file": "x",
+                             "quality": {}, "analysis": {}}
+
+    # マウスピースを動かすとリガチャーの凍結が古くなる
+    c.post("/api/set/active", json={"component_id": "mouthpiece"})
+    c.put("/api/project/params", json={"params": {"body_dia": 30.6}})
+    r = c.post("/api/export", json={"formats": ["stl"], "scope": "set",
+                                    "out_dir": str(tmp_path / "s"),
+                                    "make_package": False})
+    assert r.status_code == 409
+    assert "リガチャー" in r.json()["detail"]
+
+
 def test_impedance_unsupported_returns_422():
     """音響を持たないコンポーネントは 500 ではなく 422 を返すこと。"""
     from fastapi.testclient import TestClient
