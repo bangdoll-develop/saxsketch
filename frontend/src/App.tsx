@@ -137,7 +137,7 @@ export default function App() {
       return placement!.parts.map((p, i) => ({
         id: p.component_id,
         src: `/api/set/model.stl?member=${p.component_id}&v=${p.hash}`,
-        origin: p.origin, rotateXDeg: p.rotate_x_deg,
+        origin: p.origin, rotateXDeg: p.rotate_x_deg, flipZ: p.flip_z,
         color: PART_COLORS[i % PART_COLORS.length], opacity: 0.6,
       }));
     }

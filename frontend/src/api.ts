@@ -120,7 +120,11 @@ export interface SetInfo {
  *  `rotate_x_deg` → `origin` の順に適用する。 */
 export interface PlacedPart {
   component_id: string; label: string;
-  origin: [number, number, number]; rotate_x_deg: number; hash: string;
+  origin: [number, number, number]; rotate_x_deg: number;
+  /** Z 軸まわり 180°（裏返し）を先に掛けるか。リードのように、載る相手の
+   *  外向き法線と肉の向きが逆な部品で true になる */
+  flip_z: boolean;
+  hash: string;
 }
 export interface SetPlacement {
   active: string | null;

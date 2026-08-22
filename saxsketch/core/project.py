@@ -141,8 +141,14 @@ class Project:
 
     @property
     def is_set(self) -> bool:
-        """セットとして扱うか。UI が部品タブを出すかの判断に使う。"""
-        return len(self.members) > 1 or self.set_id is not None
+        """実際に組になっているか（部品が 2 つ以上）。
+
+        **`set_id` は見ない。** 見ると、部品を外して 1 個になったプロジェクトが
+        「セット」を名乗り続け、出力の既定範囲もセット 3D も 1 部品のまま出る。
+        `set_id` のほうは「どのセットへ育てられるか」を指すので消さない
+        （`AppState.set_summary` が ＋ボタンを出すのに使う）。
+        """
+        return len(self.members) > 1
 
     def add_member(self, member: Member) -> None:
         self.members[member.component_id] = member

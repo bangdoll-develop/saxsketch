@@ -16,7 +16,11 @@ interface Props {
 
 /** セットの部品タブ。**どの部品が組になるかはサーバが宣言する**（descriptor の
  *  `sets`）ので、ここには楽器固有の知識を置かない —— 並びも必須/任意も
- *  `SetInfo.members` をそのまま描くだけ。 */
+ *  `SetInfo.members` をそのまま描くだけ。
+ *
+ *  × は**土台（master）以外の全部**に出す。`required` で隠すと、リガチャーを外す
+ *  経路がどこにも無くなる —— `required` は「新規セットで最初から作る」の意味で、
+ *  外せるかどうかはサーバが従属関係で決める（外せなければ理由が返る）。 */
 export default function SetPanel({
   info, onSelect, onAdd, onRemove, onImport, onExport,
 }: Props) {
@@ -35,7 +39,7 @@ export default function SetPanel({
               <span className="setmember-label">
                 {m.master ? "★ " : ""}{m.label}
               </span>
-              {!m.required && !m.master && (
+              {!m.master && (
                 <span className="setmember-x" title="セットから外す"
                       onClick={(e) => { e.stopPropagation(); onRemove(m.component_id); }}>
                   ×

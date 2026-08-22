@@ -427,7 +427,13 @@ class ReedComponent(Component):
                  / (z_b - z_a))
         z0 = profiles.tip_contour_z(m, 0.0)      # 前縁が来る z（中央）
         return {"origin": [0.0, profiles.table_plane_y(m, z0), z0],
-                "rotate_x_deg": math.degrees(math.atan(-slope))}
+                "rotate_x_deg": math.degrees(math.atan(-slope)),
+                # **裏返して載る。** リードの肉は底面 y=0 から +y へ付くが
+                # （`reed_profiles.sections`）、テーブル平面は胴の下 ——
+                # `table_plane_y` は負で、マウスピースの材料はその上（+y）に在る。
+                # 載る側の外向き法線は −y なので、裏返さないと肉が丸ごと胴へ潜る
+                # （アルト既定で +2.807mm ＝ リード厚 2.800 とほぼ一致した）。
+                "flip_z": True}
 
     def regions(self, params: dict) -> dict:
         return rp.param_regions(params)

@@ -54,10 +54,11 @@
   "material": "pla",
   "min_layer": 0.08
  },
+ "ligature_note": "**seat_setback の既定 0.0 は可動域の端**（帯の後端が胴の最大径に密着）。端に置いてあるのは、そこが物理の壁だから —— 最大径より後ろは胴が細るので帯は掴めない。0.0 は「旧 seat_offset 時代に実際に作られていた形」でもあり、既定を動かすと既存設計の形が全部動くので据え置いた（旧値 3.0/4.0/4.5 は測り方が違うだけで、どれも壁に張り付いた同じ形を指していた）。前へ引きたいときは 0〜15mm が全域効く（帯の後端が削り始めに届くまでの余地は soprano 17.1 / alto 22.3 / tenor 26.0mm）。",
  "ligature": {
   "band_width": 13.0,
   "band_thickness": 2.2,
-  "seat_offset": 3.0,
+  "seat_setback": 0.0,
   "clearance": 0.25,
   "reed_clearance": 0.15,
   "screw_count": 2,

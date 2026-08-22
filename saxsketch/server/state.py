@@ -398,9 +398,15 @@ class AppState:
         影響領域のハイライトもその座標で作られているので、本体を動かすと全部
         ずれる。動かすのは重ねる側だけにする。
 
-        土台座標での配置を `R(θ_i)·v + t_i` とすると、基準 a から見た配置は
-        `R(θ_i − θ_a)·v + R(−θ_a)·(t_i − t_a)`。回転は X 軸だけなので
-        （`Component.assembly_placement`）、この合成も X 軸まわりで閉じる。
+        土台座標での配置を `R_x(θ_i)·F^{f_i}·v + t_i`（`F = R_z(π)` ＝ 裏返し）と
+        すると、基準 a から見た配置は `T_a^{-1}∘T_i` で
+
+            回転  = F^{f_a}·R_x(θ_i − θ_a)·F^{f_i}
+            平行  = F^{f_a}·R_x(−θ_a)·(t_i − t_a)
+
+        `F·R_x(θ)·F = R_x(−θ)` かつ `F² = I` なので、これは
+        `R_x(±(θ_i−θ_a))·F^{f_a xor f_i}` に畳める ——**同じ形のまま閉じている**
+        ので、両端に一般の行列を持ち込まずに済む（`Component.assembly_placement`）。
 
         置き場所を返さない部品（`None`）は**出さない**。間違った位置に置くより
         出さないほうが安全で、出せなかったことは `unplaced` で伝える。
@@ -424,20 +430,29 @@ class AppState:
             return {"active": active, "parts": [], "unplaced": unplaced}
 
         th_a = math.radians(base["rotate_x_deg"])
+        flip_a = bool(base.get("flip_z", False))
         ca, sa = math.cos(-th_a), math.sin(-th_a)
         parts = []
         for cid, pl in place.items():
             if cid == active:
                 continue
+            dx = pl["origin"][0] - base["origin"][0]
             dy = pl["origin"][1] - base["origin"][1]
             dz = pl["origin"][2] - base["origin"][2]
+            x = dx
+            y = dy * ca - dz * sa
+            z = dy * sa + dz * ca
+            dth = pl["rotate_x_deg"] - base["rotate_x_deg"]
+            if flip_a:
+                # F を左から掛ける ＝ 角を反転し、平行移動の x,y を反転する
+                dth = -dth
+                x, y = -x, -y
             parts.append({
                 "component_id": cid,
                 "label": self.members[cid].component.label,
-                "origin": [pl["origin"][0] - base["origin"][0],
-                           dy * ca - dz * sa,
-                           dy * sa + dz * ca],
-                "rotate_x_deg": pl["rotate_x_deg"] - base["rotate_x_deg"],
+                "origin": [x, y, z],
+                "rotate_x_deg": dth,
+                "flip_z": flip_a != bool(pl.get("flip_z", False)),
                 # 形の同一性。ブラウザのキャッシュ鍵（`?v=`）に使う。
                 "hash": self._member_key(cid)[:12],
             })
@@ -474,8 +489,17 @@ class AppState:
         self.notices = notices
 
     def remove_member(self, component_id: str) -> None:
+        """セットから部品を外す。
+
+        **外せるかどうかは従属関係で決まる**（descriptor の `required` ではない）。
+        `required` は「新規セットで最初から作る」だけの意味で、これを「外せない」に
+        流用すると、リガチャーを外す経路がどこにも無くなる（1 つの値が 2 つの意味を
+        決める規則をこのリポジトリでは作らない）。
+        """
         assert self.project is not None
         inst = self.registry.get(self.project.instrument_id)
+        # **具体的な理由を先に出す。** 土台が外せないのは「他が従属しているから」で、
+        # 実際に居る部品の名前を出せるならそちらのほうが次の一手が分かる。
         for cid, ms in self.members.items():
             if cid == component_id:
                 continue
@@ -484,6 +508,12 @@ class AppState:
                     f"「{ms.component.label}」が「"
                     f"{inst.component_classes[component_id].label}」に従属しています。"
                     f"先にそちらを外してください。")
+        sdef = self.set_definition() or {}
+        for m in sdef.get("members", []):
+            if m["component"] == component_id and m.get("role") == "master":
+                raise ValueError(
+                    f"「{inst.component_classes[component_id].label}」はこのセットの"
+                    f"土台なので外せません。他の部品が寸法をここから取ります。")
         notices = self._affected_by(component_id, removing=True)
         self.project.remove_member(component_id)
         self.members.pop(component_id, None)

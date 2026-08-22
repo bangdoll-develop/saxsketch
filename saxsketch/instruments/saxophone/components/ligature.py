@@ -72,8 +72,10 @@ def _specs(t: dict) -> list[ParamSpec]:
           "広いほどリードの拘束が強く芯のある音、狭いほど自由に鳴る"),
         f("band_thickness", "バンド厚", "バンド", "mm", 1.2, 4.0, 0.1,
           "剛性。薄いほどしなって響くが、締結荷重で割れやすくなる"),
-        f("seat_offset", "座位置オフセット", "バンド", "mm", 0.0, 15.0, 0.5,
-          "リガチャー座の前端からの距離。前寄りほど明るく反応が速い"),
+        # 起点は**胴の最大径**（帯の後端が当たる物理の壁）。座の前端を起点に
+        # していた頃は、増やすとその壁へ押し付けるだけで可動域の 99% が死んでいた。
+        f("seat_setback", "座位置（最大径から前へ）", "バンド", "mm", 0.0, 15.0, 0.5,
+          "帯を最大径からどれだけ前へ引くか。前寄りほど明るく反応が速い"),
         # 下限が負なのは弾性バンド（ネジなし）のため。締め代は「負の隙間」で表す。
         # 既定 0.25 は可動域の内側なので、剛体バンドの黙ったクランプは起きない。
         f("clearance", "はめあい隙間", "バンド", "mm", -0.60, 0.60, 0.05,
@@ -226,15 +228,23 @@ class LigatureComponent(Component):
     # ------------------------------------------------------------ 旧プロジェクトの変換
 
     def migrate_params(self, values: dict) -> tuple[dict, list[str]]:
-        """旧 `plate_type`（圧力プレート）を締結方式＋当たり方へ移す。
+        """保存済みプロジェクトのパラメータを現行のキーへ移す。
 
-        `ParamSet` は未知キーを黙って捨てるので、何もしないと「全面プレート」に
-        してあったプロジェクトが黙って線接触に変わる。**黙って値が変わる経路を
-        作らない**ので、変換したことを 1 行返す。
+        `ParamSet` は未知キーを黙って捨てるので、何もしないと古い .wproj が
+        黙って既定値へ落ちる。**黙って値が変わる経路を作らない**ので、
+        変換したことを 1 件 1 行返す。
         """
-        if "plate_type" not in values:
-            return values, []
         v = dict(values)
+        notes: list[str] = []
+        notes += self._migrate_plate_type(v)
+        notes += self._migrate_seat_offset(v)
+        return v, notes
+
+    @staticmethod
+    def _migrate_plate_type(v: dict) -> list[str]:
+        """旧 `plate_type`（圧力プレート）を締結方式＋当たり方へ移す。"""
+        if "plate_type" not in v:
+            return []
         old = str(v.pop("plate_type"))
         table = {"none": ("none", 1), "plain": ("face", 1), "rail": ("line", 2)}
         kind, count = table.get(old, ("line", 2))
@@ -242,10 +252,31 @@ class LigatureComponent(Component):
         v.setdefault("contact_type", kind)
         v.setdefault("contact_count", count)
         was = {"none": "なし", "plain": "全面", "rail": "2点レール"}.get(old, old)
-        return v, [f"旧の圧力プレート設定（{was}）を接触形状"
-                   f"「{CONTACT_LABELS[kind]}」×{count} へ移しました。"
-                   f"接触の頂点はリード背面（カマボコ）に沿うので、"
-                   f"体積と部品表が変わります。"]
+        return [f"旧の圧力プレート設定（{was}）を接触形状"
+                f"「{CONTACT_LABELS[kind]}」×{count} へ移しました。"
+                f"接触の頂点はリード背面（カマボコ）に沿うので、"
+                f"体積と部品表が変わります。"]
+
+    @staticmethod
+    def _migrate_seat_offset(v: dict) -> list[str]:
+        """旧 `seat_offset`（座の前端から後ろ向き）を `seat_setback` へ移す。
+
+        **形は変えない。** 旧定義では帯の後端が胴の最大径の壁に必ず当たっており、
+        実効値は 3 サイズとも 0.17mm 以下だった（既定 3.0/4.0/4.5 は壁の外＝
+        どの値でも同じ形）。新定義の 0.0 がその「最大径に密着」なので、旧値が
+        何であれ 0.0 へ移すと**保存されていた形とビット一致**する。
+
+        **キーごと変えている**のは、値の意味だけ変えると旧値と新値を区別できず、
+        利用者が意図して入れた 8.0mm を黙って 0 に戻す経路ができるから。
+        """
+        if "seat_offset" not in v:
+            return []
+        old = float(v.pop("seat_offset"))
+        v.setdefault("seat_setback", 0.0)
+        return [f"座位置の測り方を変えました（旧「座の前端から {old:.1f}mm 後ろ」→"
+                f"新「最大径から前へ 0.0mm」）。旧の値は帯の後端が最大径の壁で"
+                f"止まっていて実効 0.17mm 以下だったので、**形は変わりません**。"
+                f"いまはスライダの 0〜15mm が全部効きます。"]
 
     # ------------------------------------------------------------ 形状生成
 
@@ -375,8 +406,8 @@ class LigatureComponent(Component):
             ["マウスピース ボディ径", f"φ{m['body_dia']:.1f} mm"],
             ["装着位置 z", f"{z0:.1f}〜{z1:.1f} mm"],
             ["リガチャー座（公称）", f"{seat0:.1f}〜{seat1:.1f} mm"],
-            ["座位置オフセット（要求/実効）",
-             f"{p['seat_offset']:.1f} / {lp.effective_seat_offset(m, p):.2f} mm"],
+            ["座位置・最大径から前へ（要求/実効）",
+             f"{p['seat_setback']:.1f} / {lp.effective_seat_setback(m, p):.2f} mm"],
             ["リード収納幅（要求/実際)",
              f"{lp.requested_tab_half_width(m, p) * 2.0:.1f} / "
              f"{lp.flat_half_width(m, p) * 2.0:.1f} mm"],
@@ -399,8 +430,9 @@ class LigatureComponent(Component):
             return card("warn",
                         f"帯の前端 {z0:.1f}mm が窓の後端 {win:.1f}mm より前に出ます。"
                         f"リガチャーが窓（リードが振動する開口）に掛かるので、"
-                        f"バンド幅を {seat1 - win:.1f}mm 以下にするか、座位置"
-                        f"オフセットを小さくしてください。")
+                        + (f"バンド幅を {z1 - win:.1f}mm 以下にするか、"
+                           if z1 - win > 0 else "")
+                        + f"座位置を小さく（最大径寄りに）してください。")
         if elastic and p["clearance"] > 0.0:
             return card("warn",
                         "弾性バンドなのにはめあい隙間が正です。伸ばして嵌める"
@@ -424,11 +456,10 @@ class LigatureComponent(Component):
             advice += (f"帯は公称の座より {seat0 - z0:.1f}mm 前へ出ていますが、"
                        f"座の長さ（最大径の 23%）は典型的なリガチャー幅から作った"
                        f"公称値なので、これ自体は不都合ではありません。")
-        if lp.effective_seat_offset(m, p) < p["seat_offset"] - 0.005:
-            advice += (f"座位置オフセットは {p['seat_offset']:.1f}mm を要求して"
-                       f"いますが、帯の後端が最大径（z={seat1:.1f}）で止まるため"
-                       f"実効 {lp.effective_seat_offset(m, p):.2f}mm です。"
-                       f"前へ動かすには幅を広げてください。")
+        if lp.effective_seat_setback(m, p) < p["seat_setback"] - 0.005:
+            advice += (f"座位置は最大径から {p['seat_setback']:.1f}mm 前を要求して"
+                       f"いますが、これ以上前へ出すと帯が胴から落ちるため実効 "
+                       f"{lp.effective_seat_setback(m, p):.2f}mm です。")
         return card("ok", advice)
 
     def _screw_card(self, params: dict) -> dict:
@@ -640,9 +671,10 @@ class LigatureComponent(Component):
     def dimensions(self, params: dict) -> list[dict]:
         """主要寸法の寸法線。座標は**マウスピースの系**（4-C.4 と同じ理由で共有）。
 
-        座位置オフセットは**実効値**を測る。要求値は後端（最大径）の壁で必ず
-        飲まれるので（4-C.3b: 既定 3.0/4.0/4.5 に対し実効 0.13/0.17/0.17）、
-        `dim()` が「指定 4.0」を併記して**報告されたクランプ**をそのまま図に出す。
+        座位置は**実効値**を測る（最大径から帯の後端まで）。前へ出しすぎて胴から
+        落ちる手前で飲まれることがあるので、`dim()` が「指定 ○○」を併記して
+        **報告されたクランプ**をそのまま図に出す。既定（最大径に密着）では
+        長さ 0 になるので線ごと出さない。
 
         スリットとネジ座はネジ式のときだけ。弾性バンド／テーパ圧入には存在しない。
         """
@@ -656,7 +688,7 @@ class LigatureComponent(Component):
         reed = self.reed_params()
         z0, z1 = lp.seat_range(m, p)
         zm = 0.5 * (z0 + z1)
-        seat0, _ = profiles.ligature_seat_range(m)
+        _, seat1 = profiles.ligature_seat_range(m)
         r_in = lp.inner_radius(m, p)
         r_out = r_in + p["band_thickness"]
         UP, AFT = (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
@@ -664,13 +696,16 @@ class LigatureComponent(Component):
         out = [
             dim([0.0, r_out, z0], [0.0, r_out, z1], UP,
                 spec=sp["band_width"], params=p, level=0),
-            dim([0.0, r_out, seat0], [0.0, r_out, z0], UP,
-                spec=sp["seat_offset"], params=p, level=1),
             dim([0.0, r_in, zm], [0.0, r_out, zm], AFT,
                 spec=sp["band_thickness"], params=p, level=0),
             dim([0.0, -r_in, zm], [0.0, r_in, zm], AFT,
                 key="inner_dia", label="内周径", unit="mm", level=1),
         ]
+        # 最大径に密着（既定）なら長さ 0 の線になるので**出さない**。
+        # 潰れた寸法は図の情報を増やさず、ラベルだけが重なる。
+        if seat1 - z1 > 1e-9:
+            out.append(dim([0.0, r_out, z1], [0.0, r_out, seat1], UP,
+                           spec=sp["seat_setback"], params=p, level=1))
         if lp.has_screws(p):
             base, tip = lp.ear_span(m, p, reed)
             ear = lp.ear_thickness(p)

@@ -77,8 +77,12 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
         ("帯幅 最大", dict(base, band_width=specs["band_width"].max)),
         ("帯幅 最大×6線", dict(base, band_width=specs["band_width"].max,
                                contact_type="line", contact_count=6)),
-        ("オフセット 0", dict(base, seat_offset=specs["seat_offset"].min)),
-        ("オフセット 最大", dict(base, seat_offset=specs["seat_offset"].max)),
+        # 4-D.5: 座位置は「最大径からどれだけ前へ引くか」。以前は座の前端起点で
+        # 測っていたので端値どうしが**同じ形**になっていた（可動域の 99% が死んでいた）
+        ("座位置 0（最大径）", dict(base, seat_setback=specs["seat_setback"].min)),
+        ("座位置 最大（前寄り）", dict(base, seat_setback=specs["seat_setback"].max)),
+        ("座位置 最大×広い帯", dict(base, seat_setback=specs["seat_setback"].max,
+                                    band_width=specs["band_width"].max)),
         # 4-C.3c: テーパ圧入。輪は `z - press_depth` の胴で引くので、押し込みの
         # 端値で内周が痩せてもタブ・棚・接触が破綻しないことを見る
         ("テーパ 押し込み 0", dict(base, closure="taper", press_depth=0.0)),

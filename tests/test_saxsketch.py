@@ -2361,12 +2361,12 @@ def test_ligature_band_width_always_changes_the_shape():
 
 
 def test_ligature_band_is_anchored_at_the_max_diameter():
-    """帯の後端が最大径（`heel_z`）に張り付き、前へだけ伸びること。
+    """帯の後端が最大径（`heel_z`）から `seat_setback` だけ前へ来ること。
 
-    後端は物理の壁（そこから先は胴が細くなるので頂点を跨いだ帯は掴めない）。
+    後端の壁は物理（そこから先は胴が細くなるので頂点を跨いだ帯は掴めない）。
     前端は丸めない —— 座の長さ 0.23·heel_z は「典型的なリガチャー幅」から作った
-    公称値であって壁ではない。既定 3 サイズの装着位置は**この直しの前と一致する**
-    （実装時に 15 桁まで確認済み）。
+    公称値であって壁ではない。既定 3 サイズの装着位置は**旧 `seat_offset` 時代の
+    記録値と一致する**（測り方を変えても既定の形は動かさない）。
     """
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     reg = get_registry().get("saxophone")
@@ -2377,44 +2377,71 @@ def test_ligature_band_is_anchored_at_the_max_diameter():
         m = _template_params("mouthpiece", tid)
         comp.set_refs({"mouthpiece": {"params": m}})
         base = {s.key: s.default for s in comp.param_specs()}
+        assert base["seat_setback"] == 0.0          # 既定は最大径に密着
         z0, z1 = lp.seat_range(m, base)
         assert (z0, z1) == pytest.approx(recorded[tid], abs=5e-6), tid
-        seat0, seat1 = profiles.ligature_seat_range(m)
+        seat1 = profiles.ligature_seat_range(m)[1]
         assert seat1 == profiles.heel_z(m)          # 座の後端 ＝ 最大径
         for bw in (8.0, 16.0, 28.0):
             a, b = lp.seat_range(m, {**base, "band_width": bw})
-            # 後端は「要求どおりの位置」か「最大径」のどちらか。ビット一致で見る
-            assert b == min(seat0 + base["seat_offset"] + bw, seat1)
+            assert b == seat1                       # 後端は幅に依らず壁に張り付く
             assert a == b - bw                      # 前だけ伸びる（丸めない）
-        # 座より広い幅では後端が最大径に張り付き、そこから動かない
-        for bw in (16.0, 20.0, 28.0):
-            assert lp.seat_range(m, {**base, "band_width": bw})[1] == seat1, tid
-        # オフセットを詰めれば前端は座の前端まで戻せる（前クランプが無いこと）
-        near = lp.seat_range(m, {**base, "seat_offset": 0.0, "band_width": 8.0})
-        assert near[0] == pytest.approx(profiles.ligature_seat_range(m)[0], abs=1e-9)
+        # **スライダの全域が生きる**（旧定義では 0〜0.17mm しか動かなかった）
+        for off in (0.0, 5.0, 10.0, 15.0):
+            a, b = lp.seat_range(m, {**base, "seat_setback": off})
+            assert b == pytest.approx(seat1 - off, abs=1e-9), (tid, off)
+            assert lp.effective_seat_setback(
+                m, {**base, "seat_setback": off}) == pytest.approx(off, abs=1e-9)
 
 
-def test_ligature_reports_the_effective_seat_offset(alto_ligature):
-    """後端で飽和した座位置オフセットを、黙って飲まずカードに出すこと。
+def test_old_seat_offset_migrates_without_changing_the_shape(alto_ligature):
+    """旧 `seat_offset` を `seat_setback` へ移しても、**形が 1 ビットも動かない**こと。
 
-    既定は 3 サイズとも要求 3.0〜4.5 に対し実効 0.13〜0.17mm ＝ 可動域 0〜15 の
-    1% しか生きていない。後端の壁は物理なので消せないが、**報告はできる**。
+    旧定義は「座の前端から後ろ向き」で、帯の後端が胴の最大径の壁に必ず当たって
+    いた（実効 0.17mm 以下）。新定義の 0.0 がその「最大径に密着」なので、旧値が
+    何であれ 0.0 へ移すと保存されていた形と一致する。
+
+    **キーごと変えている**のは、値の意味だけ変えると旧値と新値を区別できず、
+    利用者が意図して入れた値を黙って 0 へ戻す経路ができるから。
     """
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     comp, p = alto_ligature
     m = comp.ref_params()
-    assert lp.effective_seat_offset(m, p) == pytest.approx(0.169, abs=5e-3)
+    for old in (3.0, 4.0, 4.5, 15.0):
+        v, notes = comp.migrate_params({**p, "seat_offset": old})
+        assert "seat_offset" not in v
+        assert v["seat_setback"] == 0.0
+        assert len(notes) == 1 and "形は変わりません" in notes[0]
+        # 装着位置は旧実装の記録値（4-C.3b）とビット一致
+        assert lp.seat_range(m, v) == (54.29850746268657, 70.29850746268657)
+    # 新しいキーが入っていれば触らない（利用者の値を黙って戻さない）
+    v2, notes2 = comp.migrate_params({**p, "seat_setback": 8.0})
+    assert v2["seat_setback"] == 8.0 and notes2 == []
+
+
+def test_ligature_reports_the_effective_seat_setback(alto_ligature):
+    """飲まれた座位置を、黙って飲まずカードに出すこと。
+
+    新しい測り方では既定（0.0 ＝ 最大径に密着）で飲みは起きない。飲むのは
+    「前へ出しすぎて帯が胴から落ちる」ときだけなので、そこで報告が出る。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    comp, p = alto_ligature
+    m = comp.ref_params()
+    assert lp.effective_seat_setback(m, p) == pytest.approx(0.0, abs=1e-9)
     card = next(c for c in comp.simulate(p)["cards"]
                 if c["title"] == "マウスピース適合")
-    row = next(r for r in card["rows"] if "座位置オフセット" in r[0])
-    assert "4.0" in row[1] and "0.17" in row[1]
-    assert "実効" in card["advice"]
-    # 要求どおり入る幅なら実効＝要求になり、助言からも消える
-    q = {**p, "band_width": 12.0}
-    assert lp.effective_seat_offset(m, q) == pytest.approx(p["seat_offset"], abs=1e-9)
+    row = next(r for r in card["rows"] if "座位置" in r[0])
+    assert "0.0" in row[1]
+    assert "実効" not in card["advice"]
+    # 前へ出しすぎると胴から落ちる手前で飲まれ、実効値がそれを報告する
+    # （この域では帯が窓に掛かるので、カードの警告はそちらが先に出る）
+    q = {**p, "seat_setback": 200.0}
+    assert lp.effective_seat_setback(m, q) < q["seat_setback"] - 1.0
+    assert lp.seat_range(m, q)[0] == pytest.approx(0.0, abs=1e-9)
     card2 = next(c for c in comp.simulate(q)["cards"]
                  if c["title"] == "マウスピース適合")
-    assert "実効" not in card2["advice"]
+    assert card2["status"] == "warn" and "窓" in card2["advice"]
 
 
 def test_ligature_reverse_screw_needs_a_contact(alto_ligature):
@@ -2976,6 +3003,100 @@ def test_mp_cad_face_count(alto_part_cad):
     assert kinds["GeomType.REVOLUTION"] >= 1, kinds
     assert kinds["GeomType.EXTRUSION"] >= 1, kinds
     assert kinds["GeomType.PLANE"] >= 1, kinds
+
+
+def test_generatrix_chord_error_is_bounded():
+    """胴の母線（多角形）が法則からどれだけ内側を通るかを縛る。
+
+    **これはメッシュ許容では消えない誤差**。`revolve_profile` は多角形の母線を
+    回すので、周方向は解析曲面でも母線方向は折れ線で、その弦誤差はソリッド自体に
+    焼き込まれている。STL/3MF に紋様が出て STEP に出ない理由の片方がこれ
+    （STEP は `body_segments` のスプライン母線）。
+
+    実測: 旧刻み（ノーズ 0.25/0.45mm・肩 12 分割）で 0.083 / 0.133 / 0.127mm。
+    現刻み（ノーズ 0.10/0.25mm・肩 24 分割）で 0.029 / 0.026 / 0.034mm。
+    CAD を組まずに法則だけで測れるので、掃引にも耐える。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        with profiles.params_scope(p):
+            zs = profiles.body_stations(p)
+            worst = 0.0
+            for a, b in zip(zs, zs[1:]):
+                ra, rb = profiles.outer_radius(p, a), profiles.outer_radius(p, b)
+                for i in range(1, 40):
+                    t = i / 40.0
+                    d = profiles.outer_radius(p, a + (b - a) * t) - (ra + (rb - ra) * t)
+                    worst = max(worst, d)
+        # 設計クリアランス 0.25mm の刻み 0.05mm より小さいこと
+        assert worst < 0.05, (tid, worst)
+
+
+def test_stl_and_3mf_are_the_same_mesh(alto_part, tmp_path):
+    """STL と 3MF が**同じ Part を同じ許容で**メッシュ化していること。
+
+    入稿の 3 形式のうち、この 2 つが食い違う理由は無い（どちらも `export_model`
+    が同じ許容で `part` を割る）。3MF を直接パースして三角形数・頂点数まで見る
+    —— 「同じはず」を根拠にせず、実際に一致することを固定する。
+    """
+    import re
+    import zipfile
+    from saxsketch.export.models import export_model
+
+    f_stl = tmp_path / "m.stl"
+    f_3mf = tmp_path / "m.3mf"
+    export_model(alto_part, f_stl, "stl")
+    export_model(alto_part, f_3mf, "3mf")
+
+    import trimesh
+    stl = trimesh.load(str(f_stl), force="mesh")
+    with zipfile.ZipFile(f_3mf) as z:
+        xml = z.read(next(n for n in z.namelist() if n.endswith(".model"))).decode()
+    tri = len(re.findall(r"<triangle ", xml))
+    vtx = len(re.findall(r"<vertex ", xml))
+    assert tri == len(stl.faces)
+    assert vtx == len(stl.vertices)
+
+
+def test_export_mesh_is_fine_enough_to_look_round(alto_part, tmp_path):
+    """出力メッシュの周方向の刻みが、目に見える紋様にならない細かさであること。
+
+    **周方向を割っているのは `angular_tolerance` のほうで、linear はほとんど
+    効かない**（0.05 → 0.01 で面数 8,444 → 8,976、刻みは 4.49° のまま）。
+    0.3 のままだと胴が 80 角柱で画面にはっきり紋様が出る。
+
+    測り直すときの注意: OCCT は三角形分割を形状に持ち回り、linear が細かく
+    なったときしか作り直さない。1 プロセスで許容を振ると angular の効きが
+    消えて見えるので `BRepTools.Clean_s` を挟むこと。
+    """
+    import math
+
+    import numpy as np
+    import trimesh
+    from saxsketch.export.models import export_model
+
+    f = tmp_path / "m.stl"
+    export_model(alto_part, f, "stl")
+    mesh = trimesh.load(str(f), force="mesh")
+    p = _template_params("mouthpiece", "alto")
+    with profiles.params_scope(p):
+        z = profiles.heel_z(p) * 0.885            # リガチャー座の中
+        rt = profiles.outer_radius(p, z)
+    v, e = mesh.vertices, mesh.edges_unique
+    a, b = v[e[:, 0]], v[e[:, 1]]
+    dz = b[:, 2] - a[:, 2]
+    t01 = np.where(np.abs(dz) < 1e-12, np.nan,
+                   (z - a[:, 2]) / np.where(np.abs(dz) < 1e-12, 1, dz))
+    k = (t01 > 0) & (t01 < 1)
+    P = a[k] + (b[k] - a[k]) * t01[k, None]
+    R = np.hypot(P[:, 0], P[:, 1])
+    on_arc = np.abs(R - rt) < 0.05
+    ang = np.sort(np.unique(np.round(np.arctan2(P[on_arc, 1], P[on_arc, 0]), 6)))
+    d = np.diff(ang)
+    step = float(np.median(d[d > 1e-5]))
+    assert math.degrees(step) < 1.5                       # 実測 0.86°
+    # 弦誤差は設計クリアランスの刻み 0.05mm より 2 桁小さい（実測 0.0004mm）
+    assert rt * (1 - math.cos(step / 2)) < 0.005
 
 
 def test_mp_cad_matches_build(alto, alto_part, alto_part_cad, tmp_path):
@@ -4085,6 +4206,35 @@ def test_set_remove_blocked_when_depended_on():
                   json={"component_id": "reed"}).status_code == 200
 
 
+def test_set_required_member_can_still_be_removed():
+    """**必須メンバー（リガチャー）も外せること。**
+
+    `required` は「新規セットで最初から作る」の意味しか持たない。これを
+    「外せない」に流用すると、リガチャーを外す操作がどこにも無くなる
+    （実際にそうなっていた —— サーバは外せるのに UI が × を描かなかった）。
+    外せるかどうかを決めるのは従属関係だけで、リガチャーには従属部品が居ない。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    _new_set(c)
+    info = c.get("/api/project").json()["set"]
+    lig = next(m for m in info["members"] if m["component_id"] == "ligature")
+    assert lig["required"] is True and lig["master"] is False
+
+    assert c.post("/api/set/member/remove",
+                  json={"component_id": "ligature"}).status_code == 200
+    after = c.get("/api/project").json()["set"]
+    # 1 部品に戻ったらセットを名乗らない（出力の既定範囲も 3D も単体に戻る）
+    assert after["is_set"] is False
+    assert [m["component_id"] for m in after["members"] if m["present"]] == ["mouthpiece"]
+    # ＋ボタンは残る（育て直せる）
+    assert "ligature" in after["addable"]
+    assert c.post("/api/set/member/add",
+                  json={"component_id": "ligature"}).status_code == 200
+    assert c.get("/api/project").json()["set"]["is_set"] is True
+
+
 def test_v1_project_opens_as_single_member_set(tmp_path):
     """v1 の .wproj が、値・凍結・採寸・編集済みモデルを保ったまま開けること。"""
     import json
@@ -4340,9 +4490,62 @@ def test_reed_assembly_placement_lies_on_table():
     assert bare.assembly_placement(_template_params("reed", "alto")) is None
 
 
-def test_set_placement_is_relative_to_active():
-    """配置が編集中の部品を基準にした相対変換で、基準を替えると逆変換になること。"""
+def test_reed_assembly_places_the_blade_outside_the_table():
+    """リードの肉が**テーブルの外側**に出ること（胴へ潜らない）。
+
+    リードのモデルは底面 y=0 から **+y** へ肉が付く（`reed_profiles.sections`）が、
+    テーブル平面は胴の下（`table_plane_y` は負で、マウスピースの材料はその上）。
+    載る側の外向き法線は −y なので、裏返さずに置くと**肉が丸ごと胴の中へ入る**。
+    実際にそうなっていて、アルトで +2.807mm ＝ リード厚 2.800 とほぼ一致していた。
+
+    ここは配置の**全点**を見る（底面の 4 点だけを見ていた前のテストは、肉が
+    どちら側に付くかを一度も確かめていなかったので裏返りを素通りさせた）。
+    """
     import math
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        m = _template_params("mouthpiece", tid)
+        reed = reg.make_component("reed", tid)
+        reed.set_refs({"mouthpiece": {"params": m}})
+        r = _template_params("reed", tid)
+        pl = reed.assembly_placement(r)
+        assert pl["flip_z"] is True, tid
+        th = math.radians(pl["rotate_x_deg"])
+        c, sn = math.cos(th), math.sin(th)
+        worst, deep = -1e9, 1e9
+        for sec in rp.sections(r):
+            for (x, y) in sec["pts"]:
+                X, Y, Z = -x, -y, sec["z"]              # flip_z（Z 軸 180°）
+                y2 = Y * c - Z * sn + pl["origin"][1]   # R_x
+                z2 = Y * sn + Z * c + pl["origin"][2]
+                d = y2 - profiles.table_plane_y(m, z2)
+                worst, deep = max(worst, d), min(deep, d)
+        # 底面はテーブルにぴったり、肉は反対側（負）にだけ伸びる
+        assert worst == pytest.approx(0.0, abs=1e-9), tid
+        thick = max(rp.thickness(r, sec["z"], 0.0) for sec in rp.sections(r))
+        assert deep == pytest.approx(-thick, abs=0.02), tid
+
+
+def _apply_placement(pl: dict, v: tuple) -> tuple:
+    """配置 1 件を点へ適用する: `R_x(θ)·F^f·v + t`（`F` は Z 軸まわり 180°）。"""
+    import math
+    x, y, z = v
+    if pl.get("flip_z"):
+        x, y = -x, -y
+    th = math.radians(pl["rotate_x_deg"])
+    c, s = math.cos(th), math.sin(th)
+    y, z = y * c - z * s, y * s + z * c
+    return (x + pl["origin"][0], y + pl["origin"][1], z + pl["origin"][2])
+
+
+def test_set_placement_is_relative_to_active():
+    """配置が編集中の部品を基準にした相対変換で、基準を替えても同じ組になること。
+
+    **「逆変換 ＝ 角の符号反転」ではない。** 変換は `R_x(θ)·F^f` の形で、裏返しが
+    入ると `(R_x(θ)·F)² = I` ＝ **自分自身が逆変換**になる（`F·R_x(θ)·F = R_x(−θ)`）。
+    だから符号で見ると落ちる。見るべきは**部品どうしの相対位置が基準に依らない**こと。
+    """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     c = TestClient(app)
@@ -4357,17 +4560,21 @@ def test_set_placement_is_relative_to_active():
     # 同じ座標系の部品は恒等（リガチャーは参照 MP の z でそのまま張られている）
     assert parts["ligature"]["rotate_x_deg"] == 0.0
     assert parts["ligature"]["origin"] == [0.0, 0.0, 0.0]
+    assert parts["ligature"]["flip_z"] is False
+    assert parts["reed"]["flip_z"] is True          # リードは裏返して載る
 
     c.post("/api/set/active", json={"component_id": "reed"})
     from_reed = {p["component_id"]: p
                  for p in c.get("/api/set/placement").json()["parts"]}
-    fwd, inv = parts["reed"], from_reed["mouthpiece"]
-    assert inv["rotate_x_deg"] == pytest.approx(-fwd["rotate_x_deg"])
-    # 往復して原点へ戻る: R(-θ)·(R(θ)·0 + t) + t' == 0
-    th = math.radians(fwd["rotate_x_deg"])
-    y = inv["origin"][1] + fwd["origin"][1] * math.cos(th) + fwd["origin"][2] * math.sin(th)
-    z = inv["origin"][2] - fwd["origin"][1] * math.sin(th) + fwd["origin"][2] * math.cos(th)
-    assert (y, z) == (pytest.approx(0.0, abs=1e-9), pytest.approx(0.0, abs=1e-9))
+    IDENT = {"origin": [0.0, 0.0, 0.0], "rotate_x_deg": 0.0, "flip_z": False}
+    probes = [(0.0, 0.0, 0.0), (3.0, 2.0, 10.0), (-4.0, 1.5, 40.0)]
+    for v in probes:
+        # マウスピース基準で見たリード上の点 と リード基準で見た同じ点
+        a_mp = _apply_placement(parts["reed"], v)          # 基準=MP のときのリード
+        a_rd = _apply_placement(IDENT, v)                  # 基準=リード のときのリード
+        # 同じ点を「基準=リードの系」へ移すと一致するはず
+        back = _apply_placement(from_reed["mouthpiece"], a_mp)
+        assert back == pytest.approx(a_rd, abs=1e-9), v
 
 
 def test_set_member_stl_endpoint(tmp_path):
@@ -5619,23 +5826,32 @@ def test_dimensions_report_the_frozen_window():
             assert "requested" not in d, tid      # tenor は 44 まで本当に開く
 
 
-def test_dimensions_report_the_effective_seat_offset():
-    """座位置オフセットは実効値を測り、要求値を併記すること（4-C.3b）。
+def test_dimensions_report_the_effective_seat_setback():
+    """座位置は実効値を測り、飲まれたときだけ要求値を併記すること（4-C.3b）。
 
-    後端（最大径）の壁は消せないので、要求 3.0〜4.5mm に対し実効は 0.17mm 前後
-    しかない。**黙って飲むのではなく報告する**というのが 4-C.3b の答えで、
-    図もそれに揃える。
+    測り方を最大径起点へ直したので、既定（0.0）では飲みが起きず併記も出ない。
+    前へ出しすぎて帯が胴から落ちる手前で止まったときだけ、**黙って飲むのでは
+    なく報告する**（4-C.3b の答えは変わらない。飲む条件のほうが変わった）。
     """
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
-    want = {"soprano": 0.1336, "alto": 0.1687, "tenor": 0.1738}
     for tid in SIZES:
         comp, p = _dim_component("ligature", tid)
         m = comp.ref_params()
-        d = next(x for x in comp.dimensions(p) if x["key"] == "seat_offset")
-        assert d["value"] == pytest.approx(lp.effective_seat_offset(m, p), abs=1e-9)
-        assert d["value"] == pytest.approx(want[tid], abs=0.001), tid
-        assert d["requested"] == pytest.approx(p["seat_offset"])
-        assert d["requested"] > 10 * d["value"], tid     # 桁で違う
+        # 既定は最大径に密着 ＝ 長さ 0 なので線ごと出さない（潰れた寸法は描かない）
+        assert lp.effective_seat_setback(m, p) == pytest.approx(0.0, abs=1e-9), tid
+        assert all(x["key"] != "seat_setback" for x in comp.dimensions(p)), tid
+        # 可動域の中ほどでは図の値が要求どおり動く（旧定義では動かなかった）
+        q = {**p, "seat_setback": 10.0}
+        d2 = next(x for x in comp.dimensions(q) if x["key"] == "seat_setback")
+        assert d2["value"] == pytest.approx(10.0, abs=1e-9), tid
+        assert d2["value"] == pytest.approx(
+            lp.effective_seat_setback(m, q), abs=1e-9), tid
+        assert "requested" not in d2, tid           # 飲んでいないので併記しない
+        # 出しすぎたときだけ実効値と要求値が割れ、指定値が併記される
+        r = {**p, "seat_setback": 200.0}
+        d3 = next(x for x in comp.dimensions(r) if x["key"] == "seat_setback")
+        assert d3["requested"] == pytest.approx(200.0), tid
+        assert d3["value"] < 200.0 - 1.0, tid
 
 
 def test_dimensions_are_not_nominal_values():
@@ -5727,7 +5943,9 @@ def test_section_and_dimensions_agree():
     assert c.get("/api/section").json()["dimensions"] == dims
     assert len(dims) == 11
 
-    for cid, n in (("reed", 8), ("ligature", 6)):
+    # ligature が 5 本なのは、既定（`seat_setback` 0.0 ＝ 最大径に密着）で
+    # 座位置の寸法線が長さ 0 になるので出さないから（4-D.5）。
+    for cid, n in (("reed", 8), ("ligature", 5)):
         assert new(cid).status_code == 200
         assert len(c.get("/api/dimensions").json()) == n, cid
         assert c.get("/api/section").status_code == 404       # 断面は持たない

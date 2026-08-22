@@ -31,6 +31,9 @@ export interface ExtraPart {
   src: string;
   origin?: [number, number, number];
   rotateXDeg?: number;
+  /** Z 軸まわり 180°（裏返し）を**先に**掛ける。three の既定 Euler order は
+   *  XYZ ＝ `R_x·R_y·R_z` なので、rotation に両方入れるだけで順序が合う */
+  flipZ?: boolean;
   color: number;
   opacity: number;
 }
@@ -38,7 +41,7 @@ export interface ExtraPart {
 /** 取り直しが要るかの判定に使う一意鍵。位置や色が変われば作り直す。 */
 const extraKey = (e: ExtraPart) =>
   `${e.src}|${(e.origin ?? [0, 0, 0]).join(",")}|${e.rotateXDeg ?? 0}` +
-  `|${e.color}|${e.opacity}`;
+  `|${e.flipZ ? 1 : 0}|${e.color}|${e.opacity}`;
 
 interface Ctx {
   scene: THREE.Scene; camera: THREE.PerspectiveCamera;
@@ -359,7 +362,10 @@ export default function Viewer3D({
         }));
         // モデル座標での置き場所（回転 → 平行移動）。**本体は動かさない**
         // ——寸法線もハイライトも本体のモデル座標で作られている。
-        if (e.rotateXDeg) mesh.rotation.x = THREE.MathUtils.degToRad(e.rotateXDeg);
+        // 既定 order は "XYZ" = R_x·R_y·R_z なので、これで
+        // 「裏返してから X 軸で傾ける」になる（サーバが返す合成と同じ順）。
+        mesh.rotation.set(THREE.MathUtils.degToRad(e.rotateXDeg ?? 0), 0,
+                          e.flipZ ? Math.PI : 0);
         if (e.origin) mesh.position.set(...e.origin);
         const group = new THREE.Group();
         group.add(mesh);
