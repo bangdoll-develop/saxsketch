@@ -28,6 +28,15 @@ class Component(ABC):
     #: 従属先コンポーネントのID。設定するとプロジェクトが参照スナップショットを持つ
     #: （例: リード/リガチャー → "mouthpiece"）。None なら参照不要。
     REQUIRES_REF: str | None = None
+    #: **あれば使う**参照のID（例: リガチャー → "reed"）。`REQUIRES_REF` と違い、
+    #: 無くても設計は成立する（部品側がテンプレート等の既定へ落ちる）。セットに
+    #: その部品が居るときだけ束ねられる。
+    #:
+    #: 必須と任意を分けてあるのは、**無いときの意味が違う**から。必須の参照が
+    #: 無ければ形が決まらないので既定値を作って埋めるしかないが、任意の参照は
+    #: 「まだ設計していない」が正しい状態で、埋めると設計していない物の寸法を
+    #: 設計値のように見せることになる。
+    OPTIONAL_REFS: tuple[str, ...] = ()
     #: 参照コンポーネントと**同じ座標系**で作られているか。True のとき UI は
     #: 参照の形をそのまま重ねられる（変換が要らない）。
     #:
@@ -137,6 +146,32 @@ class Component(ABC):
         """
         return []
 
+    def assembly_placement(self, params: dict) -> dict | None:
+        """組み合わせたときの置き場所。**土台部品のモデル座標**で返す。
+
+        Returns:
+            `{"origin": [x, y, z], "rotate_x_deg": float, "flip_z": bool}` …
+            部品のモデル座標を **`flip_z` なら先に Z 軸まわり 180° 裏返し**、
+            続いて X 軸まわりに `rotate_x_deg` 回してから `origin` へ運ぶと、
+            組んだ姿になる。`flip_z` は省略可（既定 `False`）。
+            `None` … 置き場所が分からない（合わせ表示に出さない）。
+
+        **回転は「X 軸まわり ＋ 裏返すか否か」だけ**。一般の 4×4 を通さないのは、
+        この形 `R_x(θ)·F^f`（`F = R_z(π)`）が**合成で閉じている**から ——
+        `F·R_x(θ)·F = R_x(−θ)` なので、基準を別の部品へ移した相対変換も
+        同じ形のまま書ける（`AppState.assembly_placements`）。両端（サーバと
+        ブラウザ）に行列の合成を持ち込まずに済む。足りなくなったら足す。
+
+        裏返しが要るのは、部品のモデルが**どちら向きに肉を持つか**が部品ごとに
+        違うため。リードは底面 y=0 から +y へ肉が付くが、載せる相手（テーブル面）の
+        外向き法線は −y なので、そのまま置くとマウスピースの中へ潜る。
+
+        既定が `None` なのは `REF_SHARES_FRAME` と同じ理由 ——
+        **間違った位置に置くより出さないほうが安全**。座標系を知っているのは
+        部品自身だけで、コアは楽器を知らない。
+        """
+        return None
+
     def section(self, params: dict) -> dict | None:
         """中央面の断面と、そこで直接ドラッグできるハンドル。
 
@@ -232,11 +267,39 @@ class Instrument:
             self.templates[tf.stem] = json.loads(tf.read_text(encoding="utf-8"))
         mod = importlib.import_module(f"saxsketch.instruments.{self.id}.components")
         self.component_classes: dict[str, type[Component]] = mod.COMPONENTS
+        #: セットで組める部品の並び（descriptor の `sets`）。**コアは中身を知らない**
+        #: —— どの部品が組になるかは楽器の事情なので、データとして読むだけ。
+        self.sets: list[dict] = list(self.descriptor.get("sets", []))
+        #: セット全体の適合カードを出す関数（あれば）。`components/__init__.py` が
+        #: `SET_CARD` で公開する。部品どうしでしか出せない量はここでしか出せない。
+        self.set_card_fn = getattr(mod, "SET_CARD", None)
 
     def make_component(self, component_id: str, template_id: str) -> Component:
         cls = self.component_classes[component_id]
         template = self.templates[template_id]
         return cls(self.descriptor, template)
+
+    # ------------------------------------------------------------ セット
+
+    def set_def(self, set_id: str) -> dict:
+        for s in self.sets:
+            if s["id"] == set_id:
+                return s
+        raise KeyError(f"セット定義がありません: {set_id}")
+
+    def set_master(self, set_id: str) -> str:
+        """セットの土台になる部品ID（`role == "master"`。既定は先頭）。"""
+        members = self.set_def(set_id)["members"]
+        for m in members:
+            if m.get("role") == "master":
+                return m["component"]
+        return members[0]["component"]
+
+    def set_card(self, size_info: dict, members: dict[str, dict]) -> dict | None:
+        """セット全体の適合カード。楽器が実装していなければ None。"""
+        if self.set_card_fn is None:
+            return None
+        return self.set_card_fn(size_info, members)
 
     def summary(self) -> dict:
         return {
@@ -249,6 +312,18 @@ class Instrument:
             "components": [
                 {"id": cid, "label": cls.label, "available": cls.available()}
                 for cid, cls in self.component_classes.items()
+            ],
+            "sets": [
+                {"id": s["id"], "label": s.get("label", s["id"]),
+                 "members": [
+                     {"component": m["component"],
+                      "label": self.component_classes[m["component"]].label,
+                      "required": bool(m.get("required", True)),
+                      "master": m.get("role") == "master"}
+                     for m in s["members"]
+                     if m["component"] in self.component_classes],
+                 }
+                for s in self.sets
             ],
         }
 

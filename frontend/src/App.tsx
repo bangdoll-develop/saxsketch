@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, type Dimension, type ManualEdit, type ProjectData, type Region,
-  type Simulation,
+  type SetPlacement, type Simulation,
 } from "./api";
+import type { ExtraPart } from "./components/Viewer3D";
 import ParamPanel from "./components/ParamPanel";
+import SetPanel from "./components/SetPanel";
 import SectionEditor from "./components/SectionEditor";
 import SimPanel from "./components/SimPanel";
 import Viewer3D from "./components/Viewer3D";
@@ -16,6 +18,10 @@ import { usePathPicker } from "./pathPicker";
 
 type DialogKind = null | "new" | "goalseek" | "export" | "settings" | "manual" | "survey";
 
+/** 合わせ表示で他の部品に着ける色。**部品名では引かない** —— どの部品が
+ *  セットに入るかは楽器の事情（descriptor の `sets`）なので、UI は並び順で配る。 */
+const PART_COLORS = [0xd8b48c, 0x9fd8a8, 0xd89fb4, 0xc0b4e0];
+
 export default function App() {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
@@ -25,6 +31,10 @@ export default function App() {
   // 参照マウスピースの重ね表示。既定オフ・UI 状態（プロジェクトには保存しない）
   const [showRef, setShowRef] = useState(false);
   const [refBusy, setRefBusy] = useState(false);
+  // セットの合わせ表示。**既定オフ** —— 3 部品ぶん作り直すので、マウスピースを
+  // 触ると 5.6〜6.2 秒 ＋ リガチャー 1.3 秒 ＋ リードを払うことになる。
+  const [showSet, setShowSet] = useState(false);
+  const [placement, setPlacement] = useState<SetPlacement | null>(null);
   // 寸法の図示。既定オフ・UI 状態で、**3D と断面が同じ 1 個を共有する**
   // （ビューを行き来しても設定が残る）。プロジェクトには保存しない。
   const [showDims, setShowDims] = useState(false);
@@ -39,6 +49,7 @@ export default function App() {
   // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
   const [notices, setNotices] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
+
   const [hasSection, setHasSection] = useState(false);
   // ドラッグ中の未確定値。断面ハンドルを掴んでいる間だけ非 null になる。
   // 左のパラメータ欄はこれを重ねて表示するので、確定（PUT）を待たずに数値が
@@ -95,6 +106,12 @@ export default function App() {
   }, [modelVersion, project]);
 
   useEffect(() => {
+    // 合わせ表示の配置。形が変われば置き場所（テーブルの傾きなど）も変わる。
+    if (!project?.set) { setPlacement(null); return; }
+    api.setPlacement().then(setPlacement).catch(() => setPlacement(null));
+  }, [modelVersion, project]);
+
+  useEffect(() => {
     // 断面編集を持つコンポーネントかはサーバに聞く（404 なら持たない）。
     // UI に「マウスピースだけ」という楽器固有の知識を置かないため。
     if (!project) { setHasSection(false); return; }
@@ -109,8 +126,27 @@ export default function App() {
   // 重ねられるかはコンポーネントが宣言する（`reference.overlay`）。取込モデルの
   // 表示中は重ねない —— 外部モデルは別の整列で入っているので基準が違う。
   const canOverlay = !!project?.reference?.overlay && !viewDerived;
-  const overlaySrc = canOverlay && showRef
-    ? `/api/ref/model.stl?v=${project!.reference!.hash}` : null;
+  // 合わせ表示に出せる部品があるかもサーバが決める（`assembly_placement`）。
+  const canSetView = !!project?.set && (placement?.parts.length ?? 0) > 0
+    && !viewDerived;
+
+  // 一緒に描く部品。**セット表示が優先** —— そちらはマウスピースを実体で
+  // 出すので、参照の重ねを足しても同じ形が二重になるだけ。
+  const extras = useMemo<ExtraPart[]>(() => {
+    if (canSetView && showSet) {
+      return placement!.parts.map((p, i) => ({
+        id: p.component_id,
+        src: `/api/set/model.stl?member=${p.component_id}&v=${p.hash}`,
+        origin: p.origin, rotateXDeg: p.rotate_x_deg, flipZ: p.flip_z,
+        color: PART_COLORS[i % PART_COLORS.length], opacity: 0.6,
+      }));
+    }
+    if (canOverlay && showRef) {
+      return [{ id: "ref", src: `/api/ref/model.stl?v=${project!.reference!.hash}`,
+                color: 0xa8c0d8, opacity: 0.25 }];
+    }
+    return [];
+  }, [canSetView, showSet, placement, canOverlay, showRef, project]);
 
   // 寸法を持つかもサーバの答えで決める（UI に「どの部品が持つか」を書かない）。
   // 取込モデルの表示中は出さない —— 外部モデルは別の整列で入っているので、
@@ -125,15 +161,29 @@ export default function App() {
   const derivedRow = hasSection ? 1 : 0;
   const overlayRow = derivedRow + (manualEdit?.derived && viewMode === "3d" ? 1 : 0);
 
-  const loadProject = useCallback(async () => {
-    const p = await api.getProject();
+  // サーバが返したプロジェクト状態を画面へ載せる。**部品切替も新規/開くも
+  // 同じ経路**を通す（切替だけ別に書くと、片方にしか無い更新が必ず出る）。
+  const applyProject = useCallback((p: ProjectData) => {
     setProject(p); setParams(p.params); setSim(p.simulation);
     setManualEdit(p.manual_edit);
     setNotices(p.notices ?? []);
     setViewDerived(false);
+    setShowRef(false);          // 部品が変われば重ねの意味も変わる
+    setPreview(null);
     setModelVersion((v) => v + 1);
-    setDialog(null);
   }, []);
+
+  const loadProject = useCallback(async () => {
+    applyProject(await api.getProject());
+    setDialog(null);
+  }, [applyProject]);
+
+  // セットの部品操作。**失敗しても画面の状態は動かさない**（サーバが弾いた
+  // 時点で何も変わっていないので、エラーだけ出せばよい）。
+  const runSetAction = useCallback(async (fn: () => Promise<ProjectData>) => {
+    try { applyProject(await fn()); }
+    catch (e) { setError(String((e as Error).message)); }
+  }, [applyProject]);
 
   // 採寸ダイアログの操作後: パラメータ・シミュ・形状まで更新（ダイアログは開いたまま）
   const onSurveyApplied = useCallback((p: ProjectData) => {
@@ -251,6 +301,22 @@ export default function App() {
     if (path) setReference(path);
   }, [setReference, pickPath]);
 
+  const importMember = useCallback(async () => {
+    const path = await pickPath("open");
+    if (path) runSetAction(() => api.importMember(path));
+  }, [pickPath, runSetAction]);
+
+  const exportMember = useCallback(async () => {
+    if (!project?.set) return;
+    const cid = project.set.active;
+    const label = project.set.members.find((m) => m.component_id === cid)?.name
+      ?? project.component_label;
+    const path = await pickPath("save", `${label}.wproj`);
+    if (!path) return;
+    try { await api.exportMember(cid, path); }
+    catch (e) { setError(String((e as Error).message)); }
+  }, [project, pickPath]);
+
   return (
     <>
       <div className="toolbar">
@@ -281,6 +347,14 @@ export default function App() {
 
       <div className="main">
         <div className="panel">
+          {project?.set && (
+            <SetPanel info={project.set}
+                      onSelect={(cid) => runSetAction(() => api.setActive(cid))}
+                      onAdd={(cid) => runSetAction(() => api.addMember(cid))}
+                      onRemove={(cid) => runSetAction(() => api.removeMember(cid))}
+                      onImport={importMember}
+                      onExport={exportMember} />
+          )}
           {project && (
             <ParamPanel schema={project.schema} params={shownParams} onChange={onParamChange}
                         onHover={setHoverKey} regionKeys={regionKeys}
@@ -300,7 +374,7 @@ export default function App() {
                         srcOverride={viewDerived && manualEdit?.derived
                           ? `/api/manual/model.stl?t=${manualEdit.derived.imported_at}`
                           : null}
-                        overlaySrc={overlaySrc}
+                        extras={extras}
                         dimensions={shownDims} hoverKey={hoverKey}
                         onBusy={setModelBusy} onOverlayBusy={setRefBusy} />
             </div>
@@ -321,7 +395,8 @@ export default function App() {
                         : "外部編集済みモデル（凍結時の形状ベース）")
                     : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
                 (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "") +
-                (refBusy && viewMode === "3d" ? "　⏳ 参照を生成中…" : "")
+                (refBusy && viewMode === "3d"
+                  ? (showSet ? "　⏳ 他の部品を生成中…" : "　⏳ 参照を生成中…") : "")
               : "プロジェクトを作成してください"}
           </div>
           {project && hasSection && (
@@ -343,9 +418,16 @@ export default function App() {
               </button>
             </div>
           )}
-          {(canOverlay || canDims) && viewMode === "3d" && (
+          {(canOverlay || canDims || canSetView) && viewMode === "3d" && (
             <div className={tabRowClass(overlayRow)}>
-              {canOverlay && (
+              {canSetView && (
+                <button className={showSet ? "active" : ""}
+                        onClick={() => setShowSet((v) => !v)}
+                        title="セットの他の部品を組んだ位置に重ねる">
+                  🧩 セット
+                </button>
+              )}
+              {canOverlay && !showSet && (
                 <button className={showRef ? "active" : ""}
                         onClick={() => setShowRef((v) => !v)}
                         title="参照マウスピースを半透明で重ねる">
@@ -369,7 +451,8 @@ export default function App() {
         </div>
         <div className="panel right">
           {sim && (
-            <SimPanel sim={sim} paramsKey={JSON.stringify(shownParams)}
+            <SimPanel sim={sim} setCard={project?.set_card}
+                      paramsKey={JSON.stringify(shownParams)}
                       onGoalSeek={() => setDialog("goalseek")} />
           )}
         </div>
@@ -384,7 +467,10 @@ export default function App() {
         <GoalSeekDialog tier2={sim.tier2} schema={project.schema}
                         onApply={applyParams} onClose={() => setDialog(null)} />
       )}
-      {dialog === "export" && <ExportDialog onClose={() => setDialog(null)} />}
+      {dialog === "export" && (
+        <ExportDialog onClose={() => setDialog(null)}
+                      setInfo={project?.set?.is_set ? project.set : null} />
+      )}
       {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
       {dialog === "manual" && manualEdit && (
         <ManualEditDialog manualEdit={manualEdit}

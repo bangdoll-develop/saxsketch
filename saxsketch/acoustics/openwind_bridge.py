@@ -134,17 +134,42 @@ def _cone_pts(x0_m: float, tan_theta: float, l_ext_m: float) -> list[list[float]
     return [[0.0, _CAL_TRUNC_R], [span, _CAL_TRUNC_R + tan_theta * span]]
 
 
+def ideal_cone_hole_x(size_info: dict, s_mm: float) -> float:
+    """管体の弧長 s [mm] → `ideal_cone_geometry` 上の x [m]。
+
+    物差しの円錐は頂点を `_CAL_TRUNC_R` で切ってあるので x=0 は頂点ではない。
+    スロート（＝ネック小端＝弧長 s の原点）は頂点から `apex_distance_mm` の位置に
+    あるので、切り詰めた分を引いた x_throat から s を足す。
+
+    **押し込み量に依らない。** 物差しの側にはマウスピースが無い（`cork_depth` が
+    入らない）ので、管体のカードはチューニングと分離して読める。
+    """
+    cone = ac_volume.missing_cone(size_info)
+    x_start = _CAL_TRUNC_R / cone["tan_theta"]
+    return (cone["apex_distance_mm"] / 1000.0 - x_start) + s_mm / 1000.0
+
+
+def _lowest_peak_hz(freqs: np.ndarray, z: np.ndarray) -> float:
+    """|Z| の**局所極大のうち最も低い**周波数（放物線補間つき）。
+
+    帯域内の `argmax` ではない。頂点近傍で駆動した円錐は入口断面積が極小なので
+    |Z| の包絡が周波数とともに上がり、argmax は共鳴ではなく**帯域の上端**を拾う
+    （実測: alto で共鳴 134.6Hz に対し argmax が 235.6Hz。校正の反復が発散した）。
+    """
+    mag = np.abs(z)
+    y_db = 20.0 * np.log10(mag / np.max(mag) + 1e-12)
+    inner = np.arange(1, len(y_db) - 1)
+    local = inner[(y_db[1:-1] > y_db[:-2]) & (y_db[1:-1] > y_db[2:])]
+    i = int(local[0]) if len(local) else int(np.argmax(y_db))
+    return _interp_peak(freqs, y_db, i)
+
+
 def _first_peak_hz(geometry: list[list[float]], f_lo: float, f_hi: float,
                    n: int = 200, use_openwind: bool | None = None) -> float:
     """帯域 [f_lo, f_hi] の**最も低い**共鳴を補間して返す（校正用の軽い版）。
 
     `_analyze` を使わないのは、ここでは第1共鳴 1 本だけが要るため。格子も 200 点で
-    足りる（対数格子 + 放物線補間）。
-
-    帯域内の `argmax` ではなく**局所極大の最低周波数**を採る。頂点近傍で駆動した
-    円錐は入口断面積が極小なので |Z| の包絡が周波数とともに上がり、argmax は
-    共鳴ではなく**帯域の上端**を拾う（実測: alto で共鳴 134.6Hz に対し argmax が
-    235.6Hz ＝ 上端。校正の反復がそのまま発散した）。
+    足りる（対数格子 + 放物線補間）。ピークの拾い方は `_lowest_peak_hz`。
     """
     freqs = np.geomspace(f_lo, f_hi, n)
     want_ow = HAS_OPENWIND if use_openwind is None else use_openwind
@@ -159,12 +184,7 @@ def _first_peak_hz(geometry: list[list[float]], f_lo: float, f_hi: float,
             z = None
     if z is None:
         z = _tmm_impedance(geometry, freqs)
-    mag = np.abs(z)
-    y_db = 20.0 * np.log10(mag / np.max(mag) + 1e-12)
-    inner = np.arange(1, len(y_db) - 1)
-    local = inner[(y_db[1:-1] > y_db[:-2]) & (y_db[1:-1] > y_db[2:])]
-    i = int(local[0]) if len(local) else int(np.argmax(y_db))
-    return _interp_peak(freqs, y_db, i)
+    return _lowest_peak_hz(freqs, z)
 
 
 @functools.lru_cache(maxsize=None)
@@ -347,11 +367,24 @@ def _complex_wavenumber(freqs: np.ndarray, a: float) -> np.ndarray:
     return (omega / C_SOUND + alpha) - 1j * alpha
 
 
-def _tmm_impedance(geometry: list[list[float]], freqs: np.ndarray) -> np.ndarray:
-    """微小円筒スタックの伝達行列を連結して入力インピーダンス Zin(f) を得る。"""
+def _span_matrix(geometry: list[list[float]], freqs: np.ndarray):
+    """区間 1 本の伝達行列 (m11, m12, m21, m22) と、末端スライスの半径。
+
+    **側孔があっても、この行列は運指で変わらない。** 変わるのは分岐行列だけなので、
+    穴の位置で管を切っておけば区間行列は 1 回作れば使い回せる
+    （`tmm_fingerings`）。実測でここが費用のほぼ全部（アルト既定で 557 スライス ×
+    200 周波数 ＝ 12.5ms/回）なので、運指ごとに作り直すと音階 8 音で 100ms 超えて
+    `simulate` の予算 50ms を割る。
+    """
+    n_f = len(freqs)
+    if len(geometry) < 2 or geometry[-1][0] - geometry[0][0] <= 1e-12:
+        # 穴が同じ位置に 2 つあると零長の区間ができる。単位行列で通す
+        # （成立しない配置は `body_profiles.hole_layout_error` が別に弾く）。
+        return ((np.ones(n_f, dtype=complex), np.zeros(n_f, dtype=complex),
+                 np.zeros(n_f, dtype=complex), np.ones(n_f, dtype=complex)),
+                float(geometry[-1][1]))
     _, seg_l, seg_r = _resample(geometry)
 
-    n_f = len(freqs)
     # 連結行列 M（各要素は周波数配列）。初期は単位行列。
     m11 = np.ones(n_f, dtype=complex)
     m12 = np.zeros(n_f, dtype=complex)
@@ -376,10 +409,121 @@ def _tmm_impedance(geometry: list[list[float]], freqs: np.ndarray) -> np.ndarray
         n22 = m21 * a12 + m22 * a22
         m11, m12, m21, m22 = n11, n12, n21, n22
 
-    z_rad = _radiation_impedance(freqs, seg_r[-1])
+    return (m11, m12, m21, m22), float(seg_r[-1])
+
+
+def _mat_mul(a, b):
+    """2×2 の伝達行列の積（各要素は周波数配列）。"""
+    a11, a12, a21, a22 = a
+    b11, b12, b21, b22 = b
+    return (a11 * b11 + a12 * b21, a11 * b12 + a12 * b22,
+            a21 * b11 + a22 * b21, a21 * b12 + a22 * b22)
+
+
+def _radius_at(geometry: list[list[float]], x: float) -> float:
+    """区分線形ジオメトリの x [m] における半径 [m]（外側はクランプ）。
+
+    **式で持たない。** 共鳴管の点列にはネック小端への段差（`NECK_STEP`）が
+    入っているので、`tan_theta · s` で持つと同じ半径が 2 通りできる。
+    """
+    xs = [g[0] for g in geometry]
+    if x <= xs[0]:
+        return float(geometry[0][1])
+    if x >= xs[-1]:
+        return float(geometry[-1][1])
+    for i in range(len(xs) - 1):
+        if xs[i] <= x <= xs[i + 1]:
+            x0, x1 = xs[i], xs[i + 1]
+            r0, r1 = geometry[i][1], geometry[i + 1][1]
+            if x1 - x0 <= 0:
+                return float(r1)
+            return float(r0 + (r1 - r0) * (x - x0) / (x1 - x0))
+    return float(geometry[-1][1])
+
+
+def _split_geometry(geometry: list[list[float]],
+                    xs: list[float]) -> list[list[list[float]]]:
+    """x の昇順リストでジオメトリを切り分ける（各断片は両端の点を持つ）。"""
+    if not xs:
+        return [[list(pt) for pt in geometry]]
+    chunks: list[list[list[float]]] = []
+    cur = [list(geometry[0])]
+    idx = 0
+    for i in range(1, len(geometry)):
+        x_prev, x_cur = geometry[i - 1][0], geometry[i][0]
+        while idx < len(xs) and x_prev < xs[idx] <= x_cur:
+            cut = [xs[idx], _radius_at(geometry, xs[idx])]
+            if cut[0] > cur[-1][0] + 1e-12:
+                cur.append(list(cut))
+            chunks.append(cur)
+            cur = [list(cut)]
+            idx += 1
+        if geometry[i][0] > cur[-1][0] + 1e-12:
+            cur.append(list(geometry[i]))
+    chunks.append(cur)
+    return chunks
+
+
+def _tmm_parts(geometry: list[list[float]], freqs: np.ndarray, holes):
+    """運指に依らない部分。(区間行列の列, 各穴の本管半径, 放射インピーダンス)。"""
+    xs = [float(h["x_m"]) for h in holes]
+    lo, hi = geometry[0][0], geometry[-1][0]
+    for h, x in zip(holes, xs):
+        if not lo < x <= hi:
+            raise ValueError(
+                f"側孔 {h.get('label', '?')} が管の外にあります "
+                f"(x={x:.4f}m, 管は {lo:.4f}〜{hi:.4f}m)")
+    if xs != sorted(xs):
+        raise ValueError("側孔は弧長の昇順で渡すこと（区間の切れ目が決まらない）")
+    chunks = _split_geometry(geometry, xs)
+    spans, last_r = [], None
+    for c in chunks:
+        m, last_r = _span_matrix(c, freqs)
+        spans.append(m)
+    return (spans, [_radius_at(geometry, x) for x in xs],
+            _radiation_impedance(freqs, last_r))
+
+
+def _tmm_from_parts(parts, holes, open_flags, freqs) -> np.ndarray:
+    """区間行列＋分岐行列 → 入力インピーダンス。運指ごとにここだけ回す。"""
+    from saxsketch.acoustics import toneholes
+
+    spans, r_mains, z_rad = parts
+    m = spans[0]
+    for i, h in enumerate(holes):
+        m = _mat_mul(m, toneholes.junction_matrix(
+            freqs, r_mains[i], float(h["radius_m"]), float(h["chimney_m"]),
+            bool(open_flags[i])))
+        m = _mat_mul(m, spans[i + 1])
+    m11, m12, m21, m22 = m
     # [P_tip; U_tip] = M [P_end; U_end], Z_end = P_end/U_end = z_rad
-    zin = (m11 * z_rad + m12) / (m21 * z_rad + m22)
-    return zin
+    return (m11 * z_rad + m12) / (m21 * z_rad + m22)
+
+
+def _tmm_impedance(geometry: list[list[float]], freqs: np.ndarray,
+                   holes=(), open_flags=None) -> np.ndarray:
+    """微小円筒スタックの伝達行列を連結して入力インピーダンス Zin(f) を得る。
+
+    `holes` を渡すと側孔の分岐行列を挟む（`toneholes.junction_matrix`）。
+    **穴が無いときは以前とビットで同じ**経路を通る（区間が 1 本になるだけ）。
+    """
+    holes = list(holes)
+    if open_flags is None:
+        open_flags = [False] * len(holes)
+    return _tmm_from_parts(_tmm_parts(geometry, freqs, holes), holes,
+                           open_flags, freqs)
+
+
+def tmm_fingerings(geometry: list[list[float]], freqs: np.ndarray, holes,
+                   fingerings) -> dict[str, np.ndarray]:
+    """運指ごとの Zin(f)。**区間行列は 1 回しか作らない。**
+
+    `fingerings` は [(表示名, 各穴の開閉タプル), …]（`toneholes.successive_fingerings`）。
+    """
+    holes = list(holes)
+    parts = _tmm_parts(geometry, freqs, holes)
+    return {name: _tmm_from_parts(parts, holes, flags, freqs)
+            for name, flags in fingerings}
 
 
 # ================================================================== ピーク解析
@@ -397,6 +541,18 @@ def _hz_to_note(freq: float) -> str:
     cents = round((midi - m) * 100)
     sign = "+" if cents >= 0 else ""
     return f"{name}{octave} ({sign}{cents}c)"
+
+
+def _hz_to_note_name(freq: float) -> str:
+    """いちばん近い平均律の音名だけ（セントを付けない）。
+
+    目標音のラベルに使う。目標は `f_low·2^(n/12)` で作った**厳密な**音程なので、
+    「(+0c)」を毎行付けても情報が無い（実測側は `_hz_to_note` でセントを出す）。
+    """
+    if freq <= 0:
+        return "-"
+    m = int(round(69 + 12 * math.log2(freq / 440.0)))
+    return f"{_NOTE_NAMES[m % 12]}{m // 12 - 1}"
 
 
 def _cents(f: float, f_ref: float) -> float:
@@ -488,11 +644,42 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
 
 # ================================================================== OpenWind 経路
 
-def _openwind_impedance(geometry, freqs, size_info):  # pragma: no cover - 環境依存
+def ow_hole_rows(holes) -> list[list]:
+    """OpenWind の holes ファイル形式（の list 版）。
+
+    列名は `label position radius length` で、`length` が**チムニー長**。
+    ファイルに書き出さずに list をそのまま渡せる（`InstrumentGeometry` の docstring）。
+    """
+    rows: list[list] = [["label", "position", "radius", "length"]]
+    for h in holes:
+        rows.append([str(h["label"]), float(h["x_m"]), float(h["radius_m"]),
+                     float(h["chimney_m"])])
+    return rows
+
+
+def ow_fingering_rows(holes, fingerings) -> list[list]:
+    """OpenWind の fingering chart 形式。1 行 = 1 つの穴、1 列 = 1 つの運指。"""
+    rows: list[list] = [["label"] + [name for name, _f in fingerings]]
+    for i, h in enumerate(holes):
+        rows.append([str(h["label"])]
+                    + ["o" if flags[i] else "x" for _n, flags in fingerings])
+    return rows
+
+
+def _openwind_impedance(geometry, freqs, size_info, holes=(),
+                        note=None):  # pragma: no cover - 環境依存
     from openwind import ImpedanceComputation
     # geometry: [[x, r], ...]（m）。OpenWind は [x, r] のリストを受け付ける。
+    holes = list(holes)
+    kw = {}
+    if holes:
+        from saxsketch.acoustics import toneholes
+        fings = toneholes.successive_fingerings(holes)
+        kw = {"holes_valves": ow_hole_rows(holes),
+              "fingering_chart": ow_fingering_rows(holes, fings),
+              "note": note or fings[0][0]}
     result = ImpedanceComputation(freqs, geometry, temperature=TEMPERATURE_C,
-                                  source_location='entrance')
+                                  source_location='entrance', **kw)
     z = np.asarray(result.impedance)
     return _analyze(np.asarray(freqs, dtype=float), z, size_info, "openwind")
 
@@ -689,9 +876,88 @@ def tuning_position(params: dict, size_info: dict,
     }
 
 
-def impedance(params: dict, size_info: dict,
-              fmin: float = 50.0, fmax: float = 2000.0, n: int = 800) -> dict:
+#: 音階を解くときの周波数格子の点数。全閉の 0.6 倍から最高音の 1.8 倍まで
+#: 対数等間隔で張る。既定の 7 孔（+12 半音まで）だと比が約 6 になり、400 点で
+#: 7.8 セント/格子 —— 校正用の 200 点（9.05 セント/格子）より細かい。
+_SCALE_GRID_N = 400
+
+
+class HoleSolver:
+    """側孔つきの管を、**穴の位置が同じ変種なら区間行列を作り直さずに**解く。
+
+    運指・穴径・チムニー高さのどれを変えても、変わるのは分岐行列だけで
+    区間行列（＝費用のほぼ全部）は変わらない。だから
+
+      - 音階 8 運指
+      - 「チムニーを 1mm 足したら何セント動くか」
+      - 「穴径を 1mm 太くしたら何セント動くか」
+
+    が**全部あわせて 1 回ぶん**の費用で出る。感度は 4-B.2c が使うつまみの効きで、
+    ここが安くないとカードに載せられない（`simulate` の予算は 50ms）。
+
+    **位置を変えた変種は渡せない**（区間の切れ目が変わる）。渡されたら例外。
+    """
+
+    def __init__(self, geometry: list[list[float]], holes, f_low: float, steps):
+        from saxsketch.acoustics import toneholes
+
+        self.holes = list(holes)
+        self.f_low = float(f_low)
+        self.fingerings = toneholes.successive_fingerings(self.holes)
+        self.targets = [self.f_low] + [self.f_low * 2.0 ** (st / 12.0) for st in steps]
+        if len(self.targets) != len(self.fingerings):
+            raise ValueError(
+                f"運指 {len(self.fingerings)} 通りに対し目標音が {len(self.targets)} 個")
+        self.freqs = np.geomspace(0.6 * self.f_low, 1.8 * max(self.targets),
+                                  _SCALE_GRID_N)
+        self.parts = _tmm_parts(geometry, self.freqs, self.holes)
+
+    def resonances(self, holes=None) -> dict[str, float]:
+        """運指ごとの第1共鳴 [Hz]（**TMM 固定**）。"""
+        holes = self.holes if holes is None else list(holes)
+        def key(hs):
+            return [round(float(h["x_m"]), 12) for h in hs]
+
+        if key(holes) != key(self.holes):
+            raise ValueError("穴の位置が違う変種は区間行列を使い回せません")
+        return {name: _lowest_peak_hz(
+            self.freqs, _tmm_from_parts(self.parts, holes, flags, self.freqs))
+            for name, flags in self.fingerings}
+
+    def scale(self, holes=None) -> list[dict]:
+        """全閉から順に開けたときの音階。1 行 1 運指。
+
+        Returns: [{"name", "target_hz", "target_note", "freq", "note", "cents"}, …]
+        `cents` は**目標音からのずれ**（正で高い）。
+
+        **調律の保証ではない。** 穴の位置は 0 次規則で置いた暫定値なので、ここに
+        出る `cents` は「設計が外れている量」ではなく **4-B.2c のソルバが潰すべき
+        残差**そのもの。
+        """
+        got = self.resonances(holes)
+        rows = []
+        for (name, _flags), tgt in zip(self.fingerings, self.targets):
+            f = got[name]
+            rows.append({"name": name, "target_hz": tgt,
+                         "target_note": _hz_to_note_name(tgt), "freq": f,
+                         "note": _hz_to_note(f), "cents": _cents(f, tgt)})
+        return rows
+
+
+def hole_scale(geometry: list[list[float]], holes, f_low: float,
+               steps) -> list[dict]:
+    """`HoleSolver(...).scale()` の 1 行版（変種を要らないとき）。"""
+    return HoleSolver(geometry, holes, f_low, steps).scale()
+
+
+def impedance(params: dict | None, size_info: dict,
+              fmin: float = 50.0, fmax: float = 2000.0, n: int = 800,
+              geometry: list[list[float]] | None = None, holes=()) -> dict:
     """入力インピーダンス Z(f) とピーク解析を返す。
+
+    `geometry` を渡すと `params` からは組み立てない（管体は「理想マウスピース」の
+    物差し円錐＋側孔で評価するので、マウスピースのパラメータを持たない）。
+    `holes` を渡すと側孔つきで解く（運指は全閉）。
 
     格子は**対数等間隔**。線形等間隔だと 1 目盛りの音程幅が ΔF/f で効き、
     50–2000Hz を 800 点で張ると低音側が 41 セント刻み・高音側が 4 セント刻みという
@@ -699,13 +965,15 @@ def impedance(params: dict, size_info: dict,
     計算時間も変わらない。`_interp_peak` の放物線補間もここが等間隔である前提。
     """
     freqs = np.geomspace(fmin, fmax, n)
-    geometry = build_resonator(params, size_info)
+    if geometry is None:
+        geometry = build_resonator(params or {}, size_info)
+    holes = list(holes)
     if HAS_OPENWIND:
         try:  # pragma: no cover
-            return _openwind_impedance(geometry, freqs, size_info)
+            return _openwind_impedance(geometry, freqs, size_info, holes)
         except Exception:
             pass  # OpenWind 失敗時は TMM へ
-    z = _tmm_impedance(geometry, freqs)
+    z = _tmm_impedance(geometry, freqs, holes)
     return _analyze(freqs, z, size_info, "tmm")
 
 

@@ -216,3 +216,19 @@ canvas.scope { width: 100%; height: 74px; background: #10141a; border-radius: 6p
 .sec-warn {
   flex: none; color: var(--warn); font-size: 11.5px; padding-top: 4px;
 }
+
+/* --- セットの部品タブ（マウスピース一式）。左パネル最上段 --- */
+.setpanel .effect { color: var(--muted); font-size: 11px; line-height: 1.5;
+  padding: 0 12px 8px; }
+.setpanel .abrow { padding: 0 12px 6px; }
+.setmembers { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 12px 6px; }
+.setmember { display: flex; align-items: center; gap: 5px;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 5px; padding: 4px 9px; font-size: 12px; font-family: inherit;
+  cursor: pointer; }
+.setmember:hover { border-color: var(--accent); }
+.setmember.active { background: rgba(77, 163, 255, 0.16); border-color: var(--accent);
+  font-weight: 600; }
+.setmember.add { color: var(--muted); border-style: dashed; }
+.setmember-x { color: var(--muted); font-size: 13px; line-height: 1; }
+.setmember-x:hover { color: var(--err); }

@@ -3,6 +3,18 @@
   "label": "サクソフォン",
   "family": "single_reed",
   "pitch_standard_hz": 440.0,
+  "sets": [
+    {
+      "id": "mouthpiece_set",
+      "label": "マウスピース一式（MP＋リガチャー＋リード）",
+      "note": "マウスピースが土台。リガチャーは外形に、リードはテーブル幅とウィンドウ長に従属する。リードは任意（無ければリガチャーは同サイズのテンプレート リードを想定して当たり面を作る）。",
+      "members": [
+        {"component": "mouthpiece", "required": true, "role": "master"},
+        {"component": "ligature", "required": true},
+        {"component": "reed", "required": false}
+      ]
+    }
+  ],
   "notes": "欠損円錐は cone_half_angle_deg と neck_bore_id_mm から acoustics/volume.missing_cone() が導出する（体積を定数で持たない）。半頂角はソプラノ 1.74°/テナー 1.52° の実測文献値、アルトはその間を採る。neck_cork_thickness_mm はテノンに巻かれたコルクの片側厚。マウスピースのボア径は テノン外径＋2×コルク厚 を基準に、締め代 reference_check.INTERFERENCE_FIT_MM だけ細く取る（コルクは圧縮して食いつくので、隙間があると抜ける）。neck_bore_id_mm はネック小端の内径で、3サイズとも実測値（2026-08-09。測った個体と実際の数字は各サイズの neck_dimensions_source にある）。以前は テノン外径から コルク厚＋管肉厚0.4mm を両側分引く推定規則で埋めていたが、実測の管肉厚は 0.90〜1.25mm で 0.4mm という仮定に根拠が無かった。アルトは実測内径 12.7 で欠損円錐長の導出値が 227mm になり、公表されている SBA アルトの実測 217.5mm との差が 11% から 4.5% に縮む。半頂角 1.52°/1.6°/1.74° は本体円錐の文献値をネック小端に当てたもので、実測ではない（各サイズの cone_half_angle_source を見ること）。テナー大端内径 26.0mm の実測で掃引して、これが Tier1 の残差 -81 セントの原因ではないことは確認済み。facing_length_range_mm は各社公表フェイシングチャートの実測レンジ（アルト: Meyer 21mm / V16 A7M 23mm / Florida Link 20–20.5mm）。測定基準のフィーラー厚がメーカーごとに違うため厳密な比較はできない。reed_std_length_mm は**1 点ではなく域の代表値**として扱う。同じソプラノ用でバンドーレン 3番（ケーン）59.1 とレジェール アメリカンカット（樹脂）62.0 の 2.9mm 差があり（どちらも実測）、銘柄・カット・材質で動く。域が分かっているサイズは reed_length_range_mm を持ち、reference_check はそちらを見る。以前ソプラノに置いていた 63.5 はちょうど 2.5 インチの丸い値で、実測 2 本のどちらからも外れていた。 low_note_sounding_hz は記譜最低音 B♭3 の実音（移調後）。旧 written_low_note_hz は調の主音を並べただけの代用値で、アルトで 155.56Hz(E♭3) と実際の D♭3 から 2 半音ずれていた。",
   "sizes": {
     "soprano": {

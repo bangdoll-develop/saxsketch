@@ -359,6 +359,10 @@ class MouthpieceComponent(Component):
     def goal_seek_size_info(self) -> dict:
         return self.size_info
 
+    #: 組み合わせたときの置き場所。**この部品が土台**（`sets` の master）なので恒等。
+    def assembly_placement(self, params: dict) -> dict | None:
+        return {"origin": [0.0, 0.0, 0.0], "rotate_x_deg": 0.0}
+
     def regions(self, params: dict) -> dict:
         return profiles.param_regions(params)
 

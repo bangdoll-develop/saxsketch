@@ -404,6 +404,37 @@ class ReedComponent(Component):
 
     # ------------------------------------------------------------ 領域・BOM・仕様書
 
+    def assembly_placement(self, params: dict) -> dict | None:
+        """テーブル平面へ寝かせた姿（参照マウスピースのモデル座標）。
+
+        リードのモデルは z=0 が先端・y=0 が平らな底面（`reed_profiles`）。組んだ姿は
+        **底面がテーブル平面に載り、先端がティップレールの前縁に合う**位置。
+
+        **傾きは平面そのものから測る**（`table_angle` の定数を読まない）。同じ
+        `table_plane_y` から向きも位置も出すので、平面の定義が変われば置き場所も
+        一緒に動く —— 符号を別に決め打つと、片方だけ直る状態が作れてしまう。
+
+        参照マウスピースが無ければ `None`（置き場所が決まらない）。
+        """
+        import math
+
+        m = self.ref_params()
+        if not m:
+            return None
+        z_a = profiles.heel_z(m) * 0.5
+        z_b = profiles.heel_z(m)
+        slope = ((profiles.table_plane_y(m, z_b) - profiles.table_plane_y(m, z_a))
+                 / (z_b - z_a))
+        z0 = profiles.tip_contour_z(m, 0.0)      # 前縁が来る z（中央）
+        return {"origin": [0.0, profiles.table_plane_y(m, z0), z0],
+                "rotate_x_deg": math.degrees(math.atan(-slope)),
+                # **裏返して載る。** リードの肉は底面 y=0 から +y へ付くが
+                # （`reed_profiles.sections`）、テーブル平面は胴の下 ——
+                # `table_plane_y` は負で、マウスピースの材料はその上（+y）に在る。
+                # 載る側の外向き法線は −y なので、裏返さないと肉が丸ごと胴へ潜る
+                # （アルト既定で +2.807mm ＝ リード厚 2.800 とほぼ一致した）。
+                "flip_z": True}
+
     def regions(self, params: dict) -> dict:
         return rp.param_regions(params)
 

@@ -50,35 +50,44 @@ from . import reed_profiles as rp
 
 
 def seat_range(ref_p: dict, lig_p: dict) -> tuple[float, float]:
-    """リガチャーが実際に載る z 範囲。**後端で止め、前へは伸ばす。**
+    """リガチャーが実際に載る z 範囲。**最大径に置いて、そこから前へ引く。**
 
-    後端の壁は物理: `ligature_seat_range` の後端は胴の最大径（`heel_z`）で、
-    そこから先は胴が細くなるので、頂点を跨いだ帯は掴めない。
+    帯の後端は胴の最大径（`heel_z`）が上限で、これは物理 —— そこから先は胴が
+    細くなるので、頂点を跨いだ帯は掴めない。だから `seat_setback` は
+    **その壁からどれだけ前へ引くか**で測る。
 
-    **前端は丸めない。** 座の長さは `_SEAT_LENGTH_RATIO = 0.23`（実測のリガチャー帯
-    ≈18mm / heel 79mm、テナー 1 本由来）から作った**公称値**であって壁ではない。
-    以前はここで帯を座へ丸め込んでいたので、幅を上げても z 範囲が動かず、
-    **STL がビット一致して 3D が更新されなかった**（素のアルトは 16.5mm 以降が
-    全部同じ形。閾値は参照マウスピースの `heel_z × 0.23` なので機体ごとに動く）。
-    「典型的なリガチャーの幅」で座を定義しておいて、その座より広いリガチャーを
-    禁じる ——**定義が循環していた**。
+    **以前は座の前端から後ろ向きに測っていて、可動域がほぼ死んでいた。**
+    座の長さは `_SEAT_LENGTH_RATIO = 0.23`（実測のリガチャー帯 ≈18mm / heel 79mm、
+    テナー 1 本由来）から作った公称値で、`band_width` の既定がそれをほぼ埋める。
+    そのため 0〜15mm のスライダのうち生きているのは 0〜0.17mm（実測: soprano
+    0.134 / alto 0.169 / tenor 0.174）で、しかも**既定 3.0/4.0/4.5 は既に壁の外**
+    ＝どこへ動かしても STL がビット一致して 3D が更新されなかった。
+    向きを変えるだけで 17〜26mm（帯の後端が vamp 開始に届くまで）が全部生きる。
 
-    `seat_offset` は後端に当たると飽和する（既定 3 サイズとも可動域 0〜15 のうち
-    生きているのは 0〜0.17mm）。これは物理の壁なので消せない。**黙って飲まず、
-    `effective_seat_offset` を適合カードに出す。**
+    **これはこの関数で 2 度目の同じ型**。前端の丸め込み（幅を上げても z 範囲が
+    動かなかった）は既に外してあるが、後端の壁を起点にしていなかったので
+    今度は offset が同じ症状を出していた。
+
+    **前へは公称の座を越えて出られる**（座は壁ではなく公称値）。止めるのは
+    「帯が胴から前へ落ちる」ところだけで、リードの削り始めに掛かるかどうかは
+    `set_check` の警告で出す（片方を直す途中で必ず一時的に成立しなくなるので
+    ブロックしない）。飲んだぶんは `effective_seat_setback` が報告する。
     """
-    seat0, seat1 = profiles.ligature_seat_range(ref_p)
-    z1 = min(seat0 + lig_p["seat_offset"] + lig_p["band_width"], seat1)
+    _, seat1 = profiles.ligature_seat_range(ref_p)
+    # 前へ出せる上限: 帯の前端（テーパ圧入なら読む先も）が胴から落ちない所まで。
+    z1_min = lig_p["band_width"] + press_depth(lig_p)
+    z1 = max(seat1 - lig_p["seat_setback"], z1_min)
     return z1 - lig_p["band_width"], z1
 
 
-def effective_seat_offset(ref_p: dict, lig_p: dict) -> float:
-    """座の前端から帯の前端までの**実際の**距離 [mm]。
+def effective_seat_setback(ref_p: dict, lig_p: dict) -> float:
+    """帯の後端が最大径からどれだけ前へ来ているか [mm]。
 
-    要求どおりなら `seat_offset` と一致する。後端で止まっているぶんだけ小さくなる。
+    要求どおりなら `seat_setback` と一致する。前端が胴から落ちる手前で止まった
+    ぶんだけ小さくなる。
     """
-    seat0, _ = profiles.ligature_seat_range(ref_p)
-    return seat_range(ref_p, lig_p)[0] - seat0
+    _, seat1 = profiles.ligature_seat_range(ref_p)
+    return seat1 - seat_range(ref_p, lig_p)[1]
 
 
 # ---------------------------------------------------------------- テーパ圧入
@@ -656,7 +665,7 @@ def param_regions(ref_p: dict, lig_p: dict) -> dict:
     return {
         "band_width": band,
         "band_thickness": band,
-        "seat_offset": band,
+        "seat_setback": band,
         "clearance": band,
         "reed_clearance": reed_side,
         "closure": boss,

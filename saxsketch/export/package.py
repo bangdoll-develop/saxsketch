@@ -21,6 +21,39 @@ def build_package(zip_path: str | Path, files: dict[str, Path | str | bytes],
     return zip_path
 
 
+def readme_text_set(set_name: str, members: list[dict]) -> str:
+    """セット 1 式の README。**部品ごとのフォルダ構成をそのまま書く。**
+
+    Args:
+        members: [{"label", "dir", "material_label", "dims": [(名, 値), …]}, …]
+    """
+    blocks = ""
+    for m in members:
+        dim_lines = "\n".join(f"    - {k}: {v}" for k, v in m["dims"])
+        blocks += (f"\n[{m['label']}]  → {m['dir']}/\n"
+                   f"  推奨材料: {m['material_label']}\n"
+                   f"  主要寸法:\n{dim_lines}\n")
+    return f"""SaxSketch 入稿パッケージ（セット）
+========================================
+プロジェクト: {set_name}
+用途: 管楽器のマウスピース一式（口に触れる部品）
+
+構成:
+{blocks}
+共通ファイル:
+  - spec.html  … 製作仕様書（全部品＋部品どうしの適合）
+  - bom.csv    … 部品表（先頭列がどの部品かを示す）
+
+各部品フォルダの中身:
+  - model.stl  … 3Dプリント用メッシュ（単位: mm）
+  - model.step … 精密CAD形状（寸法検証用）
+  - model.3mf  … 単位情報付きメッシュ
+
+注意: 食品接触適合材料を指定してください。
+部品ごとに推奨材料が違うことがあります（上記を参照）。
+"""
+
+
 def readme_text(project_name: str, dims: list, material_label: str) -> str:
     dim_lines = "\n".join(f"  - {k}: {v}" for k, v in dims)
     return f"""SaxSketch 入稿パッケージ

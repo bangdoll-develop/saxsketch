@@ -13,26 +13,50 @@ interface Props {
   hoverKey?: string | null;
   /** 別モデルを表示する場合のURL（外部編集済みモデル等）。null=パラメトリック形状 */
   srcOverride?: string | null;
-  /** 半透明で重ねる参照モデルのURL（リガチャー → マウスピース）。null=重ねない */
-  overlaySrc?: string | null;
+  /** 一緒に描く別部品。参照マウスピースの重ねも、セットの合わせ表示も
+   *  **同じ仕組み**で出す（片方にしか無い挙動を作らないため）。null/空=描かない */
+  extras?: ExtraPart[] | null;
   /** 図示する寸法。null / 空なら描かない */
   dimensions?: Dimension[] | null;
   onBusy?: (busy: boolean) => void;
-  /** 参照モデルの取得中。本体の `onBusy` とは分ける（断面編集を待たせないため） */
+  /** 別部品の取得中。本体の `onBusy` とは分ける（断面編集を待たせないため） */
   onOverlayBusy?: (busy: boolean) => void;
 }
+
+/** 一緒に描く 1 部品。座標は**本体（編集中の部品）のモデル座標**で、
+ *  `rotateXDeg` → `origin` の順に適用する（サーバの
+ *  `Component.assembly_placement` と同じ約束）。 */
+export interface ExtraPart {
+  id: string;
+  src: string;
+  origin?: [number, number, number];
+  rotateXDeg?: number;
+  /** Z 軸まわり 180°（裏返し）を**先に**掛ける。three の既定 Euler order は
+   *  XYZ ＝ `R_x·R_y·R_z` なので、rotation に両方入れるだけで順序が合う */
+  flipZ?: boolean;
+  color: number;
+  opacity: number;
+}
+
+/** 取り直しが要るかの判定に使う一意鍵。位置や色が変われば作り直す。 */
+const extraKey = (e: ExtraPart) =>
+  `${e.src}|${(e.origin ?? [0, 0, 0]).join(",")}|${e.rotateXDeg ?? 0}` +
+  `|${e.flipZ ? 1 : 0}|${e.color}|${e.opacity}`;
 
 interface Ctx {
   scene: THREE.Scene; camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer; controls: OrbitControls;
   mesh: THREE.Mesh | null;
-  overlay: THREE.Mesh | null;
-  /** いま要求されている重ねのURL。取得が返ってきた時の取り違えを防ぐ */
-  overlaySrc: string | null;
-  /** 本体を読み込み中か。参照の取得はこれが終わってから */
+  /** 一緒に描いている部品（id → シーン上の入れ物） */
+  extras: Map<string, THREE.Object3D>;
+  /** 読み込んだときの鍵（`extraKey`）。変わっていたら作り直す */
+  extraKeys: Map<string, string>;
+  /** いま要求されている構成。取得が返ってきた時の取り違えを防ぐ */
+  wantExtras: ExtraPart[];
+  /** 本体を読み込み中か。別部品の取得はこれが終わってから */
   mainLoading: boolean;
-  /** 本体の読み込み中に要求された重ね。終わったら取りに行く */
-  pendingOverlay: string | null;
+  /** 本体の読み込み中に要求があったか。終わったら取りに行く */
+  pendingExtras: boolean;
   /** 寸法線とラベルをまとめた入れ物 */
   dims: THREE.Group | null;
   dimLines: THREE.LineSegments | null;
@@ -86,12 +110,18 @@ function placeInModelFrame(ctx: Ctx, obj: THREE.Object3D) {
   obj.position.copy(c).multiplyScalar(-1).applyEuler(obj.rotation);
 }
 
-function removeOverlay(ctx: Ctx) {
-  if (!ctx.overlay) return;
-  ctx.scene.remove(ctx.overlay);
-  ctx.overlay.geometry.dispose();
-  (ctx.overlay.material as THREE.Material).dispose();
-  ctx.overlay = null;
+function removeExtra(ctx: Ctx, id: string) {
+  const obj = ctx.extras.get(id);
+  if (!obj) return;
+  ctx.scene.remove(obj);
+  obj.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    m.geometry.dispose();
+    (m.material as THREE.Material).dispose();
+  });
+  ctx.extras.delete(id);
+  ctx.extraKeys.delete(id);
 }
 
 // ------------------------------------------------------------------ 寸法
@@ -226,7 +256,7 @@ function buildDims(ctx: Ctx, dims: Dimension[] | null, hoverKey: string | null) 
 }
 
 export default function Viewer3D({
-  modelVersion, highlight, hoverKey, srcOverride, overlaySrc, dimensions,
+  modelVersion, highlight, hoverKey, srcOverride, extras, dimensions,
   onBusy, onOverlayBusy,
 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -281,8 +311,9 @@ export default function Viewer3D({
     animate();
 
     sceneRef.current = {
-      scene, camera, renderer, controls, mesh: null, overlay: null,
-      overlaySrc: null, mainLoading: false, pendingOverlay: null,
+      scene, camera, renderer, controls, mesh: null,
+      extras: new Map(), extraKeys: new Map(), wantExtras: [],
+      mainLoading: false, pendingExtras: false,
       dims: null, dimLines: null, dimItems: [],
     };
     return () => {
@@ -294,41 +325,63 @@ export default function Viewer3D({
     };
   }, []);
 
-  /** 参照モデルを取りに行く。**本体の読み込み中なら後回しにする** ——
+  /** 要求された構成にシーンを合わせる。**本体の読み込み中は後回しにする** ——
    *  CAD のワーカは 1 本しか無いので、先に投げると本体の再生成（1.3秒）が
-   *  参照のビルド（5.7秒）待ちになる。 */
-  const loadOverlay = useCallback((src: string) => {
+   *  別部品のビルド（マウスピースなら 5.7秒）待ちになる。 */
+  const syncExtras = useCallback((specs: ExtraPart[]) => {
     const ctx = sceneRef.current;
     if (!ctx) return;
-    if (ctx.mainLoading) { ctx.pendingOverlay = src; return; }
-    ctx.pendingOverlay = null;
+    ctx.wantExtras = specs;
+    const want = new Map(specs.map((e) => [e.id, e]));
+    for (const id of [...ctx.extras.keys()]) {
+      const e = want.get(id);
+      if (!e || ctx.extraKeys.get(id) !== extraKey(e)) removeExtra(ctx, id);
+    }
+    const todo = specs.filter((e) => !ctx.extras.has(e.id));
+    if (todo.length === 0) { ctx.pendingExtras = false; return; }
+    if (ctx.mainLoading) { ctx.pendingExtras = true; return; }
+    ctx.pendingExtras = false;
     onOverlayBusy?.(true);
-    fetch(src)
+
+    const load = (e: ExtraPart) => fetch(e.src)
       .then((r) => {
-        if (!r.ok) throw new Error("ref model fetch failed");
+        if (!r.ok) throw new Error("extra model fetch failed");
         return r.arrayBuffer();
       })
       .then((buf) => {
         const c = sceneRef.current;
-        if (!c || c.overlaySrc !== src) return;   // 途中でトグルを切った
+        // 途中で構成が変わっていたら捨てる（取り違え防止）
+        if (!c || c.wantExtras.find((w) => w.id === e.id
+                                      && extraKey(w) === extraKey(e)) === undefined) return;
         const geo = new STLLoader().parse(buf);
         geo.computeVertexNormals();
-        const overlay = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-          color: 0xa8c0d8, metalness: 0.0, roughness: 0.8,
-          // depthWrite を切るのは、参照が手前に来ても本体を隠さないため。
-          transparent: true, opacity: 0.25, depthWrite: false,
+        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+          color: e.color, metalness: 0.0, roughness: 0.8,
+          // depthWrite を切るのは、手前に来ても本体を隠さないため。
+          transparent: true, opacity: e.opacity, depthWrite: false,
         }));
-        overlay.rotation.x = -Math.PI / 2;        // 本体と同じ寝かせ方
-        removeOverlay(c);
-        c.overlay = overlay;
-        placeInModelFrame(c, overlay);
-        c.scene.add(overlay);
+        // モデル座標での置き場所（回転 → 平行移動）。**本体は動かさない**
+        // ——寸法線もハイライトも本体のモデル座標で作られている。
+        // 既定 order は "XYZ" = R_x·R_y·R_z なので、これで
+        // 「裏返してから X 軸で傾ける」になる（サーバが返す合成と同じ順）。
+        mesh.rotation.set(THREE.MathUtils.degToRad(e.rotateXDeg ?? 0), 0,
+                          e.flipZ ? Math.PI : 0);
+        if (e.origin) mesh.position.set(...e.origin);
+        const group = new THREE.Group();
+        group.add(mesh);
+        group.rotation.x = -Math.PI / 2;          // 本体と同じ寝かせ方
+        placeInModelFrame(c, group);
+        removeExtra(c, e.id);
+        c.extras.set(e.id, group);
+        c.extraKeys.set(e.id, extraKey(e));
+        c.scene.add(group);
       })
-      .catch(() => { /* 参照が作れなければ重ねないだけ */ })
-      .finally(() => onOverlayBusy?.(false));
+      .catch(() => { /* 作れなければ出さないだけ */ });
+
+    Promise.all(todo.map(load)).finally(() => onOverlayBusy?.(false));
   }, [onOverlayBusy]);
-  const loadOverlayRef = useRef(loadOverlay);
-  loadOverlayRef.current = loadOverlay;
+  const syncExtrasRef = useRef(syncExtras);
+  syncExtrasRef.current = syncExtras;
 
   useEffect(() => {
     const ctx = sceneRef.current;
@@ -367,7 +420,7 @@ export default function Viewer3D({
         c.scene.add(mesh);
         c.mesh = mesh;
         // 本体が動けば重ねと寸法の基準（重心・大きさ）も動く
-        if (c.overlay) placeInModelFrame(c, c.overlay);
+        for (const obj of c.extras.values()) placeInModelFrame(c, obj);
         buildDims(c, dimsRef.current, hoverRef.current);
       })
       .catch(() => { /* 生成失敗時は前のモデルを維持 */ })
@@ -377,22 +430,14 @@ export default function Viewer3D({
         const c = sceneRef.current;
         if (!c) return;
         c.mainLoading = false;
-        if (c.pendingOverlay) loadOverlayRef.current(c.pendingOverlay);
+        if (c.pendingExtras) syncExtrasRef.current(c.wantExtras);
       });
     return () => { cancelled = true; };
   }, [modelVersion, srcOverride, onBusy]);
 
   useEffect(() => {
-    const ctx = sceneRef.current;
-    if (!ctx) return;
-    ctx.overlaySrc = overlaySrc ?? null;
-    if (!overlaySrc) {
-      removeOverlay(ctx);
-      ctx.pendingOverlay = null;
-      return;
-    }
-    loadOverlay(overlaySrc);
-  }, [overlaySrc, loadOverlay]);
+    if (sceneRef.current) syncExtras(extras ?? []);
+  }, [extras, syncExtras]);
 
   useEffect(() => {
     const ctx = sceneRef.current;

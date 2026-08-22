@@ -28,7 +28,9 @@ function ReferenceCard({ reference, onPick, onReset }: {
           <label>{reference.label}</label>
         </div>
         <div className="effect" title={reference.source ?? ""}>
-          {reference.source ?? "テンプレート既定値（取込元なし）"}
+          {reference.live
+            ? "このセットの設計値に追従中"
+            : reference.source ?? "テンプレート既定値（取込元なし）"}
         </div>
         <table className="reftable">
           <tbody>
@@ -37,12 +39,16 @@ function ReferenceCard({ reference, onPick, onReset }: {
             ))}
           </tbody>
         </table>
-        <div className="abrow">
-          <button onClick={onReset} disabled={!reference.source}>既定に戻す</button>
-          <button className="primary" onClick={onPick}>.wproj から取込</button>
-        </div>
+        {!reference.live && (
+          <div className="abrow">
+            <button onClick={onReset} disabled={!reference.source}>既定に戻す</button>
+            <button className="primary" onClick={onPick}>.wproj から取込</button>
+          </div>
+        )}
         <div className="effect">
-          取込時点の寸法で固定されます。参照元を後から編集しても自動追従しません。
+          {reference.live
+            ? "同じセットの部品なので、あちらを編集すればここも変わります。"
+            : "取込時点の寸法で固定されます。参照元を後から編集しても自動追従しません。"}
         </div>
       </div>
     </div>
