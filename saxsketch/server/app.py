@@ -50,6 +50,26 @@ app = FastAPI(title="SaxSketch", version="0.1.0", lifespan=_lifespan)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
+#: 殻が読み込んでいるモジュールスクリプトの名前。Vite が内容ハッシュを付けるので、
+#: これが**そのビルドの世代**そのものになる。
+_ASSET_RE = re.compile(r'<script[^>]+src="/assets/([^"]+\.js)"')
+
+
+def frontend_asset() -> str | None:
+    """いま配っているアプリの世代（`index-XXXX.js`）。dist が無ければ None。
+
+    **ビルド時に何も仕込まない** —— `index.html` の実物から読む。別に埋め込むと
+    「実際に配っている物」と「世代を名乗る値」が別々に古くなれるので、
+    食い違いを検出するための値が自分で食い違える。
+    """
+    try:
+        html = (FRONTEND_DIST / "index.html").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _ASSET_RE.search(html)
+    return m.group(1) if m else None
+
+
 # ------------------------------------------------------------------ WSL interop
 # SAC 回避のためバックエンドを WSL2(Linux) で動かす。外部ツール連携（Windows 側の
 # FreeCAD/エクスプローラ/既定アプリ）は WSL⇄Windows のパス変換と exe 起動が要る。
@@ -362,11 +382,16 @@ def capabilities(request: Request):
 
     `native_dialogs` が false のときフロントはパス入力へ落ちる。ダイアログを
     「出したのに誰も見えない」状態が、利用者からはフリーズと区別できないため。
+
+    `asset` は**いま配っているアプリの世代**（`frontend_asset`）。開きっぱなしの
+    タブは殻の `no-store` では入れ替わらないので、フロントが自分の読み込んだ
+    スクリプト名と突き合わせて、食い違ったら再読み込みを促す。
     """
     return {
         "native_dialogs": _is_local_client(request) and filedialog.available(),
         "host": host_kind(),
         "export_root": str(STATE.export_root()),
+        "asset": frontend_asset(),
     }
 
 
@@ -944,11 +969,34 @@ def settings_put(req: SettingsReq):
 # ------------------------------------------------------------------ フロントエンド静的配信
 
 if FRONTEND_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    class _ImmutableAssets(StaticFiles):
+        """資産は内容ハッシュ付きの名前なので、中身が変われば URL も変わる。
+
+        だから資産そのものは永久にキャッシュしてよい。**世代を切り替えるのは
+        殻（`index.html`）の役目**で、そちらは下で `no-store` にしている。
+        """
+
+        def file_response(self, *args, **kwargs):
+            resp = super().file_response(*args, **kwargs)
+            resp.headers["cache-control"] = "public, max-age=31536000, immutable"
+            return resp
+
+    app.mount("/assets", _ImmutableAssets(directory=FRONTEND_DIST / "assets"),
+              name="assets")
 
     @app.get("/")
     def index():
-        return FileResponse(FRONTEND_DIST / "index.html")
+        """アプリの殻。**キャッシュさせない。**
+
+        ここを配り直せないと、ブラウザは古い `index-XXXX.js` を読み続ける。
+        サーバだけ新しい状態は**エラーにならず、それらしく組み上がった絵が出る**
+        ので気付けない —— 実際に 2026-09-03 に起きた（セット表示でフロントが
+        `flip_z` を落とし、リードがマウスピースの反対側に付いて見えた）。
+        資産は immutable なので、殻を取り直す代償は数百バイトで済む。
+        """
+        return FileResponse(FRONTEND_DIST / "index.html",
+                            headers={"cache-control": "no-store"})
 
 
 def _in_use(host: str, port: int) -> bool:

@@ -265,6 +265,9 @@ export interface Capabilities {
   native_dialogs: boolean;
   host: "wsl" | "windows" | "linux";
   export_root: string;
+  /** サーバがいま配っているアプリの世代（`index-XXXX.js`）。dist 無し（開発
+   *  サーバ）なら null。自分が読み込んだスクリプト名と違えば、このページは古い。 */
+  asset: string | null;
 }
 
 const json = (body: unknown): RequestInit => ({

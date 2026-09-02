@@ -48,6 +48,8 @@ export default function App() {
   const [staleWarn, setStaleWarn] = useState(false);
   // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
   const [notices, setNotices] = useState<string[]>([]);
+  // このページがサーバの配っているアプリより古いか（下の useEffect を参照）
+  const [staleApp, setStaleApp] = useState(false);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
 
   const [hasSection, setHasSection] = useState(false);
@@ -119,6 +121,24 @@ export default function App() {
       .then(() => setHasSection(true))
       .catch(() => { setHasSection(false); setViewMode("3d"); });
   }, [project]);
+
+  useEffect(() => {
+    // **このページが古くないか。** 殻は `no-store` で配っているので再読み込み
+    // すれば必ず最新になるが、開きっぱなしのタブはそれでは入れ替わらない。
+    // 古いまま動くと**エラーにならず、それらしく組み上がった絵が出る**ので
+    // 気付けない（2026-09-03: フロントが `flip_z` を落とし、セット表示で
+    // リードがマウスピースの反対側に付いて見えた）。だから明示的に出す。
+    //
+    // 突き合わせるのは**実際に読み込んだスクリプトの名前**。開発サーバでは
+    // `/assets/` 配下ではないので null になり、何も言わない。
+    const el = document.querySelector<HTMLScriptElement>(
+      'script[type="module"][src*="/assets/"]');
+    const mine = el?.src.split("/").pop() ?? null;
+    if (!mine) return;
+    api.capabilities()
+      .then((c) => setStaleApp(!!c.asset && c.asset !== mine))
+      .catch(() => {});
+  }, []);
 
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
@@ -481,6 +501,12 @@ export default function App() {
         <SurveyDialog survey={project.survey}
                       onApplied={onSurveyApplied}
                       onClose={() => setDialog(null)} />
+      )}
+      {staleApp && (
+        <div className="err-toast warn-toast">
+          ⚠ このページは古いアプリのまま動いています。<b>再読み込み</b>してください
+          （Ctrl+Shift+R）。3D の表示が実際の設計と食い違うことがあります。
+        </div>
       )}
       {error && <div className="err-toast">{error}</div>}
       {staleWarn && (

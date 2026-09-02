@@ -4577,6 +4577,97 @@ def test_set_placement_is_relative_to_active():
         assert back == pytest.approx(a_rd, abs=1e-9), v
 
 
+def test_the_app_shell_is_never_cached_but_assets_are():
+    """殻は毎回取り直し、資産は永久にキャッシュしてよいこと。
+
+    **古いページが黙って動き続ける経路を塞ぐ。** サーバだけ新しい状態は
+    エラーにならず、それらしく組み上がった絵が出るので気付けない
+    （2026-09-03: フロントが `flip_z` を落とし、リードがマウスピースの
+    反対側に付いて見えた）。資産は内容ハッシュ付きの名前なので、殻さえ
+    取り直せば必ず現行の世代になる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server import app as appmod
+    if not appmod.FRONTEND_DIST.exists():
+        pytest.skip("frontend/dist が無い（未ビルド）")
+    c = TestClient(appmod.app)
+    r = c.get("/")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-store"
+
+    asset = appmod.frontend_asset()
+    assert asset and asset.endswith(".js")
+    a = c.get(f"/assets/{asset}")
+    assert a.status_code == 200
+    assert "immutable" in a.headers["cache-control"]
+
+
+def test_capabilities_reports_the_running_app_generation():
+    """`/api/capabilities` の `asset` が、殻が実際に読む名前と一致すること。
+
+    **ビルド時に別途仕込まない** —— `index.html` の実物から読む。埋め込むと
+    「配っている物」と「世代を名乗る値」が別々に古くなれるので、食い違いを
+    見つけるための値が自分で食い違える。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server import app as appmod
+    if not appmod.FRONTEND_DIST.exists():
+        pytest.skip("frontend/dist が無い（未ビルド）")
+    c = TestClient(appmod.app)
+    asset = c.get("/api/capabilities").json()["asset"]
+    assert asset and f'src="/assets/{asset}"' in c.get("/").text
+
+
+def test_set_view_keeps_the_reed_on_the_table_side():
+    """どの部品を基準にしても、リードは**テーブル側**に付くこと。
+
+    4-D.5 のテストは「肉が胴へ潜らないこと」しか見ていなかった。**潜っていないが
+    反対側（ビーク側）に付く**という状態が実在する —— 実際 2026-09-03 に
+    「セット表示でリードが胴の反対側」と報告が出た（原因は配置ではなく、
+    古いページが `flip_z` を落としていたこと）。そのとき組んだ姿は
+    マウスピース y[-25.468, +2.817] で、リード y[0.000, 2.800] は**潜っていない**
+    ——「潜っていない」だけでは合否が分けられなかった。
+
+    見るのは**テーブル平面に対してリードの肉とビークが反対側にあるか**。
+    リードもマウスピースも軸上（x≈0）にあるので、射影は `y·cos(方位)` になり
+    **符号は視点に依らない**。だから画面でも同じ判定が使える。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.instruments.saxophone.components import profiles
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    for tid in SIZES:
+        _new_set(c, tid)
+        c.post("/api/set/member/add", json={"component_id": "reed"})
+        m = _template_params("mouthpiece", tid)
+        r = _template_params("reed", tid)
+        z = 40.0                      # 3 部品すべてが在る中ほど
+        probes = {
+            "table": (0.0, profiles.table_plane_y(m, z), z),
+            "beak": (0.0, profiles.outer_radius(m, z), z),
+            "meat": (0.0, rp.thickness(r, z, 0.0), z),
+        }
+        for active in ("mouthpiece", "ligature", "reed"):
+            c.post("/api/set/active", json={"component_id": active})
+            pl = {p["component_id"]: p
+                  for p in c.get("/api/set/placement").json()["parts"]}
+            pl[active] = {"origin": [0.0, 0.0, 0.0],
+                          "rotate_x_deg": 0.0, "flip_z": False}
+            table = _apply_placement(pl["mouthpiece"], probes["table"])
+            beak = _apply_placement(pl["mouthpiece"], probes["beak"])
+            meat = _apply_placement(pl["reed"], probes["meat"])
+            flat = _apply_placement(pl["reed"], (0.0, 0.0, z))
+            # リードの平らな底面はテーブル平面に載る
+            assert flat[1] == pytest.approx(table[1], abs=0.05), (tid, active)
+            # 肉とビークはテーブルの**反対側**
+            assert (meat[1] - table[1]) * (beak[1] - table[1]) < 0, (tid, active)
+            # 肉の伸びはリード厚ぶん（潜っていない、かつ離れてもいない）
+            assert abs(meat[1] - table[1]) == pytest.approx(
+                rp.thickness(r, z, 0.0), abs=0.05), (tid, active)
+
+
 def test_set_member_stl_endpoint(tmp_path):
     """合わせ表示用に部品ごとの STL が取れ、居ない部品は 404 になること。"""
     from fastapi.testclient import TestClient
