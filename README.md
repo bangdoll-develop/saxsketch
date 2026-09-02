@@ -43,6 +43,9 @@
   スカルプト）を FreeCAD / Blender で行い、アプリに再取込。凍結スナップショット・
   水密検査・領域別偏差・**パラメータ逆算**（編集がどのパラメータをどれだけ変えたか
   自動判定）・陳腐化警告つき。→ [docs/manual-edit-workflow.md](docs/manual-edit-workflow.md)
+- **実製作品の検品**: 印刷して届いた実物を測り、設計へ返すための手順。何を・どう測り・
+  何と比べるか、**手持ちの計測具で判定に届くかどうか**まで含めて決めてある。
+  → [docs/print-inspection.md](docs/print-inspection.md)
 
 ## セットアップ
 
