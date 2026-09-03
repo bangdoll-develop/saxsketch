@@ -675,7 +675,35 @@ def test_cancelled_dialog_leaves_no_process(monkeypatch, tmp_path):
 
 
 def _process_gone(pid: int) -> bool:
-    """終了済みか。**ゾンビも終了扱い**（親が回収する前に見ることがある）。"""
+    """終了済みか。**ゾンビも終了扱い**（親が回収する前に見ることがある）。
+
+    **見る場所が OS で違う。** 以前は `/proc/<pid>/stat` だけを見ていたので、
+    `/proc` の無い **Windows では常に「もう死んでいる」**を返していた。これを
+    使う `test_cancelled_dialog_leaves_no_process` は
+    **Windows で powershell.exe が積み上がるのを捕まえるために書いたテスト**
+    なのに、その判定が Windows でだけ動かない —— 起動確認の assert で落ちて、
+    肝心の「キャンセル後に死ぬか」まで一度も到達していなかった。
+
+    **`os.kill(pid, 0)` は使ってはいけない。** Windows の `os.kill` は signal を
+    見ずに `TerminateProcess` を呼ぶので、生存確認のつもりで相手を殺す。
+    """
+    import sys
+    if sys.platform == "win32":
+        import ctypes
+        # 終了済みでもハンドルは開けるので、開けたかではなく**終了コード**で見る
+        # （STILL_ACTIVE = 259）。実際に 259 で終わったプロセスは生存と誤るが、
+        # ここの子は sleep か強制終了なのでその値は出ない。
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return True
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return True
+            return code.value != 259
+        finally:
+            k32.CloseHandle(h)
     stat = Path(f"/proc/{pid}/stat")
     if not stat.exists():
         return True
@@ -4937,7 +4965,12 @@ def test_port_fallback():
     host = "127.0.0.1"
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     lsock.bind((host, 0))
-    lsock.listen(1)
+    # **backlog は現実的な深さを取る。** 1 にすると `_in_use` の 1 回目の接続が
+    # accept されないまま溜まってキューが埋まり、**2 回目の接続が拒否されて
+    # 「空いている」に見える**（Windows で実測。1 回目 True → 以後ずっと False）。
+    # 本番の相手は uvicorn なので深い。1 にするのは相手が非現実的なだけで、
+    # `_free_port` の契約（使用中のポートを飛ばす）は変わらない。
+    lsock.listen(128)
     busy = lsock.getsockname()[1]
     try:
         assert srv._in_use(host, busy) is True
