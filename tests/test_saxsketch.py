@@ -950,9 +950,16 @@ def test_table_reaches_reed_heel():
                 SOPRANO_TABLE_END_MEASURED_MM, abs=0.5), tid
 
 
-#: アルトのテーブル平坦部の終端 [mm]。**実測ではなく実測 2 件から出る量**
-#: （最大径の位置 21.4 と傾斜テーブルの構成式）。どちらの実測にも直接は現れない。
-ALTO_TABLE_END_MM = 73.0
+#: アルトのテーブル平坦部の終端 [mm]。**実測ではなく実測から出る量**
+#: （最大径の位置 21.4・シャンク径・傾斜テーブルの構成式）。どの実測にも直接は
+#: 現れない。**2026-09-05 に 73.0 → 73.87 へ動いた** —— `shank_dia` が
+#: 21.08（テナーからの径比）から実測 23.20 になり、肩の段差が半径 4.01 → 2.95mm と
+#: 浅くなったため。テーブルの構成式は変えていない。
+ALTO_TABLE_END_MM = 73.87
+
+#: 同じ終端を、`shank_length` を借り物（テナー比 0.1628 × 全長 = 14.93）へ
+#: 戻したときの値 [mm]。差 2.57mm が退行の検出量。
+ALTO_TABLE_END_BORROWED_MM = 71.30
 
 
 def test_alto_needed_both_measurements_to_stay_in_spec():
@@ -967,6 +974,17 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
     ここが warn に戻ったら `shank_length` が借り物へ差し戻された疑いがある。
     未実測の借り物が判定を汚す 3 例目（コルク帯 26.0→33.7、挿し込み限界
     33.7→27.1 に続く）を、逆戻りしないように固定する。
+
+    **2026-09-05: その warn による検出は効かなくなった。**
+    `shank_dia` が借り物 21.08 から実測 23.20 になって肩の段差が浅くなり、
+    テーブル終端が 73.04 → **73.87** へ後退した。借り物へ戻したときの終端も
+    70.31 → **71.30** に上がり、リード上端 71.10 を **0.20mm 上回る**ので
+    **もう warn が出ない**。元の余裕が 0.79mm しか無かったところへ、
+    **まったく別の量の実測が 0.83mm 押した**だけで検出器が沈黙した。
+
+    だから残す検出量は warn ではなく**終端の落ち込み**（借り物にすると 2.57mm
+    手前に来る）にする。**warn が出なくなったこと自体も固定する** ——
+    黙って消すと「昔から出ていなかった」と読めてしまう。
     """
     from saxsketch.instruments.saxophone.components import reference_check
     si = _size_info("alto")
@@ -978,10 +996,18 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
     assert profiles.table_cut_end_z(p) > reed_hi
     assert reference_check.mouthpiece_card(p, si)["status"] == "ok"
 
-    # 借り物（テナー比 0.1628 × 全長 91.7 = 14.93）に戻すと軽微が出る
+    # 借り物（テナー比 0.1628 × 全長 91.7 = 14.93）に戻すと終端が 2.57mm 手前へ来る。
+    # **これが退行の検出量**。card の status では、もう分かれない（docstring）。
     borrowed = dict(p, shank_length=14.93)
-    assert profiles.table_cut_end_z(borrowed) < reed_hi
-    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "warn"
+    assert profiles.table_cut_end_z(borrowed) == pytest.approx(
+        ALTO_TABLE_END_BORROWED_MM, abs=0.1)
+    assert profiles.table_cut_end_z(p) - profiles.table_cut_end_z(borrowed) ==         pytest.approx(ALTO_TABLE_END_MM - ALTO_TABLE_END_BORROWED_MM, abs=0.1)
+
+    # **検出器が沈黙したことを固定する。** 借り物でもリード上端をわずかに超えるので
+    # warn が出ない。余裕は 0.20mm しかなく、**次の実測でまた裏返りうる**。
+    assert profiles.table_cut_end_z(borrowed) > reed_hi
+    assert profiles.table_cut_end_z(borrowed) - reed_hi < 0.3
+    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "ok"
 
 
 def test_bore_clears_corked_tenon():
