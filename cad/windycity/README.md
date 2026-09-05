@@ -364,6 +364,34 @@ Phase A で測った 4 本の結果は `docs/param-limits.md`。同じ壁の裏�
 測っていて**（掃引器を書く前）、`_chamber_weight` のほうは掃引中に
 `_pchip_table` の新しいガードが名指しで捕まえた。
 
+**Phase B-0 で、掃引器そのものの目が盲だと分かった。** 初版の指紋は空洞の
+高さと z しか見ていない。だから**幅でしか効かない** `side_rail_width` /
+`throat_ratio` / `chamber_ratio` と、**外形でしか効かない** `shank_dia` /
+`shoulder_fullness` / `tip_chamfer` を「効いていない」と誤判定する ——
+掃引器が捕まえるために作られた型に、掃引器自身が嵌まっていた。いまは
+`cavity_h` / `cavity_w` / `cavity_a` / `outer_r` / `beak_y` の 5 軸を見て、
+**帯の端で一番応答した軸を本命に**判定する（軸によって食い違うときはそう言う）。
+外形グリッドは先端 0〜3mm だけ 0.05mm 刻み ——`tip_chamfer` の面取り長は
+アルト上限でも 0.29mm しかなく、全長 60 等分では跨いで消える。
+
+よく使う引数:
+
+```
+# 拘束を置いて測る（min() の反対側が勝っていると「効いていない」と出る）
+PYTHONPATH=. python cad/windycity/sweep_limits.py chamber_to_bore_mm --with window_length=44
+# choice も渡せる。baffle_curvature は curve のときしか生きていない
+PYTHONPATH=. python cad/windycity/sweep_limits.py baffle_curvature --with baffle_type=curve
+# 本命の軸を人が指定する（自動が鈍い軸を掴んだとき）
+PYTHONPATH=. python cad/windycity/sweep_limits.py tip_chamfer --axis outer_r
+```
+
+**再測で分かったこと**: Phase A の 4 本の壁は 5 軸の掃引器でも同じ値が出た
+（`tip_opening` 0.05〜5.2 / `baffle_height` −2.3 / `window_length` 4.0 /
+`chamber_to_bore_mm` 0.5〜30.0）。ただし**百分率は変わった** ——
+`tip_opening` の soprano は 7% ではなく 43%。旧掃引器は素の「天井 − 床」を
+見ており、実際にロフトされる断面（`_contain` 後）ではなかった。
+**壁は動かなかったが、根拠の数字は物差しごと差し替わった。**
+
 ## 未追従（Stage B / E / F / G / H で直した）
 
 新形状に他コンポーネントが追いついていなかったぶん。判定カードが正しく警告を出していた。

@@ -976,6 +976,209 @@ def test_goalseek_never_drags_a_deliberate_value_back_into_the_band():
     assert r["proposal"]["tip_opening"] >= 3.2 - 1e-9
 
 
+def _sweeper():
+    """`cad/windycity/sweep_limits.py` を読み込む（パッケージではないので直読み）。
+
+    掃引器は出荷物ではなく道具だが、**壁の根拠を作っているのはこの道具**なので、
+    目が利くかどうかはテストで押さえる。
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "cad" / "windycity" / "sweep_limits.py"
+    spec = importlib.util.spec_from_file_location("sweep_limits_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_sweeper_measures_more_than_the_cavity_height():
+    """**掃引器の目が盲だったことの回帰テスト（Phase B-0）。**
+
+    初版の指紋は「ステーション枚数・先端高さ・最大高さ・窓の後端・ボアの
+    始まり」だけを見ていた。だから**幅でしか効かない** `side_rail_width` と、
+    **外形の先端 0.29mm でしか効かない** `tip_chamfer` を「形が動かない ＝
+    このパラメータは効いていない」と誤判定する。掃引器が捕まえるために
+    作られた型に、掃引器自身が嵌まっていた。
+
+    ここで主張するのは 2 つ: 旧指紋の成分（`cavity_h` と離散量）は本当に
+    動かないこと（＝ 誤判定は本物だったこと）と、新しい指紋なら動くこと。
+    """
+    sw = _sweeper()
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    grids = sw._grids(base)
+    specs = {s.key: s for s in comp.param_specs()}
+    for key, want in (("side_rail_width", "cavity_w"), ("tip_chamfer", "outer_r")):
+        spec = specs[key]
+        probe = sw._probe(comp, base, key, spec.default, spec.step, grids)
+        assert probe is not None, key
+        _slopes, rels = probe
+        assert sw._kept(rels, None)[0] == want, (key, rels)
+        a0 = sw._axes(base, grids)
+        a1 = sw._axes(dict(base, **{key: base[key] + 2.0 * spec.step}), grids)
+        assert a0["cavity_h"] == a1["cavity_h"], key      # 旧指紋は動かない
+        assert a0["_disc"] == a1["_disc"], key
+        assert sw._fingerprint(a0) != sw._fingerprint(a1), key
+
+
+def test_the_tip_chamfer_disappears_on_a_coarse_grid():
+    """**先端の面取りは粗いグリッドでは消える。**
+
+    アルトの面取り長は `tip_chamfer` 既定で 0.07mm、上限 1.2mm でも 0.29mm。
+    全長を 60 等分すると最初の標本は 1.3mm 先なので、**面取りを跨いで
+    「何も動かない」と出る**。掃引器の外形グリッドが先端だけ 0.05mm 刻みなのは
+    このため —— 物差しの目盛りが測る対象より粗いと、無いのと同じ。
+    """
+    sw = _sweeper()
+    p = _template_params("mouthpiece", "alto")
+    q = dict(p, tip_chamfer=1.2)
+    assert profiles.tip_chamfer_len(q) < 0.35, profiles.tip_chamfer_len(q)
+    length = p["overall_length"]
+    coarse = [length * i / sw.OUTER_GRID_N for i in range(1, sw.OUTER_GRID_N + 1)]
+    assert ([profiles.outer_radius(p, z) for z in coarse]
+            == [profiles.outer_radius(q, z) for z in coarse])
+    dense = [0.001 + sw.TIP_GRID_DZ * i for i in range(sw.TIP_GRID_N)]
+    assert ([profiles.outer_radius(p, z) for z in dense]
+            != [profiles.outer_radius(q, z) for z in dense])
+
+
+def test_the_sweeper_can_pin_a_choice_parameter():
+    """**choice を固定できないと測れないパラメータが 2 本ある。**
+
+    `baffle_curvature` は `baffle_type="curve"` のとき、`rollover_radius` は
+    `"rollover"` のときにしか形を動かさない。テンプレートの既定は `"step"` なので、
+    `--with` が float しか受けない初版では、この 2 本は永久に
+    「効いていない」としか出なかった。
+    """
+    sw = _sweeper()
+    rest, flags, extra, axis = sw.parse_args(
+        ["baffle_curvature", "alto", "--no-build",
+         "--with", "baffle_type=curve", "--with", "window_length=44",
+         "--axis", "cavity_a"])
+    assert rest == ["baffle_curvature", "alto"]
+    assert flags == {"--no-build"}
+    assert extra == {"baffle_type": "curve", "window_length": 44.0}
+    assert axis == "cavity_a"
+
+    p = _template_params("mouthpiece", "alto")
+    for key, kind in (("baffle_curvature", "curve"), ("rollover_radius", "rollover")):
+        step = 0.2 if key == "baffle_curvature" else 2.0
+        for baffle, moves in ((kind, True), ("step", False)):
+            a = profiles.cavity_stations(dict(p, baffle_type=baffle))
+            b = profiles.cavity_stations(dict(p, baffle_type=baffle,
+                                              **{key: p[key] + step}))
+            same = all(x["h"] == pytest.approx(y["h"], abs=1e-12)
+                       for x, y in zip(a, b))
+            assert same != moves, (key, baffle)
+
+
+def test_tip_opening_zero_is_rejected_with_a_reason():
+    """**開き 0 は素の `ZeroDivisionError` ではなく理由で断ること。**
+
+    radial のフェイシングは `y(0)=tip` となる円弧半径を
+    `r = (fl² + tip²) / (2·tip)` で解くので、`tip_opening = 0` で落ちる。
+    落ちる場所は `facing_rise` の奥（`cavity_stations` → `_roof_base_y` →
+    `tip_roof_y` → `cut_top_y`）で、**`params_error` は `None` を返していた**。
+    掃引 `sweep_limits.py tip_opening` が下限へ歩いてちょうど 0 で踏んだ
+    ——`_pchip_table` の節点衝突と同じ型（退化する割り算）で、これで 4 つ目。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    err = comp.params_error(dict(base, tip_opening=0.0))
+    assert err is not None and "ティップ開き" in err
+    assert comp.params_error(dict(base, tip_opening=0.05)) is None
+    with pytest.raises(ValueError) as e:
+        profiles.facing_rise(dict(base, tip_opening=0.0), 0.0)
+    assert "ティップ開き" in str(e.value)
+    # 楕円カーブは割り算をしないので落ちない（ここも 0 は断るが、理由は上流）
+    assert profiles.facing_rise(
+        dict(base, tip_opening=0.0, facing_curve="elliptic"), 0.0) == 0.0
+
+
+#: Phase B-1 で掃引した「フェイシング」6 本。
+_B1_FACING = ("facing_length", "tip_rail_width", "tip_rail_thickness",
+              "tip_chamfer", "side_rail_width", "table_angle")
+
+
+def test_the_facing_walls_hold_up_as_geometry():
+    """**B-1 で測った壁が 3 サイズとも幾何として成立していること。**
+
+    掃引はソリッドまで確かめている（生ログは `docs/param-limits.md`）が、
+    OCCT はここでは 1 点 15 秒かかるので、テストは段 1〜2（成立条件と
+    ステーションの退化）を押さえる。**壁の数字を書き写すのではなく、
+    壁で形が成立することを主張する** —— 数字を写すテストは、値を変えた
+    ときに一緒に書き換わるだけで何も守らない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in _B1_FACING:
+            spec = specs[key]
+            lo, hi = spec.bounds()
+            assert lo is not None and hi is not None, key
+            assert lo < spec.min or hi > spec.max, key       # 帯より広いこと
+            for v in (lo, hi):
+                p = dict(base, **{key: v})
+                assert comp.params_error(p) is None, (tid, key, v)
+                st = profiles.cavity_stations(p)
+                assert len(st) > 20, (tid, key, v, len(st))
+                assert st[0]["h"] < 1.6, (tid, key, v, st[0]["h"])
+
+
+def test_the_widened_facing_band_is_not_a_dead_band():
+    """**広げた先でつまみが空回りしていないこと。**
+
+    「ソリッドが 1 個できる」は壁の条件であって、つまみが効く条件ではない。
+    帯の端から壁まで動かして、形が実際に変わることを主張する ——
+    `side_rail_width` は**幅でしか効かない**ので、空洞の高さしか見ていな
+    かった初版の掃引器はここを「効いていない」と誤判定していた（Phase B-0）。
+    """
+    def shape(p):
+        st = profiles.cavity_stations(p)
+        return ([round(x["h"], 9) for x in st], [round(x["w"], 9) for x in st],
+                [round(profiles.section_area(x), 9) for x in st])
+
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    checked = 0
+    for key in _B1_FACING:
+        spec = specs[key]
+        lo, hi = spec.bounds()
+        for edge, wall in ((spec.min, lo), (spec.max, hi)):
+            if wall == edge:
+                continue                      # その向きへは広げていない
+            assert shape(dict(base, **{key: edge})) !=                 shape(dict(base, **{key: wall})), (key, edge, wall)
+            checked += 1
+    assert checked == 11, checked            # tip_chamfer の下だけ広げていない
+
+
+def test_the_facing_walls_clamp_and_say_which_wall():
+    """帯の外は通し、壁の外は丸めて**壁だと名乗る**こと。
+
+    Phase A で `at` を「帯」と「壁」に分けたのは、同じ丸めでも利用者にとって
+    意味が違うから。B-1 で広げた 6 本でもそれが効いていることを見る。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "facing_length")
+    assert (spec.hard_min, spec.hard_max) == (3.0, 50.0)
+    # 帯の外・壁の内 —— 丸めない
+    v, rep = spec.validate_report(10.0)
+    assert v == pytest.approx(10.0) and rep is None
+    # 壁の外 —— 丸めて、壁だと言う
+    v, rep = spec.validate_report(1.0)
+    assert v == pytest.approx(3.0) and rep is not None
+    assert rep["at"] == "wall" and rep["applied"] == pytest.approx(3.0)
+    assert "越えられない壁" in rep["message"]
+    # 下限を広げていない `tip_chamfer` は帯のままクランプし、帯だと言う
+    ch = next(s for s in comp.param_specs() if s.key == "tip_chamfer")
+    assert ch.hard_min is None and ch.hard_max == 3.2
+    v, rep = ch.validate_report(-0.5)
+    assert v == pytest.approx(0.0) and rep["at"] == "band"
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 

@@ -574,6 +574,14 @@ def facing_rise(p: dict, z: float) -> float:
         t = (fl - z) / fl
         return tip * (1.0 - math.sqrt(max(1.0 - t * t, 0.0)))
     # 円弧（テーブルに接する。R は y(0)=tip となるよう決定）。実物の実測はこちらが一致。
+    if tip <= 0.0:
+        # **開きが 0 の円弧は半径が定まらない。** `cavity_layout_error` が
+        # 先に弾くので通常ここへは来ないが、素の `ZeroDivisionError` が
+        # 出所不明のまま上がるのを防ぐ（掃引 `sweep_limits.py tip_opening` が
+        # ちょうど 0 で踏んだ。`_pchip_table` の節点衝突と同じ型）。
+        raise ValueError(
+            f"ティップ開きが {tip!r} なのでフェイシングの円弧半径が定まりません"
+            f"（radial は y(0)=tip となる R を解くので tip > 0 が要ります）。")
     r = (fl * fl + tip * tip) / (2.0 * tip)
     return r - math.sqrt(max(r * r - (fl - z) ** 2, 0.0))
 
@@ -1617,6 +1625,14 @@ def cavity_layout_error(p: dict) -> str | None:
         return (f"チェンバー→ボアの遷移が {gap:.2f}mm ＝ 長さを持ちません。"
                 f"ウィンドウの後端とボアの始まりが同じ位置になり、"
                 f"チェンバーの区間が消えます。0 より大きい値にしてください。")
+    # ティップ開きは**正でなければならない**。0 だと radial のフェイシング
+    # 円弧半径が定まらず `facing_rise` が落ちる（掃引で発見。`params_error` は
+    # `None` を返していたので、素の `ZeroDivisionError` が上がっていた）。
+    # `ParamSpec.hard_min = 0.05` でも止めているが、成立条件はここに 1 箇所書く。
+    if p["tip_opening"] <= 0.0:
+        return (f"ティップ開きが {p['tip_opening']:.2f}mm ＝ リードとの隙間が"
+                f"ありません。フェイシングの円弧が定義できず、息の入口も"
+                f"閉じます。0 より大きい値にしてください。")
     if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
