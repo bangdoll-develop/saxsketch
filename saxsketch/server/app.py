@@ -299,8 +299,10 @@ def project_params(req: ParamUpdate):
         # 値の組が形状として成立しない。前の値のまま据え置かれているので、
         # フロントは理由を出してスライダーを戻すだけでよい。
         raise HTTPException(status_code=400, detail=str(e))
+    # 帯／壁で丸めた項目。**空でも必ず入れる** —— フロントは前回の報告を
+    # 消す判断をこのキーだけで行う。
     return {"params": applied, "simulation": STATE.simulate(),
-            "stale": STATE.is_stale()}
+            "stale": STATE.is_stale(), "adjustments": STATE.adjustments}
 
 
 class MetaUpdate(BaseModel):

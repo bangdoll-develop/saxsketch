@@ -16,6 +16,30 @@ def _norm(x: float, lo: float, hi: float) -> float:
     return min(max((x - lo) / (hi - lo), 0.0), 1.0)
 
 
+#: 各入力の**モデルの有効範囲**。`ParamSpec` の「勧める帯」と数値は同じだが、
+#: 意味が違う ——こちらは回帰を当てた範囲で、外挿する根拠が無い。帯を広げても
+#: ここは広げない（広げたら文献の裏付けの無い外挿になる）。代わりに
+#: **外にいることを `note` で言う**。黙って平らになるのが一番まずい。
+_MODEL_RANGE = {
+    "tip_opening": (1.0, 3.2, "ティップ開き", "mm"),
+    "facing_length": (16.0, 30.0, "フェイシング長", "mm"),
+    "baffle_height": (0.0, 5.0, "バッフル高さ", "mm"),
+    "throat_ratio": (0.60, 1.35, "スロート断面積比", ""),
+}
+
+
+def _outside_model(p: dict) -> list[str]:
+    """モデルの有効範囲の外にある入力（表示用の文字列）。"""
+    out = []
+    for k, (lo, hi, label, unit) in _MODEL_RANGE.items():
+        v = p.get(k)
+        if v is None:
+            continue
+        if v < lo or v > hi:
+            out.append(f"{label} {v:g}{unit}（有効範囲 {lo:g}〜{hi:g}{unit}）")
+    return out
+
+
 _BAFFLE_BONUS = {"straight": 0.0, "rollover": 0.06, "step": 0.14, "curve": 0.24}
 #: チェンバー断面形状のエッジ寄与。角断面ほど倍音が複雑でエッジが出る。
 _CHAMBER_EDGE = {"round": 0.0, "square": 0.06, "horseshoe": 0.0, "flat_sidewall": 0.03}
@@ -47,13 +71,19 @@ def _baffle_shape_bonus(p: dict) -> float:
 
 
 def tone_metrics(p: dict) -> dict:
-    """音色指標（0-10）。"""
-    n_tip = _norm(p["tip_opening"], 1.0, 3.2)
-    n_facing = _norm(p["facing_length"], 16.0, 30.0)
-    n_baffle = min(max(_norm(p["baffle_height"], 0.0, 5.0)
+    """音色指標（0-10）。
+
+    **入力が `_MODEL_RANGE` の外だと指標はそこで頭打ちになる。** 回帰を当てた
+    範囲の外なので、外挿せずクランプする。ただし黙ってはいけない ——
+    スライダを動かしてもレーダーが動かないのは、この repo で何度も踏んでいる
+    「効いていないのに気づけない」型そのもの。`note` に外にいる入力を並べる。
+    """
+    n_tip = _norm(p["tip_opening"], *_MODEL_RANGE["tip_opening"][:2])
+    n_facing = _norm(p["facing_length"], *_MODEL_RANGE["facing_length"][:2])
+    n_baffle = min(max(_norm(p["baffle_height"], *_MODEL_RANGE["baffle_height"][:2])
                        + _BAFFLE_BONUS.get(p.get("baffle_type", "step"), 0.0)
                        + _baffle_shape_bonus(p), 0.0), 1.0)
-    n_throat_small = 1.0 - _norm(p["throat_ratio"], 0.60, 1.35)
+    n_throat_small = 1.0 - _norm(p["throat_ratio"], *_MODEL_RANGE["throat_ratio"][:2])
     square_bonus = _CHAMBER_EDGE.get(p.get("chamber_shape", "round"), 0.0)
 
     brightness = 10.0 * (0.34 * n_baffle + 0.28 * n_facing
@@ -77,8 +107,19 @@ def tone_metrics(p: dict) -> dict:
             "flexibility": "柔軟性",
             "edge": "エッジ",
         },
-        "note": "相対比較用の推定指標（文献傾向ベース）。数値の絶対値ではなく変化方向を参考に。",
+        "note": _note(p),
     }
+
+
+def _note(p: dict) -> str:
+    base = "相対比較用の推定指標（文献傾向ベース）。数値の絶対値ではなく変化方向を参考に。"
+    out = _outside_model(p)
+    if not out:
+        return base
+    return (base + " **" + " / ".join(out) + " がモデルの有効範囲の外にあります。**"
+            "この指標はそこで頭打ちになっていて、動かしても変わりません"
+            "（回帰を当てた範囲の外なので外挿していません）。"
+            "形そのものは変わっているので、断面タブと寸法を見てください。")
 
 
 # 感度計算の対象パラメータ（連続値のみ）
@@ -99,10 +140,14 @@ def sensitivity(p: dict, specs: list) -> dict:
         if spec is None:
             continue
         step = spec.step or 0.1
+        # **止める先は帯ではなく壁**（`ParamSpec.bounds`）。帯の外の値を選んで
+        # いる利用者では、帯で止めると 1 段が「+0.05」ではなく「−0.8」になって
+        # 感度の符号ごと壊れる（`tip_opening` は帯 3.2 に対し壁 5.2）。
+        lo, hi = spec.bounds()
         q = dict(p)
-        q[key] = min(p[key] + step, spec.max if spec.max is not None else p[key] + step)
+        q[key] = min(p[key] + step, hi) if hi is not None else p[key] + step
         if q[key] == p[key]:  # 上限に張り付いている場合は下方向
-            q[key] = max(p[key] - step, spec.min)
+            q[key] = max(p[key] - step, lo) if lo is not None else p[key] - step
             step = -step
         m = tone_metrics(q)
         table[key] = {

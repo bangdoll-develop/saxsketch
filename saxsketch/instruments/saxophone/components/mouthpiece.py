@@ -31,34 +31,61 @@ from saxsketch.acoustics import volume as ac_volume
 
 
 def _specs(t: dict) -> list[ParamSpec]:
-    """テンプレート値 t を初期値としてスキーマを構築。"""
-    def f(key, label, cat, unit, lo, hi, step, effect, advanced=False):
+    """テンプレート値 t を初期値としてスキーマを構築。
+
+    **`min`/`max` は「勧める帯」で、越えられない壁ではない。** 越えられない壁は
+    `hard_min`/`hard_max` に入れる（入れなければ帯がそのまま壁 ＝ 現行どおり）。
+    壁の性格は `kind=` で 3 つに分ける:
+
+    - `geometry` —— 形として成立しない。定義域そのものや、外すと形が壊れる境界
+    - `manufacturing` —— 印刷できない。幾何は成立する
+    - `convention` —— 市販品や実測品がその辺りにあるというだけ。**外せる**
+
+    `src=` は帯の出所。**空なら UI に「出所の記載なし」と出る** —— 空欄を埋める
+    ために出所を発明しない。実際いまは大半が空で、それが正直な状態。
+    """
+    def f(key, label, cat, unit, lo, hi, step, effect, advanced=False,
+          kind="unclassified", src="", hlo=None, hhi=None):
         return ParamSpec(key=key, label=label, category=cat, type="float", unit=unit,
                          default=t[key], min=lo, max=hi, step=step, effect=effect,
-                         advanced=advanced)
+                         advanced=advanced, limit_kind=kind, source=src,
+                         hard_min=hlo, hard_max=hhi)
 
     return [
         # --- フェイシング ---
+        # 壁は掃引で測った（`cad/windycity/sweep_limits.py tip_opening`）。
+        # 下は 0 でちょうど落ちる（0.05 は 3 サイズともソリッド 1 個）。上は
+        # 5.2 まで確認し、そこで打ち切った ＝ **それより外は未測定**。
+        # 応答は tenor 101% / alto 82% で一定、**soprano だけ鈍って 7%**
+        # （帯の端 3.2 での傾きに対する、壁 5.2 での傾き）。死に帯の線引き 5% の
+        # すぐ上で、`baffle_height` の負側のような膝も無いので広げたままにする
+        # ——**ぎりぎりであることは書いておく**。
         f("tip_opening", "ティップ開き", "フェイシング", "mm", 1.0, 3.2, 0.05,
-          "大きいほど自由に鳴り音量が出るが、コントロールと息の量が必要になる"),
+          "大きいほど自由に鳴り音量が出るが、コントロールと息の量が必要になる",
+          kind="convention", hlo=0.05, hhi=5.2),
         f("facing_length", "フェイシング長", "フェイシング", "mm", 16.0, 30.0, 0.5,
-          "明るさへの影響が最大の要素。長いほど倍音が豊かでオープンな響き"),
+          "明るさへの影響が最大の要素。長いほど倍音が豊かでオープンな響き",
+          kind="convention"),
         ParamSpec(key="facing_curve", label="カーブ種別", category="フェイシング",
                   type="choice", default=t["facing_curve"],
                   choices=[Choice("elliptic", "楕円"), Choice("radial", "円弧")],
-                  effect="吹奏感の性格。楕円=現代的で反応が速い、円弧=クラシカル"),
+                  effect="吹奏感の性格。楕円=現代的で反応が速い、円弧=クラシカル",
+                  limit_kind="convention"),
         f("tip_rail_width", "ティップレール幅", "フェイシング", "mm", 0.5, 2.0, 0.1,
-          "狭いほどレスポンスが速いが雑音が出やすい"),
+          "狭いほどレスポンスが速いが雑音が出やすい", kind="convention"),
         f("tip_rail_thickness", "ティップレール厚", "フェイシング", "mm", 0.8, 2.5, 0.05,
-          "先端に残る肉厚。薄いほど鳴りは軽いが欠けやすい。ビークの傾きもここから決まる"),
+          "先端に残る肉厚。薄いほど鳴りは軽いが欠けやすい。ビークの傾きもここから決まる",
+          kind="convention"),
         f("tip_chamfer", "ティップ前縁の面取り", "フェイシング", "mm", 0.0, 1.2, 0.05,
           "先端をリード面側から落とす量。実物は前面が 0.25mm しか残らない。"
-          "0 にすると tip_rail_thickness ぶんの角ばった壁が先端に立つ", advanced=True),
+          "0 にすると tip_rail_thickness ぶんの角ばった壁が先端に立つ", advanced=True,
+          kind="geometry", src="下限 0 ＝ 面取りなし（負は形の意味を持たない）"),
         f("side_rail_width", "サイドレール幅", "フェイシング", "mm", 0.6, 2.0, 0.1,
-          "狭いほど効率よく鳴るがリードミスに敏感になる"),
+          "狭いほど効率よく鳴るがリードミスに敏感になる", kind="convention"),
         f("table_angle", "テーブル傾斜", "フェイシング", "度", 2.0, 7.0, 0.1,
           "テーブル平面のボア軸に対する傾き。実物は約4.2°で、これが胴の中でリードを"
-          "どこまで深く座らせるかを決める", advanced=True),
+          "どこまで深く座らせるかを決める", advanced=True,
+          kind="convention", src="実測 WindyCity は 4.18°（cad/windycity/）。帯の端は未測定"),
         # --- バッフル ---
         ParamSpec(key="baffle_type", label="バッフル種別", category="バッフル",
                   type="choice", default=t["baffle_type"],
@@ -69,40 +96,65 @@ def _specs(t: dict) -> list[ParamSpec]:
                   effect="音色の性格を決める最重要要素。ストレート=暗くソフトな音／"
                          "ステップ=バランスのとれた音色（実測 WindyCity がこれ）／"
                          "カーブ=メタリックでアグレッシブな音／"
-                         "ロールオーバー=ストレートの肩を丸めた中間"),
+                         "ロールオーバー=ストレートの肩を丸めた中間",
+                  limit_kind="convention"),
+        # **上限は広げない。** 掃引で 5.0mm から先は形が 1 ビットも動かないと
+        # 出た（天井が外殻＝ビーク下の肉厚で頭打ち。`cavity_warnings` が言う）。
+        # 壁が無いのではなく**効いていない**ので、広げても嘘のつまみが増えるだけ。
+        #
+        # 下は −2.3mm まで（負 ＝ 天井を基準より上げる ＝ さらにダーク）。
+        # ソリッドは −4.0 でも 3 サイズとも 1 個だが、**そこまで開けない** ——
+        # 固定グリッドで応答を測ると **alto は −4.0 で帯の端の 4%**（死に帯の
+        # 線引き 5% を割る）で、効くのは **−2.3mm まで**。soprano 23% /
+        # tenor 37% はまだ生きているが、**縛るサイズに合わせる** ——上限を
+        # 死に帯で広げないのと同じ理由。
         f("baffle_height", "バッフル高さ", "バッフル", "mm", 0.0, 5.0, 0.1,
           "リード直上の天井をどれだけ下げるか。高いほど明るくエッジの効いた音、"
-          "0でクラシカルなダークトーン"),
+          "0でクラシカルなダークトーン。**負にすると基準より天井が上がる**"
+          "（さらにダーク）",
+          kind="convention",
+          src="下限 0 ＝ バッフルなし。上限 5.0 から先も下限 −2.3 から先も"
+              "つまみが空回りする（掃引で確認。縛るのは alto）",
+          hlo=-2.3),
         # 以下3つは「断面」タブのハンドルで直接ドラッグできる。実効範囲は
         # バッフル種別で変わる（型の特徴を壊さないため。profiles._PLATEAU_RANGE）ので、
         # ここの min/max は全型を覆う広い値。正確な可動域は断面タブが示す。
         f("baffle_plateau", "バッフル平坦長", "バッフル", "比", 0.02, 0.75, 0.01,
           "リード直上の天井が平坦なまま続く長さ（ボア開始位置に対する比）。"
           "ステップ/ロールオーバーで有効。長いほど棚がはっきりする。"
-          "ストレート/カーブでは型の定義上ごく短い範囲に制限される"),
+          "ストレート/カーブでは型の定義上ごく短い範囲に制限される",
+          kind="convention",
+          src="全バッフル型を覆う広い値（実効範囲は profiles._PLATEAU_RANGE）"),
         f("baffle_step_rise", "段の立ち上がり", "バッフル", "比", 0.0, 0.85, 0.05,
           "ステップで有効。棚の終わりで天井がどれだけ一気に立ち上がるか。"
-          "0 は実測どおりのなだらかな肩、大きいほど切り立った段差になる"),
+          "0 は実測どおりのなだらかな肩、大きいほど切り立った段差になる",
+          kind="convention", src="下限 0 ＝ 実測どおりの肩。上限は未測定"),
         f("baffle_curvature", "カーブ量", "バッフル", "比", -1.0, 1.0, 0.05,
           "カーブで有効。正で天井が低いまま粘って気道を絞る（明るくアグレッシブ）、"
-          "負で早く開くスクープ（ダーク）、0 でストレートと同じ直線"),
+          "負で早く開くスクープ（ダーク）、0 でストレートと同じ直線",
+          kind="geometry", src="パラメータの定義域そのもの（0=直線、±1 が端）"),
         f("rollover_radius", "ロールオーバー半径", "バッフル", "mm", 3.0, 20.0, 0.5,
-          "ロールオーバーで有効。肩の丸み。小さいほどエッジ感が強い", advanced=True),
+          "ロールオーバーで有効。肩の丸み。小さいほどエッジ感が強い", advanced=True,
+          kind="convention"),
         # --- チェンバー ---
         f("throat_ratio", "スロート断面積比", "チェンバー", "比", 0.60, 1.35, 0.01,
-          "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い"),
+          "ボア断面積に対する最狭部の比。小=明るく抵抗感増、大=ダークで太い",
+          kind="convention", src="実測 WindyCity は 1.0（狭窄なし）。帯の端は未測定"),
         f("chamber_ratio", "チェンバー断面積比", "チェンバー", "比", 1.00, 3.00, 0.05,
-          "スロート最狭部に対するチェンバー最大部の断面積比。大=内容積が増えダークで太い"),
+          "スロート最狭部に対するチェンバー最大部の断面積比。大=内容積が増えダークで太い",
+          kind="convention", src="実測 WindyCity は 1.0（膨らみなし）。帯の端は未測定"),
         ParamSpec(key="chamber_shape", label="チェンバー形状", category="チェンバー",
                   type="choice", default=t["chamber_shape"],
                   choices=[Choice("round", "ラウンド"), Choice("square", "スクエア"),
                            Choice("horseshoe", "馬蹄"),
                            Choice("flat_sidewall", "フラットサイドウォール")],
                   effect="ラウンド=滑らかな倍音／スクエア=ヴィンテージ系の複雑な倍音／"
-                         "馬蹄=太くまとまる／フラットサイドウォール=芯のある明るさ"),
+                         "馬蹄=太くまとまる／フラットサイドウォール=芯のある明るさ",
+                  limit_kind="convention"),
         # --- ボア ---
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
-          "ネックコルクとの適合寸法。音程の基準に直結", advanced=True),
+          "ネックコルクとの適合寸法。音程の基準に直結", advanced=True,
+          kind="convention", src="テンプレートの実測値 ±1.0mm"),
         # レンジをテンプレート基準にするのは `bore_dia` と同じ理由に加えて、
         # **絶対値の 18〜60 が 3 サイズ共通だと単独で形状を潰せる**ため。
         # ボアの始まり = 全長 − ボア長 で、これが窓の手前へ来ると空洞が消える
@@ -110,14 +162,44 @@ def _specs(t: dict) -> list[ParamSpec]:
         # 全長 107.5 なら無害だが、全長側の下限 60 と組むと成立しない。
         f("bore_length", "ボア長", "ボア", "mm",
           round(0.5 * t["bore_length"]), round(1.25 * t["bore_length"]), 1.0,
-          "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True),
+          "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True,
+          kind="convention",
+          src="テンプレート実測値の 0.5〜1.25 倍（絶対値の共通レンジは単独で形状を潰せる）"),
         f("cork_depth", "コーク挿入深さ", "ボア", "mm", 12.0, 32.0, 1.0,
-          "ネックの標準挿入量。音程チェックの基準位置"),
+          "ネックの標準挿入量。音程チェックの基準位置",
+          kind="convention",
+          src="寸法ではなくチューニング量（3 サイズの導出値 14.4〜23.5 を覆う帯）"),
         # --- ウィンドウ ---
+        # **上限は広げない。** 掃引で soprano / alto は 44mm から先が死に帯だと
+        # 出た（`window_end_z` が `bore_start_z − chamber_to_bore_mm` で頭打ち。
+        # tenor だけ 46mm 手前まで生きている）。壁ではなく**別のパラメータの
+        # 影**なので、伸ばしたいときに動かす相手は `chamber_to_bore_mm` の側 ——
+        # そちらを表に出したのでこの死に帯は初めて開けられるようになった。
+        # 下は 4.0mm まで 3 サイズともソリッド 1 個（3.5 も通る）。
         f("window_length", "ウィンドウ長", "ウィンドウ", "mm", 24.0, 44.0, 0.5,
-          "リード振動部の長さ。長いほど低音が豊か"),
+          "リード振動部の長さ。長いほど低音が豊か。**上げても形が変わらない**"
+          "ときは「チェンバー→ボアの遷移」で頭打ちになっている",
+          kind="convention",
+          src="3 サイズの実測 27.3〜41.1mm を覆う帯（上端は死に帯。掃引で確認）",
+          hlo=4.0),
+        # チェンバー→ボアの遷移として残す量。**以前は `window_end_z` の直値 4.0**で、
+        # 幾何の成立条件に見えて実は `cavity_floor_y` の特異点（5fb0bf4）と
+        # `_floor_limit` の節点衝突を 2 つとも覆う蓋になっていた。両方塞いだので表に出す。
+        f("chamber_to_bore_mm", "チェンバー→ボアの遷移", "ウィンドウ", "mm", 2.0, 10.0, 0.5,
+          "ウィンドウ後端からボア開始までに必ず残す長さ。ウィンドウ長はここで頭打ちに"
+          "なるので、窓を伸ばしたいのに効かないときはこれを縮める。"
+          "短いほどチェンバーが詰まり、長いほど窓が早く閉じる", advanced=True,
+          kind="convention", src="旧実装の直値 4.0（幾何の成立条件ではない）",
+          # 掃引で測った壁（`sweep_limits.py chamber_to_bore_mm --with
+          # window_length=44`）。下は **3 サイズともぴったり 0** で落ちる ——
+          # チェンバーの長さが 0 になり `_chamber_weight` の制御点が x=1 で
+          # 重なる（`cavity_layout_error` でも弾いている）。0.01 は通るが、
+          # スライダの刻み 0.5 の 1 段手前で止める。上は 30.0 まで 3 サイズとも
+          # ソリッド 1 個を確認し、その先は `cavity_layout_error` の担当。
+          hlo=0.5, hhi=30.0),
         f("reed_width", "リード幅", "ウィンドウ", "mm", 10.0, 18.0, 0.1,
-          "使用リード規格の幅。テーブル・窓幅の基準", advanced=True),
+          "使用リード規格の幅。テーブル・窓幅の基準", advanced=True,
+          kind="convention", src="市販リード規格の幅（出典未記録）"),
         # --- 外形 ---
         # レンジをボディ径基準にするのは、胴の全高 0.9·body_dia を超える値が形状として
         # 意味を持たない（ビーク面が本体の外に出る）ため。既定 0.55·body_dia は幾何的な
@@ -125,54 +207,69 @@ def _specs(t: dict) -> list[ParamSpec]:
         f("beak_height", "ビーク高さ", "外形", "mm",
           round(0.35 * t["body_dia"], 1), round(0.75 * t["body_dia"], 1), 0.5,
           "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
-          "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨"),
+          "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨",
+          kind="convention",
+          src="ボディ径の 0.35〜0.75 倍。既定 0.55 倍は幾何的な暫定値で実測ではない"),
         # レンジの下限はソプラノ実測（全長 71.4 / シャンク径 15.3 / シャンク長 6.4）が
         # 入るところまで下げてある。`ParamSpec.validate` は範囲外を**黙ってクランプ**
         # するので、下限が実物より上にあるとテンプレートに書いた値が別物にすり替わる。
         f("body_dia", "ボディ径", "外形", "mm", 18.0, 34.0, 0.1,
-          "リガチャー適合寸法（最大径）", advanced=True),
+          "リガチャー適合寸法（最大径）", advanced=True,
+          kind="convention", src="下限はソプラノ実測が入る位置（cad/windycity/）"),
         f("shank_dia", "シャンク径", "外形", "mm", 14.0, 28.0, 0.1,
-          "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True),
+          "ネックへ差す平行部の外径。肩の段差量を決める", advanced=True,
+          kind="convention", src="下限はソプラノ実測 15.3mm が入る位置"),
         # 下限 0 は「平行部なし」＝最大径からシャンク端まで一直線の円錐シャンク。
         # 肩比の上限 0.45 と組で初めて出せる（テナーは 0.3605 が要る）。
         f("shank_length", "シャンク長", "外形", "mm", 0.0, 30.0, 0.5,
           "シャンク平行部の長さ。長いほどロングシャンク仕様。0 で平行部が消えて"
           "最大径から端まで円錐になる。テーブル踵の位置は全長からこれを引いて"
-          "決まるので、リードの座りにも効く"),
+          "決まるので、リードの座りにも効く",
+          kind="convention",
+          src="下限 0 ＝ 平行部なし（負は形の意味を持たない）。上限は未測定"),
         f("shoulder_ratio", "肩の長さ比", "外形", "比", 0.02, 0.45, 0.005,
           "最大径からシャンク径へ絞る肩の長さ（最大径位置に対する比）。"
           "最大径の位置は 全長 −（シャンク長 ＋ 肩）で決まるので、"
           "シャンク長とこの比の組が最大径の位置を決める。テナー実測 0.139。"
           "断面タブの「肩の終わり」ハンドルはこの 2 つを連動させて動かすので、"
-          "最大径の位置を保ったまま平行部だけ伸縮できる", advanced=True),
+          "最大径の位置を保ったまま平行部だけ伸縮できる", advanced=True,
+          kind="convention",
+          src="上限 0.45 はシャンク長 0 と組むために要る（テナー実測 0.3605）"),
         # --- 外形の曲がり具合（断面タブでドラッグする）---
         # どちらも実測プロファイル（`profiles._BODY_PROFILE` / `_SHOULDER_PROFILE`）を
         # 基準 0 として歪める。**最大径は頂点**で、この 2 つはそこを跨がない。
         f("body_waist", "胴の膨らみ", "外形", "比", -0.06, 0.06, 0.005,
           "ティップ〜最大径の胴をどれだけ膨らませるか。0 が実測形。両端は動かない"
           "ので、ティップの立ち方と最大径は変わらない（アルトで中ほど ±0.77mm）",
-          advanced=True),
+          advanced=True,
+          kind="convention", src="実測プロファイルからの歪み量（0 が実測形。端は未測定）"),
         f("shoulder_fullness", "肩の張り", "外形", "比", -1.0, 1.0, 0.05,
           "最大径からシャンクへ絞る肩の曲がり方。0 が実測形、+1 で母線が直線に"
           "なり円錐、−1 で実測と逆向きに張る（アルトで中ほど ±0.92mm）。"
-          "+1 かつシャンク長 0 なら最大径から端まで完全な円錐", advanced=True),
+          "+1 かつシャンク長 0 なら最大径から端まで完全な円錐", advanced=True,
+          kind="geometry",
+          src="パラメータの定義域そのもの（0=実測形、+1=母線が直線＝円錐）"),
         # ここも実測基準の ±25%。以前は 3 サイズ共通の 60〜130 で、**テナーを
         # 下限 60 にするだけで空洞が消えた**（既定ボア長 57.5 が全長を食い切る）。
         # サイズを跨いだ絶対レンジは「ソプラノの長さのテナー」を許してしまう。
         f("overall_length", "全長", "外形", "mm",
           round(0.75 * t["overall_length"] * 2) / 2,
           round(1.25 * t["overall_length"] * 2) / 2, 0.5,
-          "マウスピース全長", advanced=True),
+          "マウスピース全長", advanced=True,
+          kind="convention",
+          src="テンプレート実測値の ±25%（絶対レンジは「ソプラノの長さのテナー」を許す）"),
         # --- 製造 ---
         f("min_wall", "最小肉厚", "製造", "mm", 1.2, 4.0, 0.1,
-          "3Dプリント強度の下限。レジン2mm以上推奨", advanced=True),
+          "3Dプリント強度の下限。レジン2mm以上推奨", advanced=True,
+          kind="manufacturing", src="3D プリントの強度下限（レジン 2mm 以上推奨）"),
         ParamSpec(key="material", label="材料プリセット", category="製造",
                   type="choice", default=t["material"],
                   choices=[Choice("resin", "レジン(光造形)"),
                            Choice("pla", "PLA(FDM)"),
                            Choice("petg", "PETG(FDM)"),
                            Choice("nylon_sls", "ナイロンPA12(SLS)")],
-                  effect="仕様書の印刷推奨条件と食品接触の注意書きに反映"),
+                  effect="仕様書の印刷推奨条件と食品接触の注意書きに反映",
+                  limit_kind="manufacturing"),
     ]
 
 
@@ -460,9 +557,18 @@ class MouthpieceComponent(Component):
 
         可動域の出所はスキーマ 1 か所にしておく。`profiles` 側にも書くと、
         レンジを広げたときに片方だけ直してハンドルが途中で止まる。
+
+        **渡すのは帯（`min`/`max`）ではなく壁（`ParamSpec.bounds`）。** スライダは
+        壁まで動くので、ハンドルを帯で止めると同じパラメータが 2 つの UI で違う
+        ところまでしか動かず、「断面タブでは動かせない値がスライダでは作れる」
+        という食い違いになる。上のコメントが警告しているのがまさにこれ。
         """
-        return {s.key: (s.min, s.max, s.step) for s in self.param_specs()
-                if s.min is not None and s.max is not None}
+        out = {}
+        for s in self.param_specs():
+            lo, hi = s.bounds()
+            if lo is not None and hi is not None:
+                out[s.key] = (lo, hi, s.step)
+        return out
 
     def section(self, params: dict) -> dict:
         """中央面 x=0 の断面と、バッフル／外形のドラッグハンドル。
@@ -478,7 +584,7 @@ class MouthpieceComponent(Component):
         return {
             "z_range": [0.0, params["overall_length"]],
             "curves": profiles.section_curves(params),
-            "handles": (profiles.baffle_handles(params)
+            "handles": (profiles.baffle_handles(params, self._handle_ranges())
                         + profiles.outer_handles(params, self._handle_ranges())),
             "warnings": profiles.cavity_warnings(params),
             "baffle_type": params.get("baffle_type", "step"),
@@ -501,12 +607,21 @@ class MouthpieceComponent(Component):
     ]
 
     def survey_targets(self) -> dict:
+        """採寸フォームの入力欄。**範囲は帯ではなく壁**（`ParamSpec.bounds`）。
+
+        ここに入るのは実物をノギスで測った値なので、慣習の帯の外にあることが
+        ふつうにある。帯で受けると**測った値が別物にすり替わる** ——
+        `body_dia` の下限をソプラノ実測が入るまで下げた経緯がまさにそれ。
+        """
         specs = {s.key: s for s in self.param_specs()}
-        params = [
-            {"key": k, "label": specs[k].label, "unit": specs[k].unit,
-             "min": specs[k].min, "max": specs[k].max, "step": specs[k].step}
-            for k in self._SURVEY_PARAM_KEYS if k in specs
-        ]
+        params = []
+        for k in self._SURVEY_PARAM_KEYS:
+            if k not in specs:
+                continue
+            lo, hi = specs[k].bounds()
+            params.append({"key": k, "label": specs[k].label,
+                           "unit": specs[k].unit, "min": lo, "max": hi,
+                           "step": specs[k].step})
         size = [dict(f) for f in self._SURVEY_SIZE_FIELDS]
         return {"params": params, "size": size}
 

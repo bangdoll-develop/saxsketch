@@ -33,7 +33,18 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
     spec_map = {s.key: s for s in specs}
     keys = [k for k in OPT_KEYS if k in spec_map]
     x0 = np.array([float(params[k]) for k in keys])
-    bounds = [(spec_map[k].min, spec_map[k].max) for k in keys]
+    # **探索は「勧める帯」の中で行う。** ゴールシークは理論側の提案なので、
+    # 頼まれてもいないのに慣習の外へ出さない（帯の外へ出るのは利用者の判断で、
+    # そのためにスライダの壁を広げてある）。
+    # ただし**利用者が既に帯の外にいるときは、そこを含むように広げる** ——
+    # 広げないと最適化が黙って帯の中へ引き戻し、利用者の選択を消してしまう。
+    bounds = []
+    for k in keys:
+        s = spec_map[k]
+        v = float(params[k])
+        lo = s.min if s.min is None else min(s.min, v)
+        hi = s.max if s.max is None else max(s.max, v)
+        bounds.append((lo, hi))
 
     metric_targets = {k: v for k, v in targets.items()
                       if k in br.METRIC_KEYS and v is not None}

@@ -141,11 +141,27 @@ def _soft_max(a: float, b: float, k: float = 0.35) -> float:
 
 
 def _pchip_table(pts: list[tuple[float, float]]) -> tuple[list, list, list, list]:
-    """Fritsch–Carlson の傾き `m` を含む係数表。制御点だけで決まるので使い回せる。"""
+    """Fritsch–Carlson の傾き `m` を含む係数表。制御点だけで決まるので使い回せる。
+
+    **x が重なった表は名指しで弾く。** 区間幅 `h[i]` で割るので、重なると
+    `ZeroDivisionError` がこの関数の奥から出るだけで、**どの表が壊れたのか
+    呼び出し側から分からない**。このモジュールには `s_we` / `s_th` / `s_ch` から
+    **動的に組む表が 6 か所**あり（`cavity_floor_y` / `_floor_limit` /
+    `_section_exponents` ×2 / `_chamber_weight` / `_ratio_scale`）、どれも設計値の
+    組み合わせ次第で節点が重なりうる。実際 `_floor_limit` が `s_we ≥ 0.94` で
+    踏んでいて、`window_end_z` の `zb − 4.0` がそれを覆う蓋になっていた。
+    """
     n = len(pts)
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    for i, hi in enumerate(h):
+        if hi <= 0.0:
+            raise ValueError(
+                f"PCHIP の制御点 x が単調増加ではありません: "
+                f"pts[{i}]={pts[i]} と pts[{i + 1}]={pts[i + 1]} で "
+                f"x が {xs[i]!r} → {xs[i + 1]!r}（幅 {hi!r}）。"
+                f"表全体: {pts}")
     d = [(ys[i + 1] - ys[i]) / h[i] for i in range(n - 1)]
     m = [0.0] * n
     m[0], m[-1] = d[0], d[-1]
@@ -1060,10 +1076,20 @@ def window_start_z(p: dict) -> float:
     return max(window_front_z(p) - _LOFT_FRONT_LEAD, 0.25)
 
 
+#: `chamber_to_bore_mm` を持たない古いプロジェクト用の既定。**旧実装の直値**。
+_CHAMBER_TO_BORE_DEFAULT_MM = 4.0
+
+
 def window_end_z(p: dict) -> float:
-    """ウィンドウ後端。チェンバー→ボアの遷移区間を必ず残す。"""
+    """ウィンドウ後端。チェンバー→ボアの遷移区間を必ず残す。
+
+    残す量は `chamber_to_bore_mm`。**以前は直値 4.0 だった**が、これは幾何の
+    成立条件ではなく慣習で、しかも `_floor_limit` と `cavity_floor_y` の
+    2 つの退化を覆う蓋になっていた（両方とも塞いだ）。パラメータとして表に出す。
+    """
     zb = bore_start_z(p)
-    return min(window_front_z(p) + p["window_length"], zb - 4.0)
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    return min(window_front_z(p) + p["window_length"], zb - gap)
 
 
 def window_length_effective(p: dict) -> float:
@@ -1230,7 +1256,9 @@ def cavity_floor_y(p: dict, z: float) -> float:
     化けて**ティップレールのくさびが消えた**（空洞高さ 0.60 → 4.44mm）。
     爆発は連続していて、窓の後端からボアまでの間隔で見ると
     6.9mm で a=0.97 / 4.0mm で 3.48 / 2.0mm で 6.48 / 1.0mm で 12.30 ——
-    `window_end_z` の `zb − 4.0` が唯一の歯止めになっていた。
+    `window_end_z` の直値 `zb − 4.0` が唯一の歯止めになっていた。
+    **その直値の裏には `_floor_limit` の節点衝突も隠れていた**（同じ型の 2 つ目。
+    そちらも塞いだうえで `chamber_to_bore_mm` としてパラメータに出した）。
 
     写像なら割り算が消える。窓を伸ばすことは「床が上がってくる位置が後ろへ動く」
     ことであって、「空洞全体が深くなる」ことではない:
@@ -1257,6 +1285,11 @@ def cavity_floor_y(p: dict, z: float) -> float:
 #: 窓の区間で床の下限拘束を外す量 [mm]。
 _FLOOR_RELIEF = 6.0
 
+#: 窓の終端から拘束が立ち上がるまでの σ 幅。**このぶんは必ず [s_we, 1] に収まる
+#: ように s_we を頭打ちにする** —— 収まらないと制御点が x=1.0 で重なって
+#: `_pchip_table` が落ちる（下の docstring）。
+_FLOOR_RAMP = 0.06
+
 
 def _floor_limit(p: dict, z: float) -> float:
     """床の許容下限。**窓が開いている区間では効かせない**。
@@ -1266,11 +1299,32 @@ def _floor_limit(p: dict, z: float) -> float:
     窓ではそれすら無い）。ティップでは ro が小さいのでこの拘束がリード面より上に来て、
     床が押し上げられて**窓が閉じる**（z=0.85 で bot が cut_top より 0.05mm 上）。
     旧実装がロフトを z=1.2 から始めていたのはこれを避けるためだった。
+
+    **旧実装は窓がボアに寄ると落ちた。** 制御点を
+    `(0,0) (s_we,0) (min(s_we+0.06,1),1) (1,1)` と組んでいたので、
+    `s_we ≥ 0.94` で第 3・第 4 節点が x=1.0 で衝突し `ZeroDivisionError`。
+    閾値は `gap ≤ 0.06·zb` ＝ **サイズで変わる**:
+
+    | | zb | 落ちる gap | 当時の壁 `zb−4.0` からの余裕 |
+    |---|---|---|---|
+    | soprano | 33.10 | ≤ 1.99mm | 2.01mm |
+    | alto | 43.40 | ≤ 2.60mm | 1.40mm |
+    | tenor | 50.00 | ≤ 3.00mm | **1.00mm** |
+
+    `cavity_floor_y` の振幅アフィンの特異点（`5fb0bf4`）と**同じ型**で、
+    **同じ壁の裏に 2 つ並んでいた**。`zb − 4.0` は幾何の成立条件ではなく、
+    この 2 つを覆っていた蓋だったことになる（成立条件は `cavity_layout_error`）。
+
+    直しは 2 つだけ ——**ランプが必ず収まるよう `s_we` を頭打ちにする**のと、
+    **ランプの終わりが 1.0 に達したら末尾の節点を置かない**。既定 3 サイズの
+    `s_we` は 0.8408 / 0.9078 / 0.8380 なので頭打ちは効かず、**形状は不変**。
     """
     zb = bore_start_z(p)
-    s_we = window_end_z(p) / zb if zb > 1e-9 else 1.0
-    w = _pchip([(0.0, 0.0), (s_we, 0.0), (min(s_we + 0.06, 1.0), 1.0), (1.0, 1.0)],
-               _cav_sigma(p, z))
+    s_we = min(window_end_z(p) / zb if zb > 1e-9 else 1.0, 1.0 - _FLOOR_RAMP)
+    pts = [(0.0, 0.0), (s_we, 0.0), (s_we + _FLOOR_RAMP, 1.0)]
+    if s_we + _FLOOR_RAMP < 1.0 - 1e-9:
+        pts.append((1.0, 1.0))
+    w = _pchip(pts, _cav_sigma(p, z))
     return shell_limit(p, z)["bot"] - _FLOOR_RELIEF * (1.0 - w)
 
 
@@ -1553,6 +1607,16 @@ def cavity_layout_error(p: dict) -> str | None:
     後者だけ直すと前者が残るので、**成立条件のほうを 1 箇所に書いて弾く**。
     """
     z0, z_we, zb = window_start_z(p), window_end_z(p), bore_start_z(p)
+    # チェンバー→ボアの遷移は**長さを持たなければならない**。0 にすると
+    # `s_we = s_th = 1` で `_chamber_weight` の制御点が x=1 で重なり、
+    # `_pchip_table` が `ValueError` を上げる（掃引 `cad/windycity/sweep_limits.py`
+    # で発見。3 サイズとも壁はぴったり 0 で、0.01 は通る）。**上げさせない**
+    # ——`ParamSpec.hard_min` でも止めているが、成立条件はここに 1 箇所書く。
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    if gap <= 0.0:
+        return (f"チェンバー→ボアの遷移が {gap:.2f}mm ＝ 長さを持ちません。"
+                f"ウィンドウの後端とボアの始まりが同じ位置になり、"
+                f"チェンバーの区間が消えます。0 より大きい値にしてください。")
     if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
@@ -2280,8 +2344,14 @@ def outer_handles(p: dict, ranges: dict) -> list[dict]:
 
 
 @_scoped
-def baffle_handles(p: dict) -> list[dict]:
+def baffle_handles(p: dict, ranges: dict | None = None) -> list[dict]:
     """断面エディタのドラッグハンドル（断面座標つき）。
+
+    `ranges` はスキーマ側の可動域 `{key: (lo, hi, step)}`（`Mouthpiece.
+    _handle_ranges`）。**渡さないと数字がここに二重化する** —— 以前は 0.0/5.0 や
+    −1.0/1.0 を直に書いていて、`ParamSpec` の壁を広げてもハンドルだけ帯で
+    止まっていた。`baffle_plateau` だけは例外で、可動域が**バッフル型で変わる**
+    （`_PLATEAU_RANGE`）ので今までどおり型側を使う。
 
     各要素:
       key/label/unit/step  対応するパラメータ
@@ -2302,6 +2372,17 @@ def baffle_handles(p: dict) -> list[dict]:
     a = baffle_plateau(p)
     pl_lo, pl_hi = _PLATEAU_RANGE.get(kind, (0.10, 0.70))
     z_pl = baffle_plateau_end_z(p)
+    rg = ranges or {}
+
+    def lim(key: str, lo: float, hi: float) -> tuple[float, float]:
+        """スキーマの可動域。無ければ従来の直値（呼び出し側が渡さない場合）。"""
+        r = rg.get(key)
+        return (r[0], r[1]) if r else (lo, hi)
+
+    bh_lo, bh_hi = lim("baffle_height", 0.0, 5.0)
+    sr_lo, sr_hi = lim("baffle_step_rise", 0.0, 0.85)
+    cv_lo, cv_hi = lim("baffle_curvature", -1.0, 1.0)
+    ro_lo, ro_hi = lim("rollover_radius", 3.0, 20.0)
 
     # 高さは棚の途中で掴む。`_TIP_ROOF_SPAN`（天井がレール基準からバッフル基準へ
     # 移り終わる σ）より前で掴むと、`baffle_height` を端から端まで振っても
@@ -2323,20 +2404,20 @@ def baffle_handles(p: dict) -> list[dict]:
         }
 
     return [
-        h("baffle_height", "バッフル高さ", "y", z_h, 0.0, 5.0, "mm", 0.1,
-          (_roof_at(p, "baffle_height", 0.0, z_h),
-           _roof_at(p, "baffle_height", 5.0, z_h))),
+        h("baffle_height", "バッフル高さ", "y", z_h, bh_lo, bh_hi, "mm", 0.1,
+          (_roof_at(p, "baffle_height", bh_lo, z_h),
+           _roof_at(p, "baffle_height", bh_hi, z_h))),
         h("baffle_plateau", "棚の終わり（段の位置）", "z", z_pl, pl_lo, pl_hi, "比", 0.01,
           (pl_lo * zb, pl_hi * zb)),
-        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, 0.0, 0.85, "比", 0.05,
-          (_roof_at(p, "baffle_step_rise", 0.0, z_rise),
-           _roof_at(p, "baffle_step_rise", 0.85, z_rise))),
-        h("baffle_curvature", "カーブ量", "y", z_curve, -1.0, 1.0, "比", 0.05,
-          (_roof_at(p, "baffle_curvature", -1.0, z_curve),
-           _roof_at(p, "baffle_curvature", 1.0, z_curve))),
+        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, sr_lo, sr_hi, "比", 0.05,
+          (_roof_at(p, "baffle_step_rise", sr_lo, z_rise),
+           _roof_at(p, "baffle_step_rise", sr_hi, z_rise))),
+        h("baffle_curvature", "カーブ量", "y", z_curve, cv_lo, cv_hi, "比", 0.05,
+          (_roof_at(p, "baffle_curvature", cv_lo, z_curve),
+           _roof_at(p, "baffle_curvature", cv_hi, z_curve))),
         h("rollover_radius", "肩の丸みの終わり", "z",
-          min(z_pl + p.get("rollover_radius", 8.0), zb), 3.0, 20.0, "mm", 0.5,
-          (min(z_pl + 3.0, zb), min(z_pl + 20.0, zb))),
+          min(z_pl + p.get("rollover_radius", 8.0), zb), ro_lo, ro_hi, "mm", 0.5,
+          (min(z_pl + ro_lo, zb), min(z_pl + ro_hi, zb))),
     ]
 
 

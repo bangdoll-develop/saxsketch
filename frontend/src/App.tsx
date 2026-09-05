@@ -48,6 +48,9 @@ export default function App() {
   const [staleWarn, setStaleWarn] = useState(false);
   // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
   const [notices, setNotices] = useState<string[]>([]);
+  // 帯／壁で丸めた報告（サーバが `adjustments` で返す）。**毎回入れ替える** ——
+  // スライダ 1 本ごとに出るものなので、積むと古い報告が残る。
+  const [adjust, setAdjust] = useState<string[]>([]);
   // このページがサーバの配っているアプリより古いか（下の useEffect を参照）
   const [staleApp, setStaleApp] = useState(false);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
@@ -85,6 +88,16 @@ export default function App() {
     const t = setTimeout(() => setError(""), 5000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // 丸めの報告も `error` と同じ間隔で引っ込める。**`notices` とは違う** ——
+  // あちらはプロジェクトを開いた 1 回きりなので触るまで残すが、こちらは
+  // スライダを動かすたびに出るので、残すと画面に貼り付いたままになる。
+  // 丸めた結果そのものはスライダの値として見えているので、説明は一度でよい。
+  useEffect(() => {
+    if (adjust.length === 0) return;
+    const t = setTimeout(() => setAdjust([]), 5000);
+    return () => clearTimeout(t);
+  }, [adjust]);
 
   useEffect(() => {
     if (!staleWarn) return;
@@ -232,6 +245,8 @@ export default function App() {
       try {
         const r = await api.putParams(payload);
         setSim(r.simulation);
+        // クランプは黙って起きてはならない（既知 8 例目）。空でも必ず入れ替える。
+        setAdjust((r.adjustments ?? []).map((a) => a.message));
         // サーバ側でクランプされた値だけ拾い直す。丸ごと入れ替えると、値が
         // 同じでもオブジェクトが変わって断面が無駄に取り直される。
         setParams((prev) => {
@@ -244,6 +259,7 @@ export default function App() {
         if (prev && prev.stale !== r.stale) setManualEdit({ ...prev, stale: r.stale });
       } catch (e) {
         setError(String((e as Error).message));
+        setAdjust([]);   // 弾かれた ＝ 値は保存されていない。丸めの話は残さない
         // 値の組が成立せずサーバが弾いた場合、サーバ側は前の値のまま。楽観更新した
         // ぶんを**送ったキーだけ**戻す。戻さないと画面の値とサーバの値が食い違い、
         // 断面リクエスト（画面の値をクエリで渡す）が同じ理由で落ち続ける。
@@ -519,6 +535,12 @@ export default function App() {
         <div className="err-toast warn-toast">
           ⚠ 保存時から変わったパラメータを変換しました:
           {notices.map((n, i) => <div key={i}>・{n}</div>)}
+        </div>
+      )}
+      {adjust.length > 0 && notices.length === 0 && !staleWarn && !error && (
+        <div className="err-toast warn-toast">
+          ⚠ 壁に当たったので値を丸めました:
+          {adjust.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}
     </>
