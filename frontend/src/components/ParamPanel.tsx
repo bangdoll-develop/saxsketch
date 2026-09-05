@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import type { ParamSpec, ReferenceInfo } from "../api";
 
 interface Props {
@@ -55,31 +56,75 @@ function ReferenceCard({ reference, onPick, onReset }: {
   );
 }
 
+const KIND_LABEL: Record<string, string> = {
+  geometry: "幾何の成立条件",
+  manufacturing: "製造の制約",
+  convention: "慣習の推奨帯",
+  unclassified: "未分類の壁",
+};
+
 function NumberParam({ spec, value, onChange }: {
   spec: ParamSpec; value: number; onChange: (v: number) => void;
 }) {
+  // 壁（越えられない）と帯（勧めるだけ）。hard_* が無ければ帯がそのまま壁 ＝ 現行。
+  const wallLo = spec.hard_min ?? spec.min;
+  const wallHi = spec.hard_max ?? spec.max;
+  const widened = wallLo !== spec.min || wallHi !== spec.max;
+  const outside = spec.min !== null && spec.max !== null
+    && (value < spec.min || value > spec.max);
+
+  // 推奨帯をトラックの背景に網掛けで描く。**帯の外へ出られることが目で分かる**
+  // ようにするためで、出られない（hard_* が無い）ときは描かない。
+  let band: CSSProperties | undefined;
+  if (widened && wallLo !== null && wallHi !== null
+      && spec.min !== null && spec.max !== null && wallHi > wallLo) {
+    const pct = (v: number) => ((v - wallLo) / (wallHi - wallLo)) * 100;
+    const a = Math.max(0, Math.min(100, pct(spec.min)));
+    const b = Math.max(0, Math.min(100, pct(spec.max)));
+    band = {
+      background: `linear-gradient(to right,`
+        + ` transparent 0 ${a}%, rgba(126,200,168,0.22) ${a}% ${b}%,`
+        + ` transparent ${b}% 100%)`,
+    };
+  }
+
   return (
     <>
       <div className="row1">
-        <label>{spec.label}</label>
+        <label>
+          {spec.label}
+          {outside && <span className="offband" title={
+            `勧める帯は ${spec.min}〜${spec.max}${spec.unit}。`
+            + `いまはその外です（越えられる壁ではありません）`
+          }>帯の外</span>}
+        </label>
         <span className="val">
           <input
             type="number" value={value}
-            min={spec.min ?? undefined} max={spec.max ?? undefined}
+            min={wallLo ?? undefined} max={wallHi ?? undefined}
             step={spec.step ?? undefined}
             onChange={(e) => onChange(Number(e.target.value))}
           />
           <span className="unit">{spec.unit}</span>
         </span>
       </div>
-      {spec.min !== null && spec.max !== null && (
+      {wallLo !== null && wallHi !== null && (
         <input
-          type="range" value={value} min={spec.min} max={spec.max}
-          step={spec.step ?? 0.01}
+          type="range" value={value} min={wallLo} max={wallHi}
+          step={spec.step ?? 0.01} style={band}
+          className={band ? "banded" : undefined}
           onChange={(e) => onChange(Number(e.target.value))}
         />
       )}
       {spec.effect && <div className="effect">{spec.effect}</div>}
+      <div className="effect limitsrc">
+        {widened
+          ? `勧める帯 ${spec.min}〜${spec.max}${spec.unit}（越えられます。壁は `
+            + `${wallLo}〜${wallHi}${spec.unit}）`
+          : `${KIND_LABEL[spec.limit_kind] ?? spec.limit_kind} ${spec.min}〜`
+            + `${spec.max}${spec.unit}`}
+        {" ／ 出所: "}{spec.source || "記載なし"}
+      </div>
     </>
   );
 }

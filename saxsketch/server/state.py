@@ -143,6 +143,10 @@ class AppState:
         # セットの部品を足し引きしたときの形状変化の報告。
         # 黙って値を変えないための経路なので、利用者が何か触るまで残す。
         self.notices: list[str] = []
+        # 直近の `apply_params` が帯／壁で丸めた項目（`ParamSet.adjustments`）。
+        # `notices` と違い**次の適用で必ず入れ替わる** —— スライダを 1 本動かす
+        # たびに出るものなので、残すと古い報告が積み上がる。
+        self.adjustments: list[dict] = []
         self.settings = self._load_settings()
 
     # ---------------------------------------------------------- active への委譲
@@ -776,9 +780,13 @@ class AppState:
         assert self.paramset is not None and self.project is not None
         keep = dict(self.paramset.values)
         applied = self.paramset.apply(values)
+        # 帯／壁で丸めた項目。**弾いたときは報告しない** —— 値は保存されて
+        # いないので、丸めた話をしても画面の値と合わない。
+        self.adjustments = list(self.paramset.adjustments)
         bad = self.component.params_error(applied) if self.component else None
         if bad:
             self.paramset.apply(keep)
+            self.adjustments = []
             raise ValueError(bad)
         self.project.params = dict(applied)
         # 従属する部品（リガチャー・リード）の参照を追従させる。dict のコピーだけで

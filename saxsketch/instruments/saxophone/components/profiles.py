@@ -141,11 +141,27 @@ def _soft_max(a: float, b: float, k: float = 0.35) -> float:
 
 
 def _pchip_table(pts: list[tuple[float, float]]) -> tuple[list, list, list, list]:
-    """Fritsch–Carlson の傾き `m` を含む係数表。制御点だけで決まるので使い回せる。"""
+    """Fritsch–Carlson の傾き `m` を含む係数表。制御点だけで決まるので使い回せる。
+
+    **x が重なった表は名指しで弾く。** 区間幅 `h[i]` で割るので、重なると
+    `ZeroDivisionError` がこの関数の奥から出るだけで、**どの表が壊れたのか
+    呼び出し側から分からない**。このモジュールには `s_we` / `s_th` / `s_ch` から
+    **動的に組む表が 6 か所**あり（`cavity_floor_y` / `_floor_limit` /
+    `_section_exponents` ×2 / `_chamber_weight` / `_ratio_scale`）、どれも設計値の
+    組み合わせ次第で節点が重なりうる。実際 `_floor_limit` が `s_we ≥ 0.94` で
+    踏んでいて、`window_end_z` の `zb − 4.0` がそれを覆う蓋になっていた。
+    """
     n = len(pts)
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    for i, hi in enumerate(h):
+        if hi <= 0.0:
+            raise ValueError(
+                f"PCHIP の制御点 x が単調増加ではありません: "
+                f"pts[{i}]={pts[i]} と pts[{i + 1}]={pts[i + 1]} で "
+                f"x が {xs[i]!r} → {xs[i + 1]!r}（幅 {hi!r}）。"
+                f"表全体: {pts}")
     d = [(ys[i + 1] - ys[i]) / h[i] for i in range(n - 1)]
     m = [0.0] * n
     m[0], m[-1] = d[0], d[-1]
@@ -967,6 +983,9 @@ _CAVITY_D = [
     (0.875, -0.210), (0.900, -0.260), (0.930, -0.288), (0.960, -0.321),
     (0.990, -0.354), (1.000, -0.367),
 ]
+#: `_CAVITY_D` が 0 を横切る σ ＝ **実測品の窓の終端**。`cavity_floor_y` はこの点を
+#: 設計の `window_end_z` へ写像する。テーブルを差し替えたらここも引き直すこと。
+_CAVITY_D_ZERO = 0.838
 #: `side_rail_width` を基準値から動かしたときに W が効く重み。窓の区間で 1、
 #: ボアでは 0（ボア径はレール幅と無関係）。
 _RAIL_WEIGHT = [(0.000, 1.0), (0.700, 1.0), (0.838, 0.85), (0.940, 0.3),
@@ -1057,10 +1076,20 @@ def window_start_z(p: dict) -> float:
     return max(window_front_z(p) - _LOFT_FRONT_LEAD, 0.25)
 
 
+#: `chamber_to_bore_mm` を持たない古いプロジェクト用の既定。**旧実装の直値**。
+_CHAMBER_TO_BORE_DEFAULT_MM = 4.0
+
+
 def window_end_z(p: dict) -> float:
-    """ウィンドウ後端。チェンバー→ボアの遷移区間を必ず残す。"""
+    """ウィンドウ後端。チェンバー→ボアの遷移区間を必ず残す。
+
+    残す量は `chamber_to_bore_mm`。**以前は直値 4.0 だった**が、これは幾何の
+    成立条件ではなく慣習で、しかも `_floor_limit` と `cavity_floor_y` の
+    2 つの退化を覆う蓋になっていた（両方とも塞いだ）。パラメータとして表に出す。
+    """
     zb = bore_start_z(p)
-    return min(window_front_z(p) + p["window_length"], zb - 4.0)
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    return min(window_front_z(p) + p["window_length"], zb - gap)
 
 
 def window_length_effective(p: dict) -> float:
@@ -1211,24 +1240,55 @@ def cavity_floor_y(p: dict, z: float) -> float:
     リード面からの落とし込み `D = (cut_top_y − F)/bore_radius` として持つ。D>0 の
     間だけ窓が開き、**D が 0 を横切る z が窓の終端**になる。段差もランプも要らない。
 
-    実測テーブルはアフィン変換（a·D + b）で 2 つの端条件へ合わせる:
+    合わせる端条件は 2 つ:
       - `window_end_z` で D=0（＝窓がそこで閉じる。`window_length` が効く）
       - `bore_start_z` で F = −bore_radius（＝遷移区間を別式で繋がなくてよい）
-    アフィンなので PCHIP の C1 性はそのまま残る。
+
+    **σ を写像して合わせる。振幅を掛けてはいけない。** 旧実装は実測テーブルを
+    振幅方向のアフィン `a·(D(σ) − t0)` で合わせていて、`a = target/(D(1) − D(s_we))`
+    が **s_we → 1 で特異**だった（s_we = `window_end_z`/`bore_start_z`）。
+    `_CAVITY_D` は σ=`_CAVITY_D_ZERO` で 0 を横切るので、s_we がそこに載っている
+    間だけ a≈1 になる —— そして 3 サイズともたまたま載っていた
+    （soprano 0.8408 / tenor 0.8380 / 旧 alto 0.8382）。**「揃い」に幾何が荷重を
+    掛けていた**わけで、アルトの窓を実測（`window_length` 35.02 → 38.67）へ直した
+    とたんに s_we が 0.9078 へ動き、分母が −0.367 → −0.098 に縮んで **a=3.48**。
+    床が丸ごと 3.5 倍深くなり、先端の落とし込み D(0)=0.100（0.79mm）が 2.73mm に
+    化けて**ティップレールのくさびが消えた**（空洞高さ 0.60 → 4.44mm）。
+    爆発は連続していて、窓の後端からボアまでの間隔で見ると
+    6.9mm で a=0.97 / 4.0mm で 3.48 / 2.0mm で 6.48 / 1.0mm で 12.30 ——
+    `window_end_z` の直値 `zb − 4.0` が唯一の歯止めになっていた。
+    **その直値の裏には `_floor_limit` の節点衝突も隠れていた**（同じ型の 2 つ目。
+    そちらも塞いだうえで `chamber_to_bore_mm` としてパラメータに出した）。
+
+    写像なら割り算が消える。窓を伸ばすことは「床が上がってくる位置が後ろへ動く」
+    ことであって、「空洞全体が深くなる」ことではない:
+
+      - M: 0→0, s_we→`_CAVITY_D_ZERO`, 1→1 の単調写像（3 点 PCHIP）
+      - 尾側だけ端条件へ寄せる滑らかな重み g: g(0)=1, g(1)=target/D(1)
+
+    先端は σ=0 → M(0)=0 なので **D(0) が実測のまま素通り**（`window_length` は
+    先端に一切効かない ＝ 効くべきでない）。窓の終端は D(M(s_we))=0 なので
+    **g が何であれ厳密**。PCHIP × 滑らかな重みなので C1 も残る。
     """
     rb = bore_radius(p)
     zb = bore_start_z(p)
-    t0 = _pchip(_CAVITY_D, window_end_z(p) / zb if zb > 1e-9 else 1.0)
-    t1 = _pchip(_CAVITY_D, 1.0)
+    sig = _cav_sigma(p, z)
+    # 写像が退化する側だけ止める。手前は `cavity_layout_error` が見ている。
+    s_we = min(window_end_z(p) / zb if zb > 1e-9 else 1.0, 0.99)
+    d = _pchip(_CAVITY_D, _pchip([(0.0, 0.0), (s_we, _CAVITY_D_ZERO), (1.0, 1.0)], sig))
     target = (cut_top_y(p, zb) + rb) / rb
-    span = t1 - t0
-    a = target / span if abs(span) > 1e-6 else 1.0
-    d = a * (_pchip(_CAVITY_D, _cav_sigma(p, z)) - t0)
+    k = target / _pchip(_CAVITY_D, 1.0)
+    d *= 1.0 + (k - 1.0) * _smoothstep(sig)
     return _soft_max(cut_top_y(p, z) - rb * d, _floor_limit(p, z))
 
 
 #: 窓の区間で床の下限拘束を外す量 [mm]。
 _FLOOR_RELIEF = 6.0
+
+#: 窓の終端から拘束が立ち上がるまでの σ 幅。**このぶんは必ず [s_we, 1] に収まる
+#: ように s_we を頭打ちにする** —— 収まらないと制御点が x=1.0 で重なって
+#: `_pchip_table` が落ちる（下の docstring）。
+_FLOOR_RAMP = 0.06
 
 
 def _floor_limit(p: dict, z: float) -> float:
@@ -1239,11 +1299,32 @@ def _floor_limit(p: dict, z: float) -> float:
     窓ではそれすら無い）。ティップでは ro が小さいのでこの拘束がリード面より上に来て、
     床が押し上げられて**窓が閉じる**（z=0.85 で bot が cut_top より 0.05mm 上）。
     旧実装がロフトを z=1.2 から始めていたのはこれを避けるためだった。
+
+    **旧実装は窓がボアに寄ると落ちた。** 制御点を
+    `(0,0) (s_we,0) (min(s_we+0.06,1),1) (1,1)` と組んでいたので、
+    `s_we ≥ 0.94` で第 3・第 4 節点が x=1.0 で衝突し `ZeroDivisionError`。
+    閾値は `gap ≤ 0.06·zb` ＝ **サイズで変わる**:
+
+    | | zb | 落ちる gap | 当時の壁 `zb−4.0` からの余裕 |
+    |---|---|---|---|
+    | soprano | 33.10 | ≤ 1.99mm | 2.01mm |
+    | alto | 43.40 | ≤ 2.60mm | 1.40mm |
+    | tenor | 50.00 | ≤ 3.00mm | **1.00mm** |
+
+    `cavity_floor_y` の振幅アフィンの特異点（`5fb0bf4`）と**同じ型**で、
+    **同じ壁の裏に 2 つ並んでいた**。`zb − 4.0` は幾何の成立条件ではなく、
+    この 2 つを覆っていた蓋だったことになる（成立条件は `cavity_layout_error`）。
+
+    直しは 2 つだけ ——**ランプが必ず収まるよう `s_we` を頭打ちにする**のと、
+    **ランプの終わりが 1.0 に達したら末尾の節点を置かない**。既定 3 サイズの
+    `s_we` は 0.8408 / 0.9078 / 0.8380 なので頭打ちは効かず、**形状は不変**。
     """
     zb = bore_start_z(p)
-    s_we = window_end_z(p) / zb if zb > 1e-9 else 1.0
-    w = _pchip([(0.0, 0.0), (s_we, 0.0), (min(s_we + 0.06, 1.0), 1.0), (1.0, 1.0)],
-               _cav_sigma(p, z))
+    s_we = min(window_end_z(p) / zb if zb > 1e-9 else 1.0, 1.0 - _FLOOR_RAMP)
+    pts = [(0.0, 0.0), (s_we, 0.0), (s_we + _FLOOR_RAMP, 1.0)]
+    if s_we + _FLOOR_RAMP < 1.0 - 1e-9:
+        pts.append((1.0, 1.0))
+    w = _pchip(pts, _cav_sigma(p, z))
     return shell_limit(p, z)["bot"] - _FLOOR_RELIEF * (1.0 - w)
 
 
@@ -1526,6 +1607,16 @@ def cavity_layout_error(p: dict) -> str | None:
     後者だけ直すと前者が残るので、**成立条件のほうを 1 箇所に書いて弾く**。
     """
     z0, z_we, zb = window_start_z(p), window_end_z(p), bore_start_z(p)
+    # チェンバー→ボアの遷移は**長さを持たなければならない**。0 にすると
+    # `s_we = s_th = 1` で `_chamber_weight` の制御点が x=1 で重なり、
+    # `_pchip_table` が `ValueError` を上げる（掃引 `cad/windycity/sweep_limits.py`
+    # で発見。3 サイズとも壁はぴったり 0 で、0.01 は通る）。**上げさせない**
+    # ——`ParamSpec.hard_min` でも止めているが、成立条件はここに 1 箇所書く。
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    if gap <= 0.0:
+        return (f"チェンバー→ボアの遷移が {gap:.2f}mm ＝ 長さを持ちません。"
+                f"ウィンドウの後端とボアの始まりが同じ位置になり、"
+                f"チェンバーの区間が消えます。0 より大きい値にしてください。")
     if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
@@ -2253,8 +2344,14 @@ def outer_handles(p: dict, ranges: dict) -> list[dict]:
 
 
 @_scoped
-def baffle_handles(p: dict) -> list[dict]:
+def baffle_handles(p: dict, ranges: dict | None = None) -> list[dict]:
     """断面エディタのドラッグハンドル（断面座標つき）。
+
+    `ranges` はスキーマ側の可動域 `{key: (lo, hi, step)}`（`Mouthpiece.
+    _handle_ranges`）。**渡さないと数字がここに二重化する** —— 以前は 0.0/5.0 や
+    −1.0/1.0 を直に書いていて、`ParamSpec` の壁を広げてもハンドルだけ帯で
+    止まっていた。`baffle_plateau` だけは例外で、可動域が**バッフル型で変わる**
+    （`_PLATEAU_RANGE`）ので今までどおり型側を使う。
 
     各要素:
       key/label/unit/step  対応するパラメータ
@@ -2275,6 +2372,17 @@ def baffle_handles(p: dict) -> list[dict]:
     a = baffle_plateau(p)
     pl_lo, pl_hi = _PLATEAU_RANGE.get(kind, (0.10, 0.70))
     z_pl = baffle_plateau_end_z(p)
+    rg = ranges or {}
+
+    def lim(key: str, lo: float, hi: float) -> tuple[float, float]:
+        """スキーマの可動域。無ければ従来の直値（呼び出し側が渡さない場合）。"""
+        r = rg.get(key)
+        return (r[0], r[1]) if r else (lo, hi)
+
+    bh_lo, bh_hi = lim("baffle_height", 0.0, 5.0)
+    sr_lo, sr_hi = lim("baffle_step_rise", 0.0, 0.85)
+    cv_lo, cv_hi = lim("baffle_curvature", -1.0, 1.0)
+    ro_lo, ro_hi = lim("rollover_radius", 3.0, 20.0)
 
     # 高さは棚の途中で掴む。`_TIP_ROOF_SPAN`（天井がレール基準からバッフル基準へ
     # 移り終わる σ）より前で掴むと、`baffle_height` を端から端まで振っても
@@ -2296,30 +2404,70 @@ def baffle_handles(p: dict) -> list[dict]:
         }
 
     return [
-        h("baffle_height", "バッフル高さ", "y", z_h, 0.0, 5.0, "mm", 0.1,
-          (_roof_at(p, "baffle_height", 0.0, z_h),
-           _roof_at(p, "baffle_height", 5.0, z_h))),
+        h("baffle_height", "バッフル高さ", "y", z_h, bh_lo, bh_hi, "mm", 0.1,
+          (_roof_at(p, "baffle_height", bh_lo, z_h),
+           _roof_at(p, "baffle_height", bh_hi, z_h))),
         h("baffle_plateau", "棚の終わり（段の位置）", "z", z_pl, pl_lo, pl_hi, "比", 0.01,
           (pl_lo * zb, pl_hi * zb)),
-        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, 0.0, 0.85, "比", 0.05,
-          (_roof_at(p, "baffle_step_rise", 0.0, z_rise),
-           _roof_at(p, "baffle_step_rise", 0.85, z_rise))),
-        h("baffle_curvature", "カーブ量", "y", z_curve, -1.0, 1.0, "比", 0.05,
-          (_roof_at(p, "baffle_curvature", -1.0, z_curve),
-           _roof_at(p, "baffle_curvature", 1.0, z_curve))),
+        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, sr_lo, sr_hi, "比", 0.05,
+          (_roof_at(p, "baffle_step_rise", sr_lo, z_rise),
+           _roof_at(p, "baffle_step_rise", sr_hi, z_rise))),
+        h("baffle_curvature", "カーブ量", "y", z_curve, cv_lo, cv_hi, "比", 0.05,
+          (_roof_at(p, "baffle_curvature", cv_lo, z_curve),
+           _roof_at(p, "baffle_curvature", cv_hi, z_curve))),
         h("rollover_radius", "肩の丸みの終わり", "z",
-          min(z_pl + p.get("rollover_radius", 8.0), zb), 3.0, 20.0, "mm", 0.5,
-          (min(z_pl + 3.0, zb), min(z_pl + 20.0, zb))),
+          min(z_pl + p.get("rollover_radius", 8.0), zb), ro_lo, ro_hi, "mm", 0.5,
+          (min(z_pl + ro_lo, zb), min(z_pl + ro_hi, zb))),
     ]
+
+
+#: 息の通り道をサンプルする分割数。上の天井の頭打ち検査と同じ密度。
+_AIRWAY_SAMPLES = 100
+
+
+def airway_profile(p: dict, z: float) -> float:
+    """息の通り道の高さ [mm]（リードの接地面から空洞の天井まで）。
+
+    リードは `table_plane_y`（テーブル平面）に接して座り、ティップ側では
+    マウスピース側のフェイシングがリードから逃げていく。だから息が通れる高さは
+    **リード面（`cut_top_y`）ではなく接地面から測る** —— リード面で測ると
+    ティップ開きぶんを丸ごと数え落とし、入口の高さが 0 に見える。
+    """
+    return cavity_roof_y(p, z) - table_plane_y(p, z)
+
+
+def airway_min(p: dict) -> tuple[float, float, float]:
+    """通り道の (入口の高さ, 最狭部の高さ, 最狭部の z)。
+
+    **入口はティップ（z=0）で、そこがいちばん狭くあるべき** —— リード先端から
+    入った息が、その奥でさらに絞られてはいけない。だから比較の相手は入口自身で、
+    **閾値を置く必要がない**（この repo で根拠の無い丸い数字を増やさずに済む
+    数少ない判定）。既定の 3 サイズはいずれも最狭部が z=0 ＝ 入口そのもの。
+    """
+    z1 = window_end_z(p)
+    ent = airway_profile(p, 0.0)
+    z_min, h_min = 0.0, ent
+    for i in range(1, _AIRWAY_SAMPLES + 1):
+        z = z1 * i / _AIRWAY_SAMPLES
+        h = airway_profile(p, z)
+        if h < h_min:
+            z_min, h_min = z, h
+    return ent, h_min, z_min
 
 
 @_scoped
 def cavity_warnings(p: dict) -> list[str]:
-    """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。
+    """断面エディタに出す注意。エラーではないが利用者が知るべきこと。
 
     バッフルだけの話ではない（窓の前縁も後端もここで見る）ので `cavity_`。
-    共通しているのは「スライダの値と実際の形が食い違っていて、しかも
-    エラーにはならない」という 1 点だけ。
+    2 種類ある:
+
+    - **形が法則どおりに出ていない** —— スライダの値と実際の形が食い違っていて、
+      しかもエラーにはならない（天井の頭打ち・窓の前縁・窓の後端）
+    - **形は指定どおりだが吹けない** —— 息の通り道が入口より奥で絞られる
+
+    2 つ目は他と性質が違うので、**呼ぶ側が種類で絞れるように**それぞれ固有の
+    語を含めてある（`inspection_values.py` は「ビーク下の肉厚」で絞っている）。
     """
     out: list[str] = []
     zb = bore_start_z(p)
@@ -2351,6 +2499,15 @@ def cavity_warnings(p: dict) -> list[str]:
                    f"{bore_start_z(p):.1f} − 4.0mm」で頭打ちになります。"
                    f"ここから先へ伸ばすには全長を長く / ボア長を短くしてください"
                    f"（ウィンドウ長を上げても形は変わりません）")
+    # 息の通り道。`_soft_min` の丸め（最大 k/2）は差と見ない。
+    ent, h_min, z_min = airway_min(p)
+    if ent - h_min > _ROOF_SOFT_K / 2.0:
+        out.append(f"息の通り道が入口より奥で狭くなっています: 入口（ティップ）"
+                   f"{ent:.2f}mm に対し z≈{z_min:.1f}mm で {h_min:.2f}mm ＝ "
+                   f"入口の {h_min / ent * 100:.0f}%。リード先端から入った息を"
+                   f"ここで絞ります。バッフル高さ {p['baffle_height']:.1f}mm を"
+                   f"下げてください（**ティップ開きを広げると悪くなります** —— "
+                   f"上がるのは入口だけで、奥は動きません）")
     return out
 
 

@@ -106,11 +106,30 @@ TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.0, "tenor": 0.3}
 # アルトの 19.2 → 13.6 は形状が動いたぶん（Wood Stone PHROX の実測で全長が
 # 98.54 → 91.7mm）。胴が短くなれば空洞が減るので、同じ音に合わせるには
 # **浅く**挿すことになる。
-IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 13.6, "tenor": 20.9}
+# アルトの 13.6 → 17.4 → **14.4** は 2026-09-05 に 2 段階で動いた。
+# (1) PHROX の窓の実測（window_length 35.02 → 38.67 / bore_length 49.05 → 48.30 を
+#     組で入れた）。`cork_depth` は**その形で第1共鳴が合う位置**なので引き直す
+#     ——導出値であって寸法ではない。引き直しを忘れると速い線形推定が厳密解を
+#     1.15mm 外し、`test_fast_tuning_estimate_tracks_the_bracketed_solve` が落ちる。
+# (2) その 17.4 は**`cavity_floor_y` の特異点で床が 3.5 倍深く出ていた形**での値
+#     だった（`test_window_length_does_not_touch_the_tip`）。特異点を直したら
+#     空洞が実物の深さへ戻り、合う位置も 14.4 へ戻った。
+#     **形が変われば零点も動く、を 1 セッションで 2 回踏んだ。**
+IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 14.4, "tenor": 20.9}
 
 # **その挿し込み量での**実効容積 / 欠損円錐（soprano +25 / alto +21 / tenor +26%）。
 # 0 ではないのがこの模型の要点で、マウスピースは代替する円錐より短いぶん太くて
 # 釣り合う。挿し込み量と容積比という独立な 2 つの指標が同じことを言っている。
+#
+# **この「揃い」はアルトの実測で壊れた**（2026-09-05）: soprano +25.5 /
+# alto **+20.4** / tenor +23.4%。**+21〜26% で揃うという観察は、アルトが未実測
+# だったから成立していた。**
+#
+# 同じ日にいったん alto +13.3 と記録したが、あれは `cavity_floor_y` の特異点で
+# 床が 3.5 倍深く出ていたぶんを含んでいた。特異点を直すと +20.4 に戻り、散らばりは
+# 12.2 ポイント → 5.1 ポイントになる。**壊れたという結論は変わらない**（alto だけ
+# 21% を割る）が、**壊れ方の大きさは実測ではなくバグが決めていた**。
+# 帯は 0.15〜0.30 に戻す ―― 3 サイズとも入るので、そのほうが検知が細かい。
 IN_TUNE_VOLUME_RATIO = (0.15, 0.30)
 
 
@@ -287,8 +306,16 @@ def test_bore_length_is_the_same_fraction_of_overall_length():
              for tid in SIZES}
     # 独立に実測した 2 本が一致することがそもそもの根拠。
     assert fracs["soprano"] == pytest.approx(fracs["tenor"], rel=0.01), fracs
-    for tid, f in fracs.items():
-        assert 0.53 < f < 0.54, (tid, f)
+    for tid in ("soprano", "tenor"):
+        assert 0.53 < fracs[tid] < 0.54, (tid, fracs[tid])
+    # **アルトはもうこの規則から来ていない。** PHROX のティップ端→窓の後縁の実測
+    # 39.4mm が、窓の後端とボアの始まりのあいだに要る 4.0mm と両立しなくなり、
+    # bore_length を 49.05（＝この割合）から 48.30 へ下げた（2026-09-05、
+    # docs/print-inspection.md §11.4）。**上限であって実測ではない**ので、
+    # ここは「割合の外に出たこと」だけを固定する —— 割合へ戻ったなら、それは
+    # 実測のほうを落としたということ。
+    assert fracs["alto"] == pytest.approx(48.3 / 91.7, abs=0.001), fracs
+    assert fracs["alto"] < 0.53, fracs
 
 
 def test_tight_verdict_does_not_claim_precision_it_lacks():
@@ -372,18 +399,27 @@ def test_fast_tuning_never_cries_unreachable_on_its_own():
 
     「この形状はチューニングでは合わせられない」は形状側を直せという強い主張で、
     線形推定の粗さで言ってはいけない。実測で誤警報が出た組合せを固定してある:
-    テナーのボアを 46mm（既定 57.5）にして `cork_depth` を上限 32mm へ持っていくと、
-    推定は 1.61mm（実用域 3〜32 の外）だが厳密解は 5.05mm で**域内**。
+    テナーのボアを 38mm（既定 57.5）にして `cork_depth` を上限 32mm へ持っていくと、
+    推定は 1.25mm（実用域 3〜35 の外）だが厳密解は 9.72mm で**域内**。
+    **8.47mm ぶんの誤警報**を厳密解が救っている。
+
+    以前ここはボア 46mm（推定 1.61 → 厳密 5.05）を使っていた。`cavity_floor_y` の
+    特異点を直して床が実物の深さへ戻ったら、46mm では推定が域内（22.08）に収まって
+    ガードを踏まなくなった。**ガードが消えたのではなく、この設定が当たらなくなった
+    だけ** —— 38mm 以下では今も踏む（掃引で確認）。
     """
     from saxsketch.acoustics import openwind_bridge as ob
-    p = dict(_template_params("mouthpiece", "tenor"), bore_length=46.0, cork_depth=32.0)
+    p = dict(_template_params("mouthpiece", "tenor"), bore_length=38.0, cork_depth=32.0)
     si = _size_info("tenor")
     t = ob.tuning_position(p, si)
     assert t["method"] == "solved", t          # 域外に出かけたので解き直している
     assert t["reachable"], t
-    assert t["in_tune_mm"] == pytest.approx(5.05, abs=0.5), t
-    # 本当に域外の形状は域外のまま返す（解き直しても救われない）
-    far = dict(p, bore_length=40.25)
+    assert t["in_tune_mm"] == pytest.approx(9.72, abs=0.5), t
+    # 本当に域外の形状は域外のまま返す（解き直しても救われない）。
+    # 全長を下限 80.5mm まで詰めると零点が −6.15mm ＝ 実用域を**下に**外れる。
+    # 両端のセントが同符号で挟めないので `method` は "linear" のまま
+    # （そこは `tuning_position` の設計どおり ―― 伝えたいのは reachable=False）。
+    far = dict(p, overall_length=80.5)
     tf = ob.tuning_position(far, si)
     assert not tf["reachable"], tf
 
@@ -565,6 +601,381 @@ def test_window_length_says_when_it_stops_doing_anything():
         assert profiles.cavity_layout_error(wide) is None, tid
 
 
+def test_window_length_does_not_touch_the_tip():
+    """**ウィンドウ長は先端の形に効いてはいけない。**
+
+    窓を伸ばすことは「床が上がってくる位置が後ろへ動く」ことであって、
+    「空洞全体が深くなる」ことではない。この 1 行を守っていなかったのが
+    `cavity_floor_y` の旧実装で、実測テーブル `_CAVITY_D` を**振幅方向の
+    アフィン** `a·(D(σ) − t0)`（`a = target/(D(1) − D(s_we))`）で端条件へ
+    合わせていた。`_CAVITY_D` は σ=`_CAVITY_D_ZERO` で 0 を横切るので、
+    s_we がそこに載っている間だけ a≈1 になる —— そして 3 サイズともたまたま
+    載っていた（soprano 0.8408 / tenor 0.8380 / 旧 alto 0.8382）。
+
+    **「揃い」に幾何コードが荷重を掛けていた。** アルトの窓を実測へ直した
+    （35.02 → 38.67）とたんに s_we が 0.9078 へ動き、分母が −0.367 → −0.098 に
+    縮んで a=3.48。床が丸ごと 3.5 倍深くなり、先端の落とし込み D(0)=0.100 が
+    2.73mm に化けて**ティップレールのくさびが消えた**（空洞高さ 0.60 → 4.44mm）。
+    利用者が 3D ビューで見つけた —— テストも掃引も素通りしていた。
+
+    いまは σ を写像して合わせるので、σ=0 は必ず 0 へ写り先端は動かない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        spec = next(s for s in comp.param_specs() if s.key == "window_length")
+        tips = []
+        wl = spec.min
+        while wl <= spec.max + 1e-9:
+            p = dict(base, window_length=wl)
+            assert profiles.cavity_layout_error(p) is None, (tid, wl)
+            tips.append(profiles.cavity_stations(p)[0]["h"])
+            wl += 2.0
+        # 先端の空洞高さは可動域全域で動かない（実測 D(0) がそのまま出る）。
+        assert max(tips) - min(tips) < 0.02, (tid, min(tips), max(tips))
+        # 旧実装はここで 4.44mm まで開いた。1.0mm は「くさびが立っている」の側。
+        assert max(tips) < 1.0, (tid, max(tips))
+
+
+def test_cavity_floor_meets_both_end_conditions():
+    """床は窓の終端で D=0、ボアの始まりで F=−bore_radius。
+
+    写像で合わせているので、s_we がどこにあっても両方が成り立つ。旧実装は
+    振幅を掛けて合わせており、`a` が s_we → 1 で**発散**した（窓の後端から
+    ボアまでの間隔で見ると 6.9mm で a=0.97 / 4.0mm で 3.48 / 1.0mm で 12.30）。
+    `window_end_z` の `zb − 4.0` が唯一の歯止めになっていた。
+    """
+    for tid in SIZES:
+        base = _template_params("mouthpiece", tid)
+        # 窓の後端をボアへ寄せていく（旧実装が壊れた向き）。
+        for gap in (10.0, 8.0, 6.0, 5.0, 4.0):
+            zb0 = profiles.bore_start_z(base)
+            p = dict(base, bore_length=base["overall_length"]
+                     - (profiles.window_end_z(base) + gap))
+            if profiles.cavity_layout_error(p) is not None:
+                continue
+            rb, zb = profiles.bore_radius(p), profiles.bore_start_z(p)
+            z_we = profiles.window_end_z(p)
+            d_we = (profiles.cut_top_y(p, z_we)
+                    - profiles.cavity_floor_y(p, z_we)) / rb
+            # 窓はそこで閉じる（`_soft_max` の丸めぶんだけ残る）
+            assert abs(d_we) < 0.01, (tid, gap, d_we)
+            # ボアの始まりで床はボア半径ぶん下（同じく丸めぶん）
+            assert profiles.cavity_floor_y(p, zb) == pytest.approx(-rb, abs=0.05), (tid, gap)
+            # 先端は間隔に依らない
+            assert profiles.cavity_stations(p)[0]["h"] < 1.0, (tid, gap)
+            assert zb0 > 0
+
+
+def test_airway_never_narrows_behind_the_tip_by_default():
+    """息の通り道は入口（ティップ）がいちばん狭くあること。
+
+    リード先端から入った息が奥でさらに絞られては吹けない。**比較の相手は
+    入口自身**なので、この判定には閾値が要らない（この repo で根拠の無い
+    丸い数字を増やさずに済む数少ない判定）。3 サイズとも既定では最狭部が
+    z=0 ＝ 入口そのもので、警告は出ない。
+
+    バッフルを上げると奥が絞れて警告が出る。**ティップ開きを広げるのは
+    対策にならない** —— 上がるのは入口だけで奥は動かないので、比はかえって
+    悪くなる。助言がそちらを勧めないことも見る。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        base = _template_params("mouthpiece", tid)
+        ent, h_min, z_min = profiles.airway_min(base)
+        assert z_min == pytest.approx(0.0), (tid, z_min)
+        assert h_min == pytest.approx(ent), (tid, h_min, ent)
+        assert not [w for w in profiles.cavity_warnings(base) if "通り道" in w], tid
+
+        comp = reg.make_component("mouthpiece", tid)
+        bh_max = next(s.max for s in comp.param_specs() if s.key == "baffle_height")
+        high = dict(base, baffle_height=bh_max)
+        ent2, h2, z2 = profiles.airway_min(high)
+        assert z2 > 0.0 and h2 < ent2, (tid, h2, ent2)
+        why = [w for w in profiles.cavity_warnings(high) if "通り道" in w]
+        assert why, tid
+        assert "ティップ開きを広げると悪くなります" in why[0], (tid, why)
+
+
+def test_pchip_rejects_duplicate_knots_by_name():
+    """**同じ x を 2 つ渡したら、名指しで落ちること。**
+
+    `_pchip_table` は区間幅 `h[i]` で割る。x が重なると `ZeroDivisionError` が
+    リスト内包の奥から出るだけで、**どの表が壊れたか分からない**。
+    `profiles` には `s_we` / `s_th` / `s_ch` から動的に組む表が 6 か所あり、
+    どれも退化しうる（実際 `_floor_limit` が踏んでいた）ので、犯人が言える形にする。
+    """
+    with pytest.raises(ValueError) as e:
+        profiles._pchip([(0.0, 0.0), (0.5, 1.0), (0.5, 2.0), (1.0, 3.0)], 0.3)
+    assert "0.5" in str(e.value)
+    # 正常な表は今までどおり通る（ガードが素通りを壊していないこと）
+    assert profiles._pchip([(0.0, 0.0), (0.5, 1.0), (1.0, 2.0)], 0.5) == pytest.approx(1.0)
+
+
+def test_floor_limit_survives_a_window_that_reaches_the_bore():
+    """**窓の後端がボアに寄っても床の許容下限が落ちないこと。**
+
+    `_floor_limit` は `(0,0) (s_we,0) (min(s_we+0.06,1),1) (1,1)` という表を組んで
+    いた。`s_we >= 0.94` で第 3・第 4 節点が x=1.0 で衝突し、`_pchip_table` が
+    `ZeroDivisionError`。閾値は `gap <= 0.06*zb` なのでサイズで変わり、
+    **tenor は現在の壁 `zb − 4.0` から 1.0mm しか離れていなかった**
+    （soprano 1.99 / alto 2.60 / tenor 3.00mm でクラッシュ）。
+
+    `5fb0bf4` で消した `cavity_floor_y` の特異点と**同じ型**（区間幅で割る式が
+    退化する）で、**同じ壁の裏に 2 つ並んでいた**。`zb − 4.0` は幾何の壁ではなく
+    バグを覆っていた蓋だったので、蓋を外す前にこちらを塞ぐ。
+    """
+    for tid in SIZES:
+        p = _template_params("mouthpiece", tid)
+        zb = profiles.bore_start_z(p)
+        for s_we in (0.80, 0.90, 0.9399, 0.94, 0.9401, 0.97, 0.99, 0.999):
+            q = dict(p, chamber_to_bore_mm=zb * (1.0 - s_we), window_length=60.0)
+            assert profiles.window_end_z(q) / zb == pytest.approx(s_we, abs=1e-9), tid
+            for z in (0.0, 0.5 * zb, 0.99 * zb, zb):
+                profiles._floor_limit(q, z)      # 例外を出さないことが主張
+            st = profiles.cavity_stations(q)
+            assert len(st) > 20, (tid, s_we, len(st))
+            assert st[0]["h"] < 1.0, (tid, s_we, st[0]["h"])
+
+
+def test_chamber_to_bore_is_a_parameter_and_its_default_changes_nothing():
+    """`zb − 4.0` をパラメータにしても既定形状が 1 ビットも動かないこと。
+
+    この壁は「チェンバー→ボアの遷移区間を残す」という慣習で、**幾何の成立条件
+    ではない**（成立条件は `cavity_layout_error` が別に見ている）。可動域を
+    広げるために表へ出すが、既定 4.0 のままなら形は変わってはいけない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        spec = next(s for s in comp.param_specs() if s.key == "chamber_to_bore_mm")
+        assert spec.limit_kind == "convention"
+        p = _template_params("mouthpiece", tid)
+        assert p["chamber_to_bore_mm"] == pytest.approx(4.0), tid
+        # 明示しない古いプロジェクトでも同じ形になること（既定で埋まる）
+        bare = {k: v for k, v in p.items() if k != "chamber_to_bore_mm"}
+        st_a = profiles.cavity_stations(dict(p))
+        st_b = profiles.cavity_stations(dict(bare, chamber_to_bore_mm=4.0))
+        assert len(st_a) == len(st_b), tid
+        for a, b in zip(st_a, st_b):
+            assert a["h"] == pytest.approx(b["h"], abs=1e-12), tid
+
+
+def test_every_mouthpiece_param_says_where_its_wall_came_from():
+    """**壁は 3 つに分類されていて、分類していないものが残っていないこと。**
+
+    実測由来の壁（`body_dia` の下限＝ソプラノ実測）と、誰も測っていない暫定値
+    （`beak_height` の既定は自認で「幾何的な暫定値」）と、幾何の成立条件
+    （`shoulder_fullness` の ±1 は定義域そのもの）が、コード上まったく同じ顔を
+    していた。分類を必須にして、**出所が無いものは「無い」と言わせる**
+    ——空欄を埋めるために出所を発明しない。
+    """
+    from saxsketch.core.schema import LIMIT_KINDS
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = comp.param_specs()
+        assert len(specs) == 33, (tid, len(specs))
+        for s in specs:
+            assert s.limit_kind in LIMIT_KINDS, (tid, s.key, s.limit_kind)
+            # 分類されていないパラメータを残さない（既定のままにしない）
+            assert s.limit_kind != "unclassified", (tid, s.key)
+            # 壁を緩めた側は必ず帯の外にある（緩めていないなら None のまま）
+            if s.hard_min is not None:
+                assert s.min is not None and s.hard_min <= s.min, (tid, s.key)
+            if s.hard_max is not None:
+                assert s.max is not None and s.hard_max >= s.max, (tid, s.key)
+
+
+def test_walls_without_hard_bounds_still_clamp_exactly_as_before():
+    """**`hard_*` を入れていないパラメータの挙動は 1 ビットも変えない。**
+
+    分類を足しただけで可動域が動いてしまうと、「分類する」作業が黙って設計を
+    変える作業になる。`hard_*` が `None` のものは帯がそのまま壁。
+    """
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    for s in comp.param_specs():
+        if s.type not in ("float", "int") or s.min is None or s.max is None:
+            continue
+        if s.hard_min is None:
+            assert s.validate(s.min - 10.0) == pytest.approx(s.min), s.key
+        if s.hard_max is None:
+            assert s.validate(s.max + 10.0) == pytest.approx(s.max), s.key
+
+
+def test_a_widened_wall_lets_the_value_leave_the_band():
+    """`hard_*` を入れた帯は**外へ出られる**こと（出られなければ広げた意味がない）。
+
+    `chamber_to_bore_mm` が Phase A で唯一実際に広げたパラメータ。
+    壁は掃引で測った値で、帯（2〜10mm）はその内側にある。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        s = next(x for x in comp.param_specs() if x.key == "chamber_to_bore_mm")
+        assert s.hard_min is not None and s.hard_max is not None, tid
+        assert s.hard_min < s.min and s.hard_max > s.max, tid
+        # 帯の外だがまだ壁の内側 —— **丸めない**
+        assert s.validate(s.min - 0.5) == pytest.approx(s.min - 0.5), tid
+        assert s.validate(s.max + 5.0) == pytest.approx(s.max + 5.0), tid
+        # 壁の外 —— 丸める
+        assert s.validate(s.hard_min - 1.0) == pytest.approx(s.hard_min), tid
+        assert s.validate(s.hard_max + 1.0) == pytest.approx(s.hard_max), tid
+
+
+def test_clamping_is_never_silent():
+    """**丸めたら必ず何をしたか言うこと**（黙ったクランプの 8 例目を塞ぐ）。
+
+    以前は `ParamSpec.validate` が範囲外を無言で丸め、フロントは差分を拾って
+    値を戻すだけだった。利用者にはスライダが勝手に戻ったようにしか見えない。
+    報告には**値・単位・壁の種別・出所**が入る。
+    """
+    from saxsketch.core.schema import ParamSet
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}))
+
+    ps.apply({"min_wall": 0.2})                     # 製造の壁（下限 1.2）
+    assert len(ps.adjustments) == 1
+    a = ps.adjustments[0]
+    assert a["key"] == "min_wall" and a["edge"] == "min"
+    assert a["applied"] == pytest.approx(1.2) and a["requested"] == pytest.approx(0.2)
+    assert a["limit_kind"] == "manufacturing"
+    for frag in ("最小肉厚", "0.2", "1.2", "mm", "製造の制約", "出所:"):
+        assert frag in a["message"], (frag, a["message"])
+
+    # 帯の中なら黙っていてよい（報告は「丸めたとき」だけ）
+    ps.apply({"min_wall": 2.0})
+    assert ps.adjustments == []
+
+    # 出所が無いものは「記載なし」と言う。発明しない。
+    ps.apply({"tip_opening": 9.0})
+    assert "記載なし" in ps.adjustments[0]["message"], ps.adjustments[0]["message"]
+
+    # 直前の適用ぶんだけが残る（積み上がらない）
+    ps.apply({"tip_opening": 2.4})
+    assert ps.adjustments == []
+
+
+def test_api_reports_clamping_to_the_browser(tmp_path):
+    """クランプ報告が**画面まで届く**こと。端から端までの固定。
+
+    サーバが丸めてもフロントに届かなければ黙ったのと同じ。空でも必ずキーを
+    返す（フロントは前回の報告を消す判断をこのキーだけで行う）。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+
+    r = c.put("/api/project/params", json={"params": {"min_wall": 0.2}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["params"]["min_wall"] == pytest.approx(1.2)
+    assert len(body["adjustments"]) == 1
+    assert "最小肉厚" in body["adjustments"][0]["message"]
+
+    # 帯の中へ戻したら報告は消える（キーは残る）
+    r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
+    assert r.json()["adjustments"] == []
+
+    # 成立しない組で弾かれたときは**丸めの話をしない**（値は保存されていない）。
+    # `body_dia` 下限と `shank_dia` 上限はどちらも各自の帯の中なので丸めは起きず、
+    # 組で `outer_layout_error` に当たる ——「弾いた」と「丸めた」が混ざらないこと。
+    r = c.put("/api/project/params",
+              json={"params": {"body_dia": 18.0, "shank_dia": 28.0}})
+    assert r.status_code == 400, r.text
+    assert "最大径" in r.json()["detail"]
+    # 弾かれたあとサーバ側は前の値のまま（丸めの報告も残っていない）
+    r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
+    assert r.json()["adjustments"] == []
+    assert r.json()["params"]["body_dia"] == pytest.approx(29.1)
+
+
+def test_widening_a_band_does_not_leave_the_analysis_silently_flat():
+    """**帯の外へ出たとき、動かない指標は「動かない」と言うこと。**
+
+    Tier2 は文献傾向に当てた回帰で、有効範囲は帯とほぼ同じ。壁を広げたぶん
+    その外へ出られるようになったが、**外挿する根拠は無い**ので指標は頭打ちに
+    なる。黙って平らになるのはこの repo で何度も踏んでいる型（スライダを
+    動かしても何も起きないのに気づけない）なので、`note` で言う。
+    """
+    from saxsketch.acoustics import brightness as br
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    p = _template_params("mouthpiece", "alto")
+
+    inside = br.tone_metrics(p)
+    assert "有効範囲の外" not in inside["note"]
+
+    out = br.tone_metrics(dict(p, tip_opening=4.0))
+    assert "有効範囲の外" in out["note"]
+    assert "ティップ開き" in out["note"] and "4" in out["note"]
+    # 頭打ちなので値は帯の端と同じ
+    edge = br.tone_metrics(dict(p, tip_opening=3.2))
+    for k in br.METRIC_KEYS:
+        assert out[k] == pytest.approx(edge[k]), k
+
+    # **感度表は壁で止める**（帯で止めると 1 段が符号ごと壊れる）
+    t = br.sensitivity(dict(p, tip_opening=4.0), comp.param_specs())
+    assert t["table"]["tip_opening"]["step"] == pytest.approx(0.05)
+
+
+def test_survey_form_accepts_measurements_outside_the_band():
+    """採寸フォームは**壁**で受けること。実物は帯の外にあることがある。
+
+    帯で受けると測った値が別物にすり替わる —— `body_dia` の下限を
+    ソプラノ実測が入るまで下げた経緯がまさにそれ。
+    """
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    tg = {d["key"]: d for d in comp.survey_targets()["params"]}
+    specs = {s.key: s for s in comp.param_specs()}
+    for key, d in tg.items():
+        lo, hi = specs[key].bounds()
+        assert d["min"] == lo and d["max"] == hi, key
+    # 実際に広げた 3 本は帯より広いこと（＝この経路が壁を見ている証拠）
+    assert tg["tip_opening"]["min"] < specs["tip_opening"].min
+    assert tg["baffle_height"]["min"] < specs["baffle_height"].min
+    assert tg["window_length"]["min"] < specs["window_length"].min
+
+
+def test_goalseek_never_drags_a_deliberate_value_back_into_the_band():
+    """ゴールシークは帯の中を探すが、**利用者が既に外にいるなら含めて探す**。
+
+    含めないと、提案を受け入れた瞬間に帯の中へ黙って引き戻される ——
+    利用者が意図して選んだ値を消すことになる。
+    """
+    from saxsketch.acoustics import goalseek as gs
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    specs = comp.param_specs()
+    spec_map = {s.key: s for s in specs}
+    p = _template_params("mouthpiece", "alto")
+
+    def bounds_for(params):
+        keys = [k for k in gs.OPT_KEYS if k in spec_map]
+        out = {}
+        for k in keys:
+            s, v = spec_map[k], float(params[k])
+            out[k] = (min(s.min, v) if s.min is not None else None,
+                      max(s.max, v) if s.max is not None else None)
+        return out
+
+    assert bounds_for(p)["tip_opening"] == (spec_map["tip_opening"].min,
+                                            spec_map["tip_opening"].max)
+    wide = dict(p, tip_opening=4.0)
+    assert bounds_for(wide)["tip_opening"][1] == pytest.approx(4.0)
+    # 実際に走らせても提案が現在値を下回らない（帯へ引き戻さない）
+    r = gs.goal_seek(wide, specs, {"power": 9.0}, comp.size_info,
+                     lambda q: comp.cavity_volume(q))
+    assert r["proposal"]["tip_opening"] >= 3.2 - 1e-9
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 
@@ -675,7 +1086,35 @@ def test_cancelled_dialog_leaves_no_process(monkeypatch, tmp_path):
 
 
 def _process_gone(pid: int) -> bool:
-    """終了済みか。**ゾンビも終了扱い**（親が回収する前に見ることがある）。"""
+    """終了済みか。**ゾンビも終了扱い**（親が回収する前に見ることがある）。
+
+    **見る場所が OS で違う。** 以前は `/proc/<pid>/stat` だけを見ていたので、
+    `/proc` の無い **Windows では常に「もう死んでいる」**を返していた。これを
+    使う `test_cancelled_dialog_leaves_no_process` は
+    **Windows で powershell.exe が積み上がるのを捕まえるために書いたテスト**
+    なのに、その判定が Windows でだけ動かない —— 起動確認の assert で落ちて、
+    肝心の「キャンセル後に死ぬか」まで一度も到達していなかった。
+
+    **`os.kill(pid, 0)` は使ってはいけない。** Windows の `os.kill` は signal を
+    見ずに `TerminateProcess` を呼ぶので、生存確認のつもりで相手を殺す。
+    """
+    import sys
+    if sys.platform == "win32":
+        import ctypes
+        # 終了済みでもハンドルは開けるので、開けたかではなく**終了コード**で見る
+        # （STILL_ACTIVE = 259）。実際に 259 で終わったプロセスは生存と誤るが、
+        # ここの子は sleep か強制終了なのでその値は出ない。
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return True
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return True
+            return code.value != 259
+        finally:
+            k32.CloseHandle(h)
     stat = Path(f"/proc/{pid}/stat")
     if not stat.exists():
         return True
@@ -922,9 +1361,16 @@ def test_table_reaches_reed_heel():
                 SOPRANO_TABLE_END_MEASURED_MM, abs=0.5), tid
 
 
-#: アルトのテーブル平坦部の終端 [mm]。**実測ではなく実測 2 件から出る量**
-#: （最大径の位置 21.4 と傾斜テーブルの構成式）。どちらの実測にも直接は現れない。
-ALTO_TABLE_END_MM = 73.0
+#: アルトのテーブル平坦部の終端 [mm]。**実測ではなく実測から出る量**
+#: （最大径の位置 21.4・シャンク径・傾斜テーブルの構成式）。どの実測にも直接は
+#: 現れない。**2026-09-05 に 73.0 → 73.87 へ動いた** —— `shank_dia` が
+#: 21.08（テナーからの径比）から実測 23.20 になり、肩の段差が半径 4.01 → 2.95mm と
+#: 浅くなったため。テーブルの構成式は変えていない。
+ALTO_TABLE_END_MM = 73.87
+
+#: 同じ終端を、`shank_length` を借り物（テナー比 0.1628 × 全長 = 14.93）へ
+#: 戻したときの値 [mm]。差 2.57mm が退行の検出量。
+ALTO_TABLE_END_BORROWED_MM = 71.30
 
 
 def test_alto_needed_both_measurements_to_stay_in_spec():
@@ -939,6 +1385,17 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
     ここが warn に戻ったら `shank_length` が借り物へ差し戻された疑いがある。
     未実測の借り物が判定を汚す 3 例目（コルク帯 26.0→33.7、挿し込み限界
     33.7→27.1 に続く）を、逆戻りしないように固定する。
+
+    **2026-09-05: その warn による検出は効かなくなった。**
+    `shank_dia` が借り物 21.08 から実測 23.20 になって肩の段差が浅くなり、
+    テーブル終端が 73.04 → **73.87** へ後退した。借り物へ戻したときの終端も
+    70.31 → **71.30** に上がり、リード上端 71.10 を **0.20mm 上回る**ので
+    **もう warn が出ない**。元の余裕が 0.79mm しか無かったところへ、
+    **まったく別の量の実測が 0.83mm 押した**だけで検出器が沈黙した。
+
+    だから残す検出量は warn ではなく**終端の落ち込み**（借り物にすると 2.57mm
+    手前に来る）にする。**warn が出なくなったこと自体も固定する** ——
+    黙って消すと「昔から出ていなかった」と読めてしまう。
     """
     from saxsketch.instruments.saxophone.components import reference_check
     si = _size_info("alto")
@@ -950,10 +1407,18 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
     assert profiles.table_cut_end_z(p) > reed_hi
     assert reference_check.mouthpiece_card(p, si)["status"] == "ok"
 
-    # 借り物（テナー比 0.1628 × 全長 91.7 = 14.93）に戻すと軽微が出る
+    # 借り物（テナー比 0.1628 × 全長 91.7 = 14.93）に戻すと終端が 2.57mm 手前へ来る。
+    # **これが退行の検出量**。card の status では、もう分かれない（docstring）。
     borrowed = dict(p, shank_length=14.93)
-    assert profiles.table_cut_end_z(borrowed) < reed_hi
-    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "warn"
+    assert profiles.table_cut_end_z(borrowed) == pytest.approx(
+        ALTO_TABLE_END_BORROWED_MM, abs=0.1)
+    assert profiles.table_cut_end_z(p) - profiles.table_cut_end_z(borrowed) ==         pytest.approx(ALTO_TABLE_END_MM - ALTO_TABLE_END_BORROWED_MM, abs=0.1)
+
+    # **検出器が沈黙したことを固定する。** 借り物でもリード上端をわずかに超えるので
+    # warn が出ない。余裕は 0.20mm しかなく、**次の実測でまた裏返りうる**。
+    assert profiles.table_cut_end_z(borrowed) > reed_hi
+    assert profiles.table_cut_end_z(borrowed) - reed_hi < 0.3
+    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "ok"
 
 
 def test_bore_clears_corked_tenon():
@@ -3421,8 +3886,20 @@ def test_impedance_param_sensitivity(alto):
     # チェンバー〜スロートの区間が 3 倍長かった。実測の WindyCity はボアが全長の
     # 半分以上を占めるので、スロートは短い局所的な絞りにしかならない。合格させに
     # 行くのではなく「ノブが死んでいない」ことだけを見る。
+    #
+    # **2026-09-05: 3.01 → 1.372Hz。** アルトへ PHROX の窓の実測が入って
+    # `window_length` が 35.02 → 38.67 になったぶん。窓が長いほどチェンバー〜
+    # スロートの区間が短くなり、`throat_ratio` の梃子が短くなる。**床の特異点を
+    # 直したぶんではない**（旧テンプレで 2.854 → 2.853 と 0.001 しか動かない）。
+    #
+    # なお 06e67ab の間はここが 2.588 で通っていたが、**そのときピークは 8 本しか
+    # 出ていなかった**（特異点で床が 3.5 倍深く、高次が平たくなって検出から落ちた）。
+    # 直すと 12 本に戻り、同じ 12 本どうしで比べた値が 1.372。**06e67ab で
+    # 「共鳴 12 → 8 は窓の長さの効果」と書いたのは誤りで、あれはバグだった。**
+    # 閾値は従来どおり観測値の半分に置く。
     shift = sum(abs(narrow[i]["freq"] - base[i]["freq"]) for i in range(3, 8))
-    assert shift > 1.5, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
+    assert len(base) == len(narrow) == 12, (len(base), len(narrow))
+    assert shift > 0.68, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
     assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 
@@ -4577,6 +5054,97 @@ def test_set_placement_is_relative_to_active():
         assert back == pytest.approx(a_rd, abs=1e-9), v
 
 
+def test_the_app_shell_is_never_cached_but_assets_are():
+    """殻は毎回取り直し、資産は永久にキャッシュしてよいこと。
+
+    **古いページが黙って動き続ける経路を塞ぐ。** サーバだけ新しい状態は
+    エラーにならず、それらしく組み上がった絵が出るので気付けない
+    （2026-09-03: フロントが `flip_z` を落とし、リードがマウスピースの
+    反対側に付いて見えた）。資産は内容ハッシュ付きの名前なので、殻さえ
+    取り直せば必ず現行の世代になる。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server import app as appmod
+    if not appmod.FRONTEND_DIST.exists():
+        pytest.skip("frontend/dist が無い（未ビルド）")
+    c = TestClient(appmod.app)
+    r = c.get("/")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-store"
+
+    asset = appmod.frontend_asset()
+    assert asset and asset.endswith(".js")
+    a = c.get(f"/assets/{asset}")
+    assert a.status_code == 200
+    assert "immutable" in a.headers["cache-control"]
+
+
+def test_capabilities_reports_the_running_app_generation():
+    """`/api/capabilities` の `asset` が、殻が実際に読む名前と一致すること。
+
+    **ビルド時に別途仕込まない** —— `index.html` の実物から読む。埋め込むと
+    「配っている物」と「世代を名乗る値」が別々に古くなれるので、食い違いを
+    見つけるための値が自分で食い違える。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server import app as appmod
+    if not appmod.FRONTEND_DIST.exists():
+        pytest.skip("frontend/dist が無い（未ビルド）")
+    c = TestClient(appmod.app)
+    asset = c.get("/api/capabilities").json()["asset"]
+    assert asset and f'src="/assets/{asset}"' in c.get("/").text
+
+
+def test_set_view_keeps_the_reed_on_the_table_side():
+    """どの部品を基準にしても、リードは**テーブル側**に付くこと。
+
+    4-D.5 のテストは「肉が胴へ潜らないこと」しか見ていなかった。**潜っていないが
+    反対側（ビーク側）に付く**という状態が実在する —— 実際 2026-09-03 に
+    「セット表示でリードが胴の反対側」と報告が出た（原因は配置ではなく、
+    古いページが `flip_z` を落としていたこと）。そのとき組んだ姿は
+    マウスピース y[-25.468, +2.817] で、リード y[0.000, 2.800] は**潜っていない**
+    ——「潜っていない」だけでは合否が分けられなかった。
+
+    見るのは**テーブル平面に対してリードの肉とビークが反対側にあるか**。
+    リードもマウスピースも軸上（x≈0）にあるので、射影は `y·cos(方位)` になり
+    **符号は視点に依らない**。だから画面でも同じ判定が使える。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.instruments.saxophone.components import profiles
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    from saxsketch.server.app import app
+    c = TestClient(app)
+
+    for tid in SIZES:
+        _new_set(c, tid)
+        c.post("/api/set/member/add", json={"component_id": "reed"})
+        m = _template_params("mouthpiece", tid)
+        r = _template_params("reed", tid)
+        z = 40.0                      # 3 部品すべてが在る中ほど
+        probes = {
+            "table": (0.0, profiles.table_plane_y(m, z), z),
+            "beak": (0.0, profiles.outer_radius(m, z), z),
+            "meat": (0.0, rp.thickness(r, z, 0.0), z),
+        }
+        for active in ("mouthpiece", "ligature", "reed"):
+            c.post("/api/set/active", json={"component_id": active})
+            pl = {p["component_id"]: p
+                  for p in c.get("/api/set/placement").json()["parts"]}
+            pl[active] = {"origin": [0.0, 0.0, 0.0],
+                          "rotate_x_deg": 0.0, "flip_z": False}
+            table = _apply_placement(pl["mouthpiece"], probes["table"])
+            beak = _apply_placement(pl["mouthpiece"], probes["beak"])
+            meat = _apply_placement(pl["reed"], probes["meat"])
+            flat = _apply_placement(pl["reed"], (0.0, 0.0, z))
+            # リードの平らな底面はテーブル平面に載る
+            assert flat[1] == pytest.approx(table[1], abs=0.05), (tid, active)
+            # 肉とビークはテーブルの**反対側**
+            assert (meat[1] - table[1]) * (beak[1] - table[1]) < 0, (tid, active)
+            # 肉の伸びはリード厚ぶん（潜っていない、かつ離れてもいない）
+            assert abs(meat[1] - table[1]) == pytest.approx(
+                rp.thickness(r, z, 0.0), abs=0.05), (tid, active)
+
+
 def test_set_member_stl_endpoint(tmp_path):
     """合わせ表示用に部品ごとの STL が取れ、居ない部品は 404 になること。"""
     from fastapi.testclient import TestClient
@@ -4812,8 +5380,16 @@ def test_api_flow(tmp_path):
         "component_id": "mouthpiece"})
     assert r.status_code == 200
 
+    # 上限にクランプ。**止まるのは「勧める帯」の 3.2 ではなく「壁」の 5.2**
+    # （Phase 4-E で `tip_opening` の壁を掃引で測って広げた。`docs/param-limits.md`）。
+    # 帯と壁を分けた以上、ここで 3.2 に戻ったら広げた意味が無い。
     r = c.put("/api/project/params", json={"params": {"tip_opening": 99.0}})
-    assert r.json()["params"]["tip_opening"] == 3.2  # 上限にクランプ
+    body = r.json()
+    assert body["params"]["tip_opening"] == 5.2
+    # **黙って丸めない。** 何をしたかが応答に載る
+    assert len(body["adjustments"]) == 1
+    assert "ティップ開き" in body["adjustments"][0]["message"]
+    assert body["adjustments"][0]["at"] == "wall"
 
     # 知らないコンポーネントは 400。`available()` が False のものも同じ経路を通る
     # （4-B.2a で `body` が実装され、いま `_Planned` のコンポーネントは 1 つも無い）。
@@ -4846,7 +5422,12 @@ def test_port_fallback():
     host = "127.0.0.1"
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     lsock.bind((host, 0))
-    lsock.listen(1)
+    # **backlog は現実的な深さを取る。** 1 にすると `_in_use` の 1 回目の接続が
+    # accept されないまま溜まってキューが埋まり、**2 回目の接続が拒否されて
+    # 「空いている」に見える**（Windows で実測。1 回目 True → 以後ずっと False）。
+    # 本番の相手は uvicorn なので深い。1 にするのは相手が非現実的なだけで、
+    # `_free_port` の契約（使用中のポートを飛ばす）は変わらない。
+    lsock.listen(128)
     busy = lsock.getsockname()[1]
     try:
         assert srv._in_use(host, busy) is True
@@ -5809,7 +6390,12 @@ def test_dimensions_report_the_frozen_window():
     テナーは全域が効く）。図がスライダの値を書き写す実装だと、この帯で
     **形と数字が食い違ったまま**になる。
     """
-    frozen = {"soprano": 28.54, "alto": 37.92}
+    # **アルトの天井は既定値そのものになった**（2026-09-05）。PHROX の窓の実測で
+    # window_length 38.67 / bore_length 48.30 を組で入れた結果、既定がちょうど
+    # 天井に載っている ＝ **スライダを 1 目盛り上げた瞬間からクランプ**。
+    # 選択の副作用ではなく実測の帰結（bore_length を上限より下げれば余地は
+    # 増えるが、その値には根拠が無い）。
+    frozen = {"soprano": 28.54, "alto": 38.67}
     for tid in SIZES:
         comp, base = _dim_component("mouthpiece", tid)
         d = next(x for x in comp.dimensions(base) if x["key"] == "window_length")

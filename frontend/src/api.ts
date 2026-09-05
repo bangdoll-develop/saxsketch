@@ -3,8 +3,22 @@
 export interface Choice { value: string; label: string }
 export interface ParamSpec {
   key: string; label: string; category: string; type: string; unit: string;
+  /** min/max は「勧める帯」。越えられない壁は hard_min/hard_max（null なら帯が壁）。 */
   default: unknown; min: number | null; max: number | null; step: number | null;
   choices: Choice[]; effect: string; advanced: boolean;
+  /** geometry | manufacturing | convention | unclassified */
+  limit_kind: string;
+  /** 帯の出所。空なら「出所の記載なし」と出す（発明しない） */
+  source: string;
+  hard_min: number | null; hard_max: number | null;
+}
+
+/** 帯／壁で丸めた 1 項目。**黙ってクランプしないための経路**（既知 8 例目）。 */
+export interface ParamAdjustment {
+  key: string; label: string; unit: string;
+  requested: number | string; applied: number | string;
+  /** edge: min|max。at: 帯（band）と壁（wall）のどちらに当たったか */
+  edge: string; at?: string; limit_kind: string; source: string; message: string;
 }
 export interface Tier1 {
   total_cc: number; effective_cc: number; target_cc: number;
@@ -265,6 +279,9 @@ export interface Capabilities {
   native_dialogs: boolean;
   host: "wsl" | "windows" | "linux";
   export_root: string;
+  /** サーバがいま配っているアプリの世代（`index-XXXX.js`）。dist 無し（開発
+   *  サーバ）なら null。自分が読み込んだスクリプト名と違えば、このページは古い。 */
+  asset: string | null;
 }
 
 const json = (body: unknown): RequestInit => ({
@@ -277,7 +294,8 @@ export const api = {
   newProject: (b: object) => req<ProjectData>("/api/project/new", json(b)),
   getProject: () => req<ProjectData>("/api/project"),
   putParams: (params: Record<string, unknown>) =>
-    req<{ params: Record<string, unknown>; simulation: Simulation; stale: boolean }>(
+    req<{ params: Record<string, unknown>; simulation: Simulation; stale: boolean;
+          adjustments: ParamAdjustment[] }>(
       "/api/project/params", { ...json({ params }), method: "PUT" }),
   putMeta: (b: object) => req("/api/project/meta", { ...json(b), method: "PUT" }),
   save: (path: string) => req<{ ok: boolean; path: string }>("/api/project/save", json({ path })),

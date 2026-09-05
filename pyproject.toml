@@ -20,6 +20,9 @@ dependencies = [
 dev = ["pytest>=8.0", "httpx>=0.27"]
 # Tier3 音響（OpenWind）。導入不可な環境では自作TMMへ自動フォールバックするため任意。
 acoustics = ["openwind>=0.9"]
+# 録音の検品（cad/inspection/analyze_recording.py）。ffmpeg 同梱で AAC を開ける。
+# 関数の中で import しているので、無くても他の検品スクリプトは動く。
+inspection = ["av>=14"]
 
 [build-system]
 requires = ["hatchling"]

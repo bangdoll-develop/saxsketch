@@ -24,6 +24,7 @@
   "bore_length": 38.3,
   "cork_depth": 23.5,
   "window_length": 27.27,
+  "chamber_to_bore_mm": 4.0,
   "reed_width": 12.9,
   "beak_height": 11.81,
   "body_dia": 25.0,

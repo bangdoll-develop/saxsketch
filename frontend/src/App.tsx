@@ -48,6 +48,11 @@ export default function App() {
   const [staleWarn, setStaleWarn] = useState(false);
   // 旧プロジェクトのパラメータ変換報告（サーバが `notices` で返す）
   const [notices, setNotices] = useState<string[]>([]);
+  // 帯／壁で丸めた報告（サーバが `adjustments` で返す）。**毎回入れ替える** ——
+  // スライダ 1 本ごとに出るものなので、積むと古い報告が残る。
+  const [adjust, setAdjust] = useState<string[]>([]);
+  // このページがサーバの配っているアプリより古いか（下の useEffect を参照）
+  const [staleApp, setStaleApp] = useState(false);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
 
   const [hasSection, setHasSection] = useState(false);
@@ -84,6 +89,16 @@ export default function App() {
     return () => clearTimeout(t);
   }, [error]);
 
+  // 丸めの報告も `error` と同じ間隔で引っ込める。**`notices` とは違う** ——
+  // あちらはプロジェクトを開いた 1 回きりなので触るまで残すが、こちらは
+  // スライダを動かすたびに出るので、残すと画面に貼り付いたままになる。
+  // 丸めた結果そのものはスライダの値として見えているので、説明は一度でよい。
+  useEffect(() => {
+    if (adjust.length === 0) return;
+    const t = setTimeout(() => setAdjust([]), 5000);
+    return () => clearTimeout(t);
+  }, [adjust]);
+
   useEffect(() => {
     if (!staleWarn) return;
     const t = setTimeout(() => setStaleWarn(false), 9000);
@@ -119,6 +134,24 @@ export default function App() {
       .then(() => setHasSection(true))
       .catch(() => { setHasSection(false); setViewMode("3d"); });
   }, [project]);
+
+  useEffect(() => {
+    // **このページが古くないか。** 殻は `no-store` で配っているので再読み込み
+    // すれば必ず最新になるが、開きっぱなしのタブはそれでは入れ替わらない。
+    // 古いまま動くと**エラーにならず、それらしく組み上がった絵が出る**ので
+    // 気付けない（2026-09-03: フロントが `flip_z` を落とし、セット表示で
+    // リードがマウスピースの反対側に付いて見えた）。だから明示的に出す。
+    //
+    // 突き合わせるのは**実際に読み込んだスクリプトの名前**。開発サーバでは
+    // `/assets/` 配下ではないので null になり、何も言わない。
+    const el = document.querySelector<HTMLScriptElement>(
+      'script[type="module"][src*="/assets/"]');
+    const mine = el?.src.split("/").pop() ?? null;
+    if (!mine) return;
+    api.capabilities()
+      .then((c) => setStaleApp(!!c.asset && c.asset !== mine))
+      .catch(() => {});
+  }, []);
 
   const regionKeys = useMemo(() => new Set(Object.keys(regions)), [regions]);
   const highlight = hoverKey ? regions[hoverKey] ?? null : null;
@@ -212,6 +245,8 @@ export default function App() {
       try {
         const r = await api.putParams(payload);
         setSim(r.simulation);
+        // クランプは黙って起きてはならない（既知 8 例目）。空でも必ず入れ替える。
+        setAdjust((r.adjustments ?? []).map((a) => a.message));
         // サーバ側でクランプされた値だけ拾い直す。丸ごと入れ替えると、値が
         // 同じでもオブジェクトが変わって断面が無駄に取り直される。
         setParams((prev) => {
@@ -224,6 +259,7 @@ export default function App() {
         if (prev && prev.stale !== r.stale) setManualEdit({ ...prev, stale: r.stale });
       } catch (e) {
         setError(String((e as Error).message));
+        setAdjust([]);   // 弾かれた ＝ 値は保存されていない。丸めの話は残さない
         // 値の組が成立せずサーバが弾いた場合、サーバ側は前の値のまま。楽観更新した
         // ぶんを**送ったキーだけ**戻す。戻さないと画面の値とサーバの値が食い違い、
         // 断面リクエスト（画面の値をクエリで渡す）が同じ理由で落ち続ける。
@@ -482,6 +518,12 @@ export default function App() {
                       onApplied={onSurveyApplied}
                       onClose={() => setDialog(null)} />
       )}
+      {staleApp && (
+        <div className="err-toast warn-toast">
+          ⚠ このページは古いアプリのまま動いています。<b>再読み込み</b>してください
+          （Ctrl+Shift+R）。3D の表示が実際の設計と食い違うことがあります。
+        </div>
+      )}
       {error && <div className="err-toast">{error}</div>}
       {staleWarn && (
         <div className="err-toast warn-toast">
@@ -493,6 +535,12 @@ export default function App() {
         <div className="err-toast warn-toast">
           ⚠ 保存時から変わったパラメータを変換しました:
           {notices.map((n, i) => <div key={i}>・{n}</div>)}
+        </div>
+      )}
+      {adjust.length > 0 && notices.length === 0 && !staleWarn && !error && (
+        <div className="err-toast warn-toast">
+          ⚠ 壁に当たったので値を丸めました:
+          {adjust.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}
     </>
