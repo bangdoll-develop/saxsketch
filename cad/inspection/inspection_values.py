@@ -50,10 +50,15 @@ MEASURED: dict[str, tuple[float, float]] = {
     "body_dia":       (29.10, 29.20),
     "shank_dia":      (21.10, 23.20),
     "bore_dia":       (15.90, 15.70),
-    "window_length":  (35.30, 39.30),
-    # 第2便（2026-09-05）。手順は §5.1（ティップ端でノギスをロックして和紙テープ）。
+    # 第2便（2026-09-05 未明）。手順は §5.1（ティップ端でノギスをロックして和紙テープ）。
     "beak_height":    (13.60, 11.60),
 }
+
+#: **`window_length`（窓の開口長）は 1 度も測っていない。**
+#: 09-02 に「ウィンドウ長」として記録した 35.30 / 39.30 は、実測者に確認したところ
+#: （2026-09-05）**ティップ端 → 窓の後縁**だった。同じ量を 09-05 にもう 1 度ずつ
+#: 測っているので、下の `TIP_TO_WINDOW_REAR` に **2 回の読みとして**入れてある。
+#: 窓の前縁は幅 `tip_rail_width` の面で、そこにノギスは当てられない。
 
 #: `alto.json` が**径量**に使っていた借り物の比（規格リード全長 71.5/78.0）。
 #: 実測でこの比が存在しないことが確定したあとも、テンプレートを実測で上書きした値が
@@ -61,16 +66,24 @@ MEASURED: dict[str, tuple[float, float]] = {
 #: 上書き済みの量では差が 0 になり、**外れていた幅が見えなくなる**。
 LEGACY_DIA_RATIO = 71.5 / 78.0
 
-#: ティップ端 → 窓の後縁 [mm]。**§5.2 の決着用の量**で、窓の開口長
-#: （`window_length`）とは **`tip_rail_width` ぶん**違う —— 窓の前縁はティップから
-#: 0.73mm 後ろにあり、その 0.73mm はノギスで位置決めできない。だから硬い
-#: ランドマークであるティップ端から測る。設計値はここに書かず、
-#: `tip_rail_width + window_length` から計算する。
+#: ティップ端 → 窓の後縁 [mm]。**§5.2 の決着用の量。**
+#: 設計値はここに書かず `tip_rail_width + window_length` から計算する。
 #:
-#: 印刷品 36.40 は 2026-09-05 の実測（写真 `print_DSC_2001`）。**PHROX は未測で、
-#: 決着はそちら** —— 40 付近なら窓は本当に長く `bore_length` が誤り、36 付近なら
-#: 09-02 に測っていた量が違っただけ。
-TIP_TO_WINDOW_REAR: dict[str, float | None] = {"printed": 36.40, "phrox": None}
+#: **[09-02, 09-05] の 2 回の読み。** 写真は `print_DSC_2001`（印刷品）と
+#: 2026-09-05 の PHROX 2 枚。**PHROX は 2 回が 0.10mm で揃い、印刷品は 1.10mm
+#: ばらついた** —— 印刷品の窓は角の立った矩形、PHROX は角丸のスロット（§11.5）
+#: なので、**ばらつきの向きが形の予想と逆**。理由は分かっていない。
+#:
+#: PHROX の 39.4 が §5.2 の決着そのもの（予想は「40 付近なら窓は本当に長い、
+#: 36 付近なら測っていた量が違った」で、**40 側**）。
+TIP_TO_WINDOW_REAR: dict[str, list[float]] = {
+    "printed": [35.30, 36.40],
+    "phrox":   [39.30, 39.40],
+}
+
+#: PHROX の窓の後縁の採用値 [mm]。**実測者が 39.4 を採ると明言した**（2026-09-05）。
+#: もう一方の読み 39.30 との差 0.10mm は下の上限を 0.05mm しか動かさない。
+PHROX_TTW_MM = 39.40
 
 #: 音が合ったときの挿し込み量 [mm]。ネック小端 → マウスピースのシャンク端面で、
 #: `cork_depth` と同じ量（実用域の上限 36.4 もこの測り方の実測）。
@@ -94,9 +107,36 @@ INSERTION_DELTA_REPORTED_MM = 3.0
 BORE_RATIO_SOPRANO, BORE_RATIO_TENOR = 0.5364, 0.5349
 
 
+#: 窓の後端とボアの始まりのあいだに要る余地 [mm]（`profiles.window_length_effective`
+#: が使っている設計規則。実測ではない）。
+WINDOW_TO_BORE_GAP_MM = 4.0
+
+
 def insertion_delta() -> float:
     """実測の挿し込み量差 [mm]（印刷品 − PHROX）。**差は持たずに引く。**"""
     return INSERTION_MM["printed"] - INSERTION_MM["phrox"]
+
+
+def ttw_mean(tag: str) -> float:
+    """ティップ端→窓の後縁の 2 回の読みの平均 [mm]。"""
+    v = TIP_TO_WINDOW_REAR[tag]
+    return sum(v) / len(v)
+
+
+def ttw_spread(tag: str) -> float:
+    """同じ量の読みの幅 [mm]。**判定を出す前にこれを見る。**"""
+    v = TIP_TO_WINDOW_REAR[tag]
+    return max(v) - min(v)
+
+
+def window_from_ttw(p: dict, ttw: float) -> float:
+    """ティップ端→窓の後縁から窓の開口長を引く。
+
+    **`tip_rail_width` を設計値だと仮定している** —— 実物のティップレール幅は
+    印刷品も PHROX も未測。ここが 0.9 なら開口長は 0.17mm 短くなる。
+    ボア長の上限のほうは**この仮定に依らない**（後縁の位置だけで決まる）。
+    """
+    return ttw - p["tip_rail_width"]
 
 #: 実測した個体を出したプロジェクト。**判定はこの設計に対してしか意味がない。**
 #: テンプレートは実測を取り込んで動くので（`beak_height` 11.60 / `shank_dia` 23.20、
@@ -309,10 +349,8 @@ def main() -> None:
                   + (w[0] if w else "警告なし"))
 
     print("\n## ウィンドウ長の上限（実測が可動域の外に出ることがある）")
-    probes = {p["window_length"], 37.0, 44.0}
-    if "window_length" in MEASURED:
-        probes.add(MEASURED["window_length"][1])
-    for wl in sorted(probes):
+    wl_phrox = window_from_ttw(p, PHROX_TTW_MM)
+    for wl in sorted({p["window_length"], 37.0, 44.0, round(wl_phrox, 2)}):
         q = dict(p)
         q["window_length"] = wl
         print(f"  指定 {wl:6.2f} → 実効 {profiles.window_length_effective(q):6.2f}"
@@ -320,46 +358,47 @@ def main() -> None:
               f"  in_tune {comp.simulate(q)['tier1']['in_tune_mm']:7.3f}")
     zb = p["overall_length"] - p["bore_length"]
     print(f"  ボアの始まり z={zb:.2f}（全長 {p['overall_length']:.2f}"
-          f" − bore_length {p['bore_length']:.2f}）。窓はその 4.0mm 手前で止まる")
-    if "window_length" in MEASURED:
-        need = profiles.window_front_z(p) + MEASURED["window_length"][1] + 4.0
-        bl = p["overall_length"] - need
-        print(f"  実測 {MEASURED['window_length'][1]:.2f} を成立させるには"
-              f" ボアの始まり ≥ {need:.2f} ＝ bore_length ≤ {bl:.2f}"
-              f"（比 {bl / p['overall_length']:.4f}"
-              f" / 現行 {p['bore_length'] / p['overall_length']:.4f}）")
+          f" − bore_length {p['bore_length']:.2f}）。窓はその"
+          f" {WINDOW_TO_BORE_GAP_MM:.1f}mm 手前で止まる")
+    # **上限は後縁の位置だけで決まる。** tip_rail_width の仮定に依らない。
+    need = PHROX_TTW_MM + WINDOW_TO_BORE_GAP_MM
+    bl = p["overall_length"] - need
+    print(f"  PHROX の後縁 {PHROX_TTW_MM:.2f}（実測）を成立させるには"
+          f" ボアの始まり ≥ {need:.2f} ＝ **bore_length ≤ {bl:.2f}**"
+          f"（比 {bl / p['overall_length']:.4f}"
+          f" / 現行 {p['bore_length'] / p['overall_length']:.4f}）")
+    print("  **この上限は tip_rail_width の仮定に依らない** —— 後縁の位置だけで決まる")
 
-    print("\n## ティップ端 → 窓の後縁（§5.2 の決着用）")
-    # 設計値は書かずに引く。窓の開口長との差は tip_rail_width そのもの。
+    print("\n## ティップ端 → 窓の後縁（§5.2 の決着）")
     design_ttw = p["tip_rail_width"] + p["window_length"]
     tight_w, loose_w = bands(specs["window_length"])
     print(f"  設計 {design_ttw:.2f} = tip_rail_width {p['tip_rail_width']:.2f}"
           f" + window_length {p['window_length']:.2f}"
           f"  （帯は window_length と同じ ±{tight_w:.2f} / ±{loose_w:.2f}）")
-    print("  **開口長との違いは tip_rail_width ぶん** —— 窓の前縁はティップから"
-          f" {p['tip_rail_width']:.2f}mm 後ろ。そこはノギスで位置決めできない")
+    print("  **窓の開口長は 1 度も測っていない** —— 09-02 に「ウィンドウ長」として"
+          "記録した値もこの量だった（実測者に確認、2026-09-05）")
+    print(f"  {'':6}{'09-02':>8}{'09-05':>8}{'平均':>8}{'幅':>7}"
+          f"{'設計との差':>11}{'判定':>6}")
     for tag in ("printed", "phrox"):
-        v = TIP_TO_WINDOW_REAR.get(tag)
         lab = "印刷品" if tag == "printed" else "PHROX"
-        if v is None:
-            print(f"  {lab:6} 未測 —— **決着はこちら。40 付近なら窓は本当に長く"
-                  " bore_length が誤り、36 付近なら測っていた量が違った**")
-            continue
-        d = v - design_ttw
-        print(f"  {lab:6} {v:6.2f}  差 {d:+.2f}  "
-              f"{verdict(d, tight_w, loose_w, 'window_length')}")
-    # 副産物。**測れない量が、測れる 2 スパンの差から出る。**
-    wl_pr = MEASURED.get("window_length", (None, None))[0]
-    if TIP_TO_WINDOW_REAR.get("printed") and wl_pr:
-        trw = TIP_TO_WINDOW_REAR["printed"] - wl_pr
-        st, lo_b = bands(specs["tip_rail_width"])
-        print(f"  派生: 印刷品の tip_rail_width = {TIP_TO_WINDOW_REAR['printed']:.2f}"
-              f" − {wl_pr:.2f} = {trw:.2f}"
-              f"（設計 {p['tip_rail_width']:.2f}、{trw - p['tip_rail_width']:+.2f}"
-              f" / 帯 ±{st:.2f}・±{lo_b:.2f}）")
-        print("  **判定は出さない** —— 2 つの読みの差なので不確かさは ±0.1mm 級、"
-              "しかも 3 日離れた別セッション。§3 で「✕ 分解能不足」の量が"
-              "**2 スパンの差から出た**という経路のほうが本体")
+        a, b = TIP_TO_WINDOW_REAR[tag]
+        m, sp = ttw_mean(tag), ttw_spread(tag)
+        d = m - design_ttw
+        # **読みの幅が一致帯より広ければ判定を出さない。** 1 回の読みを想定した
+        # 帯を、幅のある量に当てると持っていない分解能で合否を言うことになる。
+        v = verdict(d, tight_w, loose_w, "tip_to_window_rear")
+        if sp > tight_w:
+            v = "—"
+        print(f"  {lab:6}{a:8.2f}{b:8.2f}{m:8.2f}{sp:7.2f}{d:+11.2f}{v:>6}")
+    print(f"  **PHROX の幅は {ttw_spread('phrox'):.2f}、印刷品は"
+          f" {ttw_spread('printed'):.2f}** —— 印刷品の窓は角の立った矩形、PHROX は"
+          "角丸のスロット（§11.5）なので、**ばらつきの向きが形の予想と逆**。理由は未解明")
+    print(f"  印刷品は幅 {ttw_spread('printed'):.2f} が軽微帯 ±{loose_w:.2f} と同じ桁で、"
+          f"**符号が割れている**（{TIP_TO_WINDOW_REAR['printed'][0] - design_ttw:+.2f} と"
+          f" {TIP_TO_WINDOW_REAR['printed'][1] - design_ttw:+.2f}）。判定は出さない")
+    print(f"  印−PH（平均どうし） {ttw_mean('printed') - ttw_mean('phrox'):+.2f}")
+    print(f"  **PHROX {PHROX_TTW_MM:.2f} が §5.2 の決着** —— 予想は「40 付近なら窓は"
+          "本当に長く bore_length が誤り、36 付近なら測っていた量が違った」で、**40 側**")
 
     print("\n## bore_length と合う挿し込み量（**吹奏と突き合わせる**）")
     print("  `bore_length` 49.05 は実測ではない。ウィンドウ長の実測とも吹奏とも合わない")
@@ -403,12 +442,11 @@ def main() -> None:
               f" —— soprano {BORE_RATIO_SOPRANO} / tenor {BORE_RATIO_TENOR} の揃いから"
               f" {(r / BORE_RATIO_TENOR - 1) * 100:+.0f}%")
 
-    if "window_length" in MEASURED:
-        need = profiles.window_front_z(p) + MEASURED["window_length"][1] + 4.0
-        bl_wl = p["overall_length"] - need
-        print(f"  ウィンドウ長の実測が要求する上限   bore_length ≤ {bl_wl:.2f}"
-              f"（比 {bl_wl / p['overall_length']:.4f}）"
-              " —— **こちらは音を 1 ビットも使っていないので傷んでいない**")
+    bl_wl = p["overall_length"] - (PHROX_TTW_MM + WINDOW_TO_BORE_GAP_MM)
+    print(f"  PHROX の窓の後縁 {PHROX_TTW_MM:.2f} が要求する上限"
+          f"   **bore_length ≤ {bl_wl:.2f}**"
+          f"（比 {bl_wl / p['overall_length']:.4f}）"
+          " —— **こちらは音を 1 ビットも使っていない**")
 
     # 感度。容積で見ると小さいが、**モデルのチェンバー系のつまみでは作れない**
     # （下の掃引）。前便はここで「チェンバー形状の差だけでも出る」と逃げていた。
@@ -420,16 +458,21 @@ def main() -> None:
           f" {d_cc / d_it * dl / cav0 * 100:.1f}%。**容積では小さいが、"
           "つまみでは作れない**（下の掃引）")
 
-    print("\n## 実測形状どうしで比べる（**モデルは差を 0 と言っている**）")
-    # 印刷品も PHROX も、それぞれの実測 6 点を入れた形で組み直す。片方だけ実測を
+    print("\n## 実測形状どうしで比べる（**モデルは差の向きを外している**）")
+    # 印刷品も PHROX も、それぞれの実測を入れた形で組み直す。片方だけ実測を
     # 入れると「どちらの実物か」が混ざる。bore_length など未実測の量は共通のまま。
+    # ティップ端→窓の後縁は `window_length` へ直して入れる（tip_rail_width は設計値）。
     tpl_mp = dict(inst.templates[tid]["mouthpiece"])
 
-    def measured_model(base: dict, idx: int, **kw) -> dict:
+    def measured_model(base: dict, idx: int, ttw: float | None = None,
+                       **kw) -> dict:
         q = dict(base)
         for k, pair in MEASURED.items():
             if k in q:
                 q[k] = pair[idx]
+        tag = ("printed", "phrox")[idx]
+        q["window_length"] = window_from_ttw(
+            q, ttw if ttw is not None else ttw_mean(tag))
         q.update(kw)
         return q
 
@@ -541,13 +584,13 @@ def main() -> None:
           f" {t1_tpl['cents_per_mm']:.2f} → PHROX 実測形状 {t1_ph['cents_per_mm']:.2f}"
           f" ¢/mm（{t1_ph['cents_per_mm'] / t1_tpl['cents_per_mm']:.1f} 倍）。"
           f"同じ音の 1/L 則 {_k / _L1:.2f} との食い違いは"
-          f" {_k / _L1 / t1_tpl['cents_per_mm']:.1f} 倍 →"
-          f" {_k / _L1 / t1_ph['cents_per_mm']:.1f} 倍に縮む")
-    print(f"  **ただし動かしたのはクランプされた窓** ——"
-          f" window_length {MEASURED['window_length'][1]:.2f} は実効"
-          f" {profiles.window_length_effective(m_ph):.2f} で頭打ち"
-          f"（不足 {profiles.window_length_shortfall(m_ph):.2f}）。"
-          "**この 1.24 は実物の感度ではなく、モデルが実際に建てた形の感度**")
+          f" それぞれ {_k / _L1 / t1_tpl['cents_per_mm']:.1f} 倍 /"
+          f" {_k / _L1 / t1_ph['cents_per_mm']:.1f} 倍")
+    print(f"  window_length {m_ph['window_length']:.2f} は実効"
+          f" {profiles.window_length_effective(m_ph):.2f}"
+          f"（不足 {profiles.window_length_shortfall(m_ph):.2f}）")
+    print("  **`cents_per_mm` は `cork_depth` での局所の傾き。** `cork_depth` が"
+          "零点から離れていると別の点の傾きを読むので、形を変えたら必ず引き直す")
 
     print("\n## 感度は音ごとに違う（モデルが解いているのは全閉最低音だけ）")
     from saxsketch.acoustics import openwind_bridge as ob

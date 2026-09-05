@@ -106,12 +106,24 @@ TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.0, "tenor": 0.3}
 # アルトの 19.2 → 13.6 は形状が動いたぶん（Wood Stone PHROX の実測で全長が
 # 98.54 → 91.7mm）。胴が短くなれば空洞が減るので、同じ音に合わせるには
 # **浅く**挿すことになる。
-IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 13.6, "tenor": 20.9}
+# アルトの 13.6 → 17.4 は **PHROX の窓の実測が入ったぶん**（2026-09-05）。
+# window_length 35.02 → 38.67 / bore_length 49.05 → 48.30 を組で入れ、
+# `cork_depth` は**その形で第1共鳴が合う位置**なので 13.61 → 17.45 へ引き直した
+# （導出値であって寸法ではない。引き直しを忘れると速い線形推定が厳密解を
+# 1.15mm 外し、`test_fast_tuning_estimate_tracks_the_bracketed_solve` が落ちる
+# —— 実際そうやって気付いた）。
+IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 17.4, "tenor": 20.9}
 
 # **その挿し込み量での**実効容積 / 欠損円錐（soprano +25 / alto +21 / tenor +26%）。
 # 0 ではないのがこの模型の要点で、マウスピースは代替する円錐より短いぶん太くて
 # 釣り合う。挿し込み量と容積比という独立な 2 つの指標が同じことを言っている。
-IN_TUNE_VOLUME_RATIO = (0.15, 0.30)
+#
+# **この「揃い」はアルトの実測で壊れた**（2026-09-05）: soprano +25.5 /
+# alto **+13.3** / tenor +23.4%。アルトだけ落ちたのは、窓の実測を入れて
+# `cork_depth` を引き直したら挿し込みが 3.8mm 深くなり、その深さぶん実効容積が
+# 削れたから。**+21〜26% で揃うという観察は、アルトが未実測だったから成立していた。**
+# 下限を 0.10 へ下げる ―― 揃いではなく「0 ではない」ことだけを見る。
+IN_TUNE_VOLUME_RATIO = (0.10, 0.30)
 
 
 def _tier1(tid: str) -> dict:
@@ -287,8 +299,16 @@ def test_bore_length_is_the_same_fraction_of_overall_length():
              for tid in SIZES}
     # 独立に実測した 2 本が一致することがそもそもの根拠。
     assert fracs["soprano"] == pytest.approx(fracs["tenor"], rel=0.01), fracs
-    for tid, f in fracs.items():
-        assert 0.53 < f < 0.54, (tid, f)
+    for tid in ("soprano", "tenor"):
+        assert 0.53 < fracs[tid] < 0.54, (tid, fracs[tid])
+    # **アルトはもうこの規則から来ていない。** PHROX のティップ端→窓の後縁の実測
+    # 39.4mm が、窓の後端とボアの始まりのあいだに要る 4.0mm と両立しなくなり、
+    # bore_length を 49.05（＝この割合）から 48.30 へ下げた（2026-09-05、
+    # docs/print-inspection.md §11.4）。**上限であって実測ではない**ので、
+    # ここは「割合の外に出たこと」だけを固定する —— 割合へ戻ったなら、それは
+    # 実測のほうを落としたということ。
+    assert fracs["alto"] == pytest.approx(48.3 / 91.7, abs=0.001), fracs
+    assert fracs["alto"] < 0.53, fracs
 
 
 def test_tight_verdict_does_not_claim_precision_it_lacks():
@@ -5959,7 +5979,12 @@ def test_dimensions_report_the_frozen_window():
     テナーは全域が効く）。図がスライダの値を書き写す実装だと、この帯で
     **形と数字が食い違ったまま**になる。
     """
-    frozen = {"soprano": 28.54, "alto": 37.92}
+    # **アルトの天井は既定値そのものになった**（2026-09-05）。PHROX の窓の実測で
+    # window_length 38.67 / bore_length 48.30 を組で入れた結果、既定がちょうど
+    # 天井に載っている ＝ **スライダを 1 目盛り上げた瞬間からクランプ**。
+    # 選択の副作用ではなく実測の帰結（bore_length を上限より下げれば余地は
+    # 増えるが、その値には根拠が無い）。
+    frozen = {"soprano": 28.54, "alto": 38.67}
     for tid in SIZES:
         comp, base = _dim_component("mouthpiece", tid)
         d = next(x for x in comp.dimensions(base) if x["key"] == "window_length")
