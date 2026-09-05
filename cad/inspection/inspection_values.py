@@ -61,10 +61,42 @@ MEASURED: dict[str, tuple[float, float]] = {
 #: 上書き済みの量では差が 0 になり、**外れていた幅が見えなくなる**。
 LEGACY_DIA_RATIO = 71.5 / 78.0
 
-#: 実測の挿し込み量差 [mm]（印刷品 − PHROX、2026-09-05 の吹奏）。印刷品のほうが
-#: これだけ**奥**まで差さないと 442Hz に合わなかった。
-#: **申告は「3mm くらい」で 1 回の読み。誤差棒はまだ無い**（組の取り方は §11.7）。
-INSERTION_DELTA_MM = 3.0
+#: ティップ端 → 窓の後縁 [mm]。**§5.2 の決着用の量**で、窓の開口長
+#: （`window_length`）とは **`tip_rail_width` ぶん**違う —— 窓の前縁はティップから
+#: 0.73mm 後ろにあり、その 0.73mm はノギスで位置決めできない。だから硬い
+#: ランドマークであるティップ端から測る。設計値はここに書かず、
+#: `tip_rail_width + window_length` から計算する。
+#:
+#: 印刷品 36.40 は 2026-09-05 の実測（写真 `print_DSC_2001`）。**PHROX は未測で、
+#: 決着はそちら** —— 40 付近なら窓は本当に長く `bore_length` が誤り、36 付近なら
+#: 09-02 に測っていた量が違っただけ。
+TIP_TO_WINDOW_REAR: dict[str, float | None] = {"printed": 36.40, "phrox": None}
+
+#: 音が合ったときの挿し込み量 [mm]。ネック小端 → マウスピースのシャンク端面で、
+#: `cork_depth` と同じ量（実用域の上限 36.4 もこの測り方の実測）。
+#: 2026-09-05 朝、同じ日・同じネック（YAS-875）・同じリード・同じリガチャー・
+#: A=442、**2 回の読み**。
+#:
+#: **これは「音程が一致する位置」ではない。** 奏者の申告をそのまま引く ——
+#: 「アンブシュアが完璧に同一になることはなく、音程も完全一致したものではない。
+#: リードの位置・リガチャーの固定状態から周囲の体感気温、管体の温度、自身の体調から
+#: この辺の位置で合わせておけば演奏時間中最も音程が安定するだろうという位置に
+#: 経験的に合わせている（もちろんメーターを目視しながら）」。
+#: **逆算の入力に使うときはこの条件ごと引用すること。**
+INSERTION_MM: dict[str, float] = {"printed": 35.4, "phrox": 29.4}
+
+#: 前便（2026-09-05 未明）の**目視の申告**「3mm くらい」。**撤回の幅を出すためだけに
+#: 残す** —— 実測は 6.0mm で **2 倍**だった。前便はこの 3mm を測定として扱い、
+#: 「窓の実測からの逆算と 0.06mm で一致」という見出しを 8 か所に書いた。
+INSERTION_DELTA_REPORTED_MM = 3.0
+
+#: `bore_length/overall_length` の実測 2 本。49.05 の**唯一の根拠**がこの揃い。
+BORE_RATIO_SOPRANO, BORE_RATIO_TENOR = 0.5364, 0.5349
+
+
+def insertion_delta() -> float:
+    """実測の挿し込み量差 [mm]（印刷品 − PHROX）。**差は持たずに引く。**"""
+    return INSERTION_MM["printed"] - INSERTION_MM["phrox"]
 
 #: 実測した個体を出したプロジェクト。**判定はこの設計に対してしか意味がない。**
 #: テンプレートは実測を取り込んで動くので（`beak_height` 11.60 / `shank_dia` 23.20、
@@ -297,46 +329,225 @@ def main() -> None:
               f"（比 {bl / p['overall_length']:.4f}"
               f" / 現行 {p['bore_length'] / p['overall_length']:.4f}）")
 
-    print("\n## bore_length と合う挿し込み量（**吹奏の 3mm と突き合わせる**）")
+    print("\n## ティップ端 → 窓の後縁（§5.2 の決着用）")
+    # 設計値は書かずに引く。窓の開口長との差は tip_rail_width そのもの。
+    design_ttw = p["tip_rail_width"] + p["window_length"]
+    tight_w, loose_w = bands(specs["window_length"])
+    print(f"  設計 {design_ttw:.2f} = tip_rail_width {p['tip_rail_width']:.2f}"
+          f" + window_length {p['window_length']:.2f}"
+          f"  （帯は window_length と同じ ±{tight_w:.2f} / ±{loose_w:.2f}）")
+    print("  **開口長との違いは tip_rail_width ぶん** —— 窓の前縁はティップから"
+          f" {p['tip_rail_width']:.2f}mm 後ろ。そこはノギスで位置決めできない")
+    for tag in ("printed", "phrox"):
+        v = TIP_TO_WINDOW_REAR.get(tag)
+        lab = "印刷品" if tag == "printed" else "PHROX"
+        if v is None:
+            print(f"  {lab:6} 未測 —— **決着はこちら。40 付近なら窓は本当に長く"
+                  " bore_length が誤り、36 付近なら測っていた量が違った**")
+            continue
+        d = v - design_ttw
+        print(f"  {lab:6} {v:6.2f}  差 {d:+.2f}  "
+              f"{verdict(d, tight_w, loose_w, 'window_length')}")
+    # 副産物。**測れない量が、測れる 2 スパンの差から出る。**
+    wl_pr = MEASURED.get("window_length", (None, None))[0]
+    if TIP_TO_WINDOW_REAR.get("printed") and wl_pr:
+        trw = TIP_TO_WINDOW_REAR["printed"] - wl_pr
+        st, lo_b = bands(specs["tip_rail_width"])
+        print(f"  派生: 印刷品の tip_rail_width = {TIP_TO_WINDOW_REAR['printed']:.2f}"
+              f" − {wl_pr:.2f} = {trw:.2f}"
+              f"（設計 {p['tip_rail_width']:.2f}、{trw - p['tip_rail_width']:+.2f}"
+              f" / 帯 ±{st:.2f}・±{lo_b:.2f}）")
+        print("  **判定は出さない** —— 2 つの読みの差なので不確かさは ±0.1mm 級、"
+              "しかも 3 日離れた別セッション。§3 で「✕ 分解能不足」の量が"
+              "**2 スパンの差から出た**という経路のほうが本体")
+
+    print("\n## bore_length と合う挿し込み量（**吹奏と突き合わせる**）")
     print("  `bore_length` 49.05 は実測ではない。ウィンドウ長の実測とも吹奏とも合わない")
     it0 = comp.simulate(p)["tier1"]["in_tune_mm"]
     cav0 = profiles.cavity_volume_cc(p)["effective_cc"]
 
-    def in_tune_of(bl: float) -> float:
-        return comp.simulate(dict(p, bore_length=bl))["tier1"]["in_tune_mm"]
+    def in_tune_of(bl: float, base: dict | None = None) -> float:
+        return comp.simulate(dict(base or p, bore_length=bl))["tier1"]["in_tune_mm"]
 
     print(f"  {'bore_length':>12}{'in_tune':>9}{'Δin_tune':>10}"
           f"{'実効容積':>10}{'Δ容積':>9}")
-    for bl in sorted({p["bore_length"], 48.0, 47.67, 47.0, 46.0}, reverse=True):
+    for bl in sorted({p["bore_length"], 48.0, 47.67, 47.0, 46.0, 45.0, 44.0, 42.0},
+                     reverse=True):
         it = in_tune_of(bl)
         cc = profiles.cavity_volume_cc(dict(p, bore_length=bl))["effective_cc"]
         print(f"  {bl:12.2f}{it:9.2f}{it - it0:+10.2f}{cc:10.3f}{cc - cav0:+9.3f}")
 
-    # 実測の挿し込み差を与える bore_length。**これは「犯人が bore_length なら」の値**で、
-    # チェンバー形状の差でも同じ挿し込み差は出る（下の感度を見ること）。
-    target = it0 - INSERTION_DELTA_MM
-    lo, hi = 40.0, p["bore_length"]
-    if in_tune_of(lo) <= target <= it0:
-        for _ in range(16):
+    def solve_bore(delta: float, base: dict, ref: float) -> float | None:
+        """Δin_tune = delta を与える bore_length。届かなければ None。"""
+        lo, hi, target = 35.0, base["bore_length"], ref - delta
+        if not in_tune_of(lo, base) <= target <= ref:
+            return None
+        for _ in range(40):
             mid = 0.5 * (lo + hi)
-            lo, hi = (mid, hi) if in_tune_of(mid) < target else (lo, mid)
-        bl_ac = 0.5 * (lo + hi)
-        print(f"  実測の挿し込み差 {INSERTION_DELTA_MM:.1f}mm を与える bore_length"
-              f" = {bl_ac:.2f}（比 {bl_ac / p['overall_length']:.4f}）")
+            lo, hi = (mid, hi) if in_tune_of(mid, base) < target else (lo, mid)
+        return 0.5 * (lo + hi)
+
+    # **申告と実測を並べる。** 前便は申告 3mm のほうを測定として扱い、窓の逆算と
+    # 0.06mm で一致すると書いた。実測 6.0mm は 49.05 の唯一の根拠（3 サイズで比が
+    # 0.3% に揃う）を 1 桁大きく外す。**撤回の幅をここで出す。**
+    print("  --- 差を与える bore_length（**目視の申告と実測を並べる**）---")
+    for tag, d in ((f"前便の目視申告 {INSERTION_DELTA_REPORTED_MM:.0f}mm",
+                    INSERTION_DELTA_REPORTED_MM),
+                   (f"実測 {insertion_delta():.1f}mm", insertion_delta())):
+        bl = solve_bore(d, p, it0)
+        if bl is None:
+            print(f"  {tag}: 可動域内に解が無い")
+            continue
+        r = bl / p["overall_length"]
+        print(f"  {tag}: bore_length {bl:6.2f}（比 {r:.4f}）"
+              f" —— soprano {BORE_RATIO_SOPRANO} / tenor {BORE_RATIO_TENOR} の揃いから"
+              f" {(r / BORE_RATIO_TENOR - 1) * 100:+.0f}%")
+
     if "window_length" in MEASURED:
         need = profiles.window_front_z(p) + MEASURED["window_length"][1] + 4.0
         bl_wl = p["overall_length"] - need
         print(f"  ウィンドウ長の実測が要求する上限   bore_length ≤ {bl_wl:.2f}"
-              f"（比 {bl_wl / p['overall_length']:.4f}）")
-        print("  **この 2 つは独立**（片方はノギスと幾何だけ、片方はチューナーだけ）")
+              f"（比 {bl_wl / p['overall_length']:.4f}）"
+              " —— **こちらは音を 1 ビットも使っていないので傷んでいない**")
 
-    # 感度。3mm は容積で見るとごく小さい ＝ bore_length 以外でも同じ差が出る。
+    # 感度。容積で見ると小さいが、**モデルのチェンバー系のつまみでは作れない**
+    # （下の掃引）。前便はここで「チェンバー形状の差だけでも出る」と逃げていた。
     d_cc = (cav0 - profiles.cavity_volume_cc(dict(p, bore_length=47.0))["effective_cc"])
     d_it = it0 - in_tune_of(47.0)
-    print(f"  感度 {d_cc / d_it:.3f} cc/mm —— 挿し込み {INSERTION_DELTA_MM:.1f}mm は"
-          f" 実効容積 {d_cc / d_it * INSERTION_DELTA_MM:.2f}cc ＝ 全体の"
-          f" {d_cc / d_it * INSERTION_DELTA_MM / cav0 * 100:.1f}%。"
-          "チェンバー形状の差だけでも出る量で、断定はできない")
+    dl = insertion_delta()
+    print(f"  感度 {d_cc / d_it:.3f} cc/mm —— 挿し込み {dl:.1f}mm は"
+          f" 実効容積 {d_cc / d_it * dl:.2f}cc ＝ 全体の"
+          f" {d_cc / d_it * dl / cav0 * 100:.1f}%。**容積では小さいが、"
+          "つまみでは作れない**（下の掃引）")
+
+    print("\n## 実測形状どうしで比べる（**モデルは差を 0 と言っている**）")
+    # 印刷品も PHROX も、それぞれの実測 6 点を入れた形で組み直す。片方だけ実測を
+    # 入れると「どちらの実物か」が混ざる。bore_length など未実測の量は共通のまま。
+    tpl_mp = dict(inst.templates[tid]["mouthpiece"])
+
+    def measured_model(base: dict, idx: int, **kw) -> dict:
+        q = dict(base)
+        for k, pair in MEASURED.items():
+            if k in q:
+                q[k] = pair[idx]
+        q.update(kw)
+        return q
+
+    m_pr, m_ph = measured_model(p, 0), measured_model(tpl_mp, 1)
+    it_pr = comp.simulate(m_pr)["tier1"]["in_tune_mm"]
+    it_ph = comp.simulate(m_ph)["tier1"]["in_tune_mm"]
+    dl = insertion_delta()
+    print(f"  印刷品（実測形状） in_tune {it_pr:6.2f} /"
+          f" PHROX（実測形状） in_tune {it_ph:6.2f}"
+          f"  → **モデルの差 {it_pr - it_ph:+.2f}mm**")
+    print(f"  実測の差 **{dl:+.2f}mm**"
+          f"（印刷品 {INSERTION_MM['printed']} / PHROX {INSERTION_MM['phrox']}、2 回の読み）")
+    print("  **mm どうしなら音が違っても比べてよい** —— 形状差が作るセントも"
+          "挿し込みが作るセントも同じ 1/L で伸びるので、割り算した mm は音に依らない")
+
+    print("\n## その差を作れるつまみがあるか（PHROX 側を可動域の全域で振る）")
+    print("  **「届かない」も結果として残す。** 前便は「チェンバー形状の差だけでも"
+          "出る」と書いたが、モデルのつまみでは作れない")
+    for k in ("bore_length", "window_length", "chamber_ratio", "baffle_height",
+              "throat_ratio", "bore_dia"):
+        s = specs.get(k)
+        if s is None or k not in m_ph:
+            continue
+        n = 24
+        vals = [s.min + (s.max - s.min) * i / n for i in range(n + 1)]
+        ds = [it_pr - comp.simulate(dict(m_ph, **{k: v}))["tier1"]["in_tune_mm"]
+              for v in vals]
+        hits = [(vals[i], vals[i + 1]) for i in range(n)
+                if (ds[i] - dl) * (ds[i + 1] - dl) <= 0]
+        head = (f"  {s.label:14} 可動域 {s.min:6.2f}〜{s.max:6.2f}"
+                f" → Δ {min(ds):+6.2f}〜{max(ds):+6.2f}")
+        if not hits:
+            print(head + "  **届かない**")
+            continue
+        found = []
+        for a, b in hits:
+            fa = it_pr - comp.simulate(dict(m_ph, **{k: a}))["tier1"]["in_tune_mm"]
+            for _ in range(30):
+                mid = 0.5 * (a + b)
+                fm = it_pr - comp.simulate(dict(m_ph, **{k: mid}))["tier1"]["in_tune_mm"]
+                if (fm < dl) == (fa < dl):
+                    a, fa = mid, fm
+                else:
+                    b = mid
+            found.append(0.5 * (a + b))
+        note = ""
+        if k == "bore_length":
+            note = "（比 " + " / ".join(
+                f"{v / m_ph['overall_length']:.4f}"
+                f"・揃いから{(v / m_ph['overall_length'] / BORE_RATIO_TENOR - 1) * 100:+.0f}%"
+                for v in found) + "）"
+            if len(found) > 1:
+                note += (" ※大きい側の根は**窓のクランプ**"
+                         "（ボアを伸ばすと窓が潰れて容積が落ちる）で、形の話ではない")
+        print(head + "  → " + " / ".join(f"{v:.2f}" for v in found) + note)
+    print(f"  ※ `chamber_ratio` の既定 {m_ph['chamber_ratio']:.2f} は"
+          f"**可動域の下限** —— モデルは PHROX のチェンバーを小さくできない")
+    print("  言えるのは「**モデルの表現力の外**」まで。"
+          "実物のチェンバーが作れないという意味ではない（可動域が狭いのかもしれない）")
+
+    print("\n## 実測の挿し込み位置を実用域に当てる")
+    from saxsketch.acoustics.volume import TUNING_MARGIN_MM
+    t1_ph = comp.simulate(m_ph)["tier1"]
+    lo_r, hi_r = t1_ph["cork_range_mm"]
+    print(f"  実用域 {lo_r:.1f}〜{hi_r:.1f}mm"
+          f"（上限は同じ PHROX を YAS-875 に押し込んだ実測。余裕の閾値"
+          f" {TUNING_MARGIN_MM:.1f}mm）")
+    for tag, v in INSERTION_MM.items():
+        lab = "印刷品" if tag == "printed" else "PHROX"
+        room = hi_r - v
+        print(f"  {lab:6} {v:5.1f}mm  深い側の余地 {room:+.1f}mm"
+              + ("  ← **閾値を切っている**" if room < TUNING_MARGIN_MM else ""))
+    print("  **上限は PHROX を押し込んで測った値。** 印刷品自身の止まりは未測で、"
+          "ボアが太く締め代が半減しているぶん、もっと奥まで行きうる（組の性質）")
+    print(f"  **`status` は in_tune {t1_ph['in_tune_mm']:.2f} の位置で見るので"
+          f" {t1_ph['status']} を返す。** 判定している点と楽器が使われている点が"
+          f" {min(INSERTION_MM.values()) - t1_ph['in_tune_mm']:.1f}〜"
+          f"{max(INSERTION_MM.values()) - t1_ph['in_tune_mm']:.1f}mm 離れている")
+
+    print("\n## in_tune の絶対照合 —— **比較できる量ではなかった**")
+    t1_tpl = comp.simulate(tpl_mp)["tier1"]
+    for tag, t1x in (("テンプレート素", t1_tpl), ("PHROX 実測形状", t1_ph)):
+        print(f"  {tag:14} in_tune {t1x['in_tune_mm']:6.2f}mm 対 実演奏位置"
+              f" {INSERTION_MM['phrox']:.1f}mm ="
+              f" **{INSERTION_MM['phrox'] - t1x['in_tune_mm']:+.1f}mm**")
+    print("  ただしモデルの胴は**ベルが音響へ接続されていない**"
+          "（`alto.json` body_note: 接続すると全閉の第1共鳴が +38〜+106 セント動く）:")
+    # **両方の baseline で出す。** cents_per_mm は形で 2.5 倍動く（下）ので、
+    # 片方だけ出すと「実物はこれだけ動く」と言ったことになる。
+    for c in (38.0, 106.0):
+        print(f"    {c:5.0f} セント → "
+              + " / ".join(
+                  f"{c / t1x['cents_per_mm']:.0f}mm（{tag} {t1x['cents_per_mm']:.2f} ¢/mm）"
+                  for tag, t1x in (("素", t1_tpl), ("実測形状", t1_ph)))
+              + f" 相当（実用域 {hi_r - lo_r:.1f}mm）")
+    print("  トーンホールも無く、気温は 25°C 固定。**免責は脚注ではなく本体**"
+          " ——「基準条件での値」の幅が可動域より桁で大きい")
+    print("  **差のほうは比較できる**（胴・ベル・気温は差で消える）。その差で"
+          f"モデル {it_pr - it_ph:+.2f}mm 対 実測 {dl:+.2f}mm")
+
+    # cents_per_mm は形状で大きく動く。テンプレート素と PHROX 実測形状で 2.6 倍。
+    # §11.8 は「1/L 則 1.38 とモデル 0.49 が 2.8 倍食い違う」と書いたが、
+    # その 0.49 は**未実測のテンプレート**の値だった。
+    import math as _m
+    from saxsketch.acoustics import openwind_bridge as _ob
+    _k = 1200.0 / _m.log(2.0)
+    _L1 = _ob.C_SOUND / (2.0 * float(comp.size_info["low_note_sounding_hz"])) * 1000.0
+    print(f"  なお `cents_per_mm` は形で動く: テンプレート素"
+          f" {t1_tpl['cents_per_mm']:.2f} → PHROX 実測形状 {t1_ph['cents_per_mm']:.2f}"
+          f" ¢/mm（{t1_ph['cents_per_mm'] / t1_tpl['cents_per_mm']:.1f} 倍）。"
+          f"同じ音の 1/L 則 {_k / _L1:.2f} との食い違いは"
+          f" {_k / _L1 / t1_tpl['cents_per_mm']:.1f} 倍 →"
+          f" {_k / _L1 / t1_ph['cents_per_mm']:.1f} 倍に縮む")
+    print(f"  **ただし動かしたのはクランプされた窓** ——"
+          f" window_length {MEASURED['window_length'][1]:.2f} は実効"
+          f" {profiles.window_length_effective(m_ph):.2f} で頭打ち"
+          f"（不足 {profiles.window_length_shortfall(m_ph):.2f}）。"
+          "**この 1.24 は実物の感度ではなく、モデルが実際に建てた形の感度**")
 
     print("\n## 感度は音ごとに違う（モデルが解いているのは全閉最低音だけ）")
     from saxsketch.acoustics import openwind_bridge as ob
@@ -369,7 +580,10 @@ def main() -> None:
 
     # §11.6 の「11 セントを挿し込みで説明するには 22mm 要る」を測り直す。
     # **両方の基準で出す。** 片方だけだと「実物はこうだ」と言ったことになる。
-    for cents in (10.9,):
+    # 09-02 の 2 本の中央値の差。**A=442 基準で測り直した値**（当初は基準を 440 と
+    # 仮定して 10.9 と書いていた。基準は中央値を平行移動するだけなので差は動かず、
+    # 0.1 の違いは中央値の丸め）。
+    for cents in (10.8,):
         lo_l = ob.C_SOUND / (2.0 * 497.2) * 1000.0
         hi_l = ob.C_SOUND / (2.0 * 163.9) * 1000.0
         print(f"  中央値のずれ {cents:.1f} セントを挿し込みで説明するのに要る量"
