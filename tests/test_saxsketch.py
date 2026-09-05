@@ -106,24 +106,31 @@ TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.0, "tenor": 0.3}
 # アルトの 19.2 → 13.6 は形状が動いたぶん（Wood Stone PHROX の実測で全長が
 # 98.54 → 91.7mm）。胴が短くなれば空洞が減るので、同じ音に合わせるには
 # **浅く**挿すことになる。
-# アルトの 13.6 → 17.4 は **PHROX の窓の実測が入ったぶん**（2026-09-05）。
-# window_length 35.02 → 38.67 / bore_length 49.05 → 48.30 を組で入れ、
-# `cork_depth` は**その形で第1共鳴が合う位置**なので 13.61 → 17.45 へ引き直した
-# （導出値であって寸法ではない。引き直しを忘れると速い線形推定が厳密解を
-# 1.15mm 外し、`test_fast_tuning_estimate_tracks_the_bracketed_solve` が落ちる
-# —— 実際そうやって気付いた）。
-IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 17.4, "tenor": 20.9}
+# アルトの 13.6 → 17.4 → **14.4** は 2026-09-05 に 2 段階で動いた。
+# (1) PHROX の窓の実測（window_length 35.02 → 38.67 / bore_length 49.05 → 48.30 を
+#     組で入れた）。`cork_depth` は**その形で第1共鳴が合う位置**なので引き直す
+#     ——導出値であって寸法ではない。引き直しを忘れると速い線形推定が厳密解を
+#     1.15mm 外し、`test_fast_tuning_estimate_tracks_the_bracketed_solve` が落ちる。
+# (2) その 17.4 は**`cavity_floor_y` の特異点で床が 3.5 倍深く出ていた形**での値
+#     だった（`test_window_length_does_not_touch_the_tip`）。特異点を直したら
+#     空洞が実物の深さへ戻り、合う位置も 14.4 へ戻った。
+#     **形が変われば零点も動く、を 1 セッションで 2 回踏んだ。**
+IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 14.4, "tenor": 20.9}
 
 # **その挿し込み量での**実効容積 / 欠損円錐（soprano +25 / alto +21 / tenor +26%）。
 # 0 ではないのがこの模型の要点で、マウスピースは代替する円錐より短いぶん太くて
 # 釣り合う。挿し込み量と容積比という独立な 2 つの指標が同じことを言っている。
 #
 # **この「揃い」はアルトの実測で壊れた**（2026-09-05）: soprano +25.5 /
-# alto **+13.3** / tenor +23.4%。アルトだけ落ちたのは、窓の実測を入れて
-# `cork_depth` を引き直したら挿し込みが 3.8mm 深くなり、その深さぶん実効容積が
-# 削れたから。**+21〜26% で揃うという観察は、アルトが未実測だったから成立していた。**
-# 下限を 0.10 へ下げる ―― 揃いではなく「0 ではない」ことだけを見る。
-IN_TUNE_VOLUME_RATIO = (0.10, 0.30)
+# alto **+20.4** / tenor +23.4%。**+21〜26% で揃うという観察は、アルトが未実測
+# だったから成立していた。**
+#
+# 同じ日にいったん alto +13.3 と記録したが、あれは `cavity_floor_y` の特異点で
+# 床が 3.5 倍深く出ていたぶんを含んでいた。特異点を直すと +20.4 に戻り、散らばりは
+# 12.2 ポイント → 5.1 ポイントになる。**壊れたという結論は変わらない**（alto だけ
+# 21% を割る）が、**壊れ方の大きさは実測ではなくバグが決めていた**。
+# 帯は 0.15〜0.30 に戻す ―― 3 サイズとも入るので、そのほうが検知が細かい。
+IN_TUNE_VOLUME_RATIO = (0.15, 0.30)
 
 
 def _tier1(tid: str) -> dict:
@@ -392,18 +399,27 @@ def test_fast_tuning_never_cries_unreachable_on_its_own():
 
     「この形状はチューニングでは合わせられない」は形状側を直せという強い主張で、
     線形推定の粗さで言ってはいけない。実測で誤警報が出た組合せを固定してある:
-    テナーのボアを 46mm（既定 57.5）にして `cork_depth` を上限 32mm へ持っていくと、
-    推定は 1.61mm（実用域 3〜32 の外）だが厳密解は 5.05mm で**域内**。
+    テナーのボアを 38mm（既定 57.5）にして `cork_depth` を上限 32mm へ持っていくと、
+    推定は 1.25mm（実用域 3〜35 の外）だが厳密解は 9.72mm で**域内**。
+    **8.47mm ぶんの誤警報**を厳密解が救っている。
+
+    以前ここはボア 46mm（推定 1.61 → 厳密 5.05）を使っていた。`cavity_floor_y` の
+    特異点を直して床が実物の深さへ戻ったら、46mm では推定が域内（22.08）に収まって
+    ガードを踏まなくなった。**ガードが消えたのではなく、この設定が当たらなくなった
+    だけ** —— 38mm 以下では今も踏む（掃引で確認）。
     """
     from saxsketch.acoustics import openwind_bridge as ob
-    p = dict(_template_params("mouthpiece", "tenor"), bore_length=46.0, cork_depth=32.0)
+    p = dict(_template_params("mouthpiece", "tenor"), bore_length=38.0, cork_depth=32.0)
     si = _size_info("tenor")
     t = ob.tuning_position(p, si)
     assert t["method"] == "solved", t          # 域外に出かけたので解き直している
     assert t["reachable"], t
-    assert t["in_tune_mm"] == pytest.approx(5.05, abs=0.5), t
-    # 本当に域外の形状は域外のまま返す（解き直しても救われない）
-    far = dict(p, bore_length=40.25)
+    assert t["in_tune_mm"] == pytest.approx(9.72, abs=0.5), t
+    # 本当に域外の形状は域外のまま返す（解き直しても救われない）。
+    # 全長を下限 80.5mm まで詰めると零点が −6.15mm ＝ 実用域を**下に**外れる。
+    # 両端のセントが同符号で挟めないので `method` は "linear" のまま
+    # （そこは `tuning_position` の設計どおり ―― 伝えたいのは reachable=False）。
+    far = dict(p, overall_length=80.5)
     tf = ob.tuning_position(far, si)
     assert not tf["reachable"], tf
 
@@ -583,6 +599,103 @@ def test_window_length_says_when_it_stops_doing_anything():
             assert why and "ボアの始まり" in why[0], (tid, why)
         # 形が成立している側のままであること（クランプは壊れ方ではない）
         assert profiles.cavity_layout_error(wide) is None, tid
+
+
+def test_window_length_does_not_touch_the_tip():
+    """**ウィンドウ長は先端の形に効いてはいけない。**
+
+    窓を伸ばすことは「床が上がってくる位置が後ろへ動く」ことであって、
+    「空洞全体が深くなる」ことではない。この 1 行を守っていなかったのが
+    `cavity_floor_y` の旧実装で、実測テーブル `_CAVITY_D` を**振幅方向の
+    アフィン** `a·(D(σ) − t0)`（`a = target/(D(1) − D(s_we))`）で端条件へ
+    合わせていた。`_CAVITY_D` は σ=`_CAVITY_D_ZERO` で 0 を横切るので、
+    s_we がそこに載っている間だけ a≈1 になる —— そして 3 サイズともたまたま
+    載っていた（soprano 0.8408 / tenor 0.8380 / 旧 alto 0.8382）。
+
+    **「揃い」に幾何コードが荷重を掛けていた。** アルトの窓を実測へ直した
+    （35.02 → 38.67）とたんに s_we が 0.9078 へ動き、分母が −0.367 → −0.098 に
+    縮んで a=3.48。床が丸ごと 3.5 倍深くなり、先端の落とし込み D(0)=0.100 が
+    2.73mm に化けて**ティップレールのくさびが消えた**（空洞高さ 0.60 → 4.44mm）。
+    利用者が 3D ビューで見つけた —— テストも掃引も素通りしていた。
+
+    いまは σ を写像して合わせるので、σ=0 は必ず 0 へ写り先端は動かない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = _template_params("mouthpiece", tid)
+        spec = next(s for s in comp.param_specs() if s.key == "window_length")
+        tips = []
+        wl = spec.min
+        while wl <= spec.max + 1e-9:
+            p = dict(base, window_length=wl)
+            assert profiles.cavity_layout_error(p) is None, (tid, wl)
+            tips.append(profiles.cavity_stations(p)[0]["h"])
+            wl += 2.0
+        # 先端の空洞高さは可動域全域で動かない（実測 D(0) がそのまま出る）。
+        assert max(tips) - min(tips) < 0.02, (tid, min(tips), max(tips))
+        # 旧実装はここで 4.44mm まで開いた。1.0mm は「くさびが立っている」の側。
+        assert max(tips) < 1.0, (tid, max(tips))
+
+
+def test_cavity_floor_meets_both_end_conditions():
+    """床は窓の終端で D=0、ボアの始まりで F=−bore_radius。
+
+    写像で合わせているので、s_we がどこにあっても両方が成り立つ。旧実装は
+    振幅を掛けて合わせており、`a` が s_we → 1 で**発散**した（窓の後端から
+    ボアまでの間隔で見ると 6.9mm で a=0.97 / 4.0mm で 3.48 / 1.0mm で 12.30）。
+    `window_end_z` の `zb − 4.0` が唯一の歯止めになっていた。
+    """
+    for tid in SIZES:
+        base = _template_params("mouthpiece", tid)
+        # 窓の後端をボアへ寄せていく（旧実装が壊れた向き）。
+        for gap in (10.0, 8.0, 6.0, 5.0, 4.0):
+            zb0 = profiles.bore_start_z(base)
+            p = dict(base, bore_length=base["overall_length"]
+                     - (profiles.window_end_z(base) + gap))
+            if profiles.cavity_layout_error(p) is not None:
+                continue
+            rb, zb = profiles.bore_radius(p), profiles.bore_start_z(p)
+            z_we = profiles.window_end_z(p)
+            d_we = (profiles.cut_top_y(p, z_we)
+                    - profiles.cavity_floor_y(p, z_we)) / rb
+            # 窓はそこで閉じる（`_soft_max` の丸めぶんだけ残る）
+            assert abs(d_we) < 0.01, (tid, gap, d_we)
+            # ボアの始まりで床はボア半径ぶん下（同じく丸めぶん）
+            assert profiles.cavity_floor_y(p, zb) == pytest.approx(-rb, abs=0.05), (tid, gap)
+            # 先端は間隔に依らない
+            assert profiles.cavity_stations(p)[0]["h"] < 1.0, (tid, gap)
+            assert zb0 > 0
+
+
+def test_airway_never_narrows_behind_the_tip_by_default():
+    """息の通り道は入口（ティップ）がいちばん狭くあること。
+
+    リード先端から入った息が奥でさらに絞られては吹けない。**比較の相手は
+    入口自身**なので、この判定には閾値が要らない（この repo で根拠の無い
+    丸い数字を増やさずに済む数少ない判定）。3 サイズとも既定では最狭部が
+    z=0 ＝ 入口そのもので、警告は出ない。
+
+    バッフルを上げると奥が絞れて警告が出る。**ティップ開きを広げるのは
+    対策にならない** —— 上がるのは入口だけで奥は動かないので、比はかえって
+    悪くなる。助言がそちらを勧めないことも見る。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        base = _template_params("mouthpiece", tid)
+        ent, h_min, z_min = profiles.airway_min(base)
+        assert z_min == pytest.approx(0.0), (tid, z_min)
+        assert h_min == pytest.approx(ent), (tid, h_min, ent)
+        assert not [w for w in profiles.cavity_warnings(base) if "通り道" in w], tid
+
+        comp = reg.make_component("mouthpiece", tid)
+        bh_max = next(s.max for s in comp.param_specs() if s.key == "baffle_height")
+        high = dict(base, baffle_height=bh_max)
+        ent2, h2, z2 = profiles.airway_min(high)
+        assert z2 > 0.0 and h2 < ent2, (tid, h2, ent2)
+        why = [w for w in profiles.cavity_warnings(high) if "通り道" in w]
+        assert why, tid
+        assert "ティップ開きを広げると悪くなります" in why[0], (tid, why)
 
 
 def test_reed_and_spec_use_the_window_that_exists():
@@ -3495,8 +3608,20 @@ def test_impedance_param_sensitivity(alto):
     # チェンバー〜スロートの区間が 3 倍長かった。実測の WindyCity はボアが全長の
     # 半分以上を占めるので、スロートは短い局所的な絞りにしかならない。合格させに
     # 行くのではなく「ノブが死んでいない」ことだけを見る。
+    #
+    # **2026-09-05: 3.01 → 1.372Hz。** アルトへ PHROX の窓の実測が入って
+    # `window_length` が 35.02 → 38.67 になったぶん。窓が長いほどチェンバー〜
+    # スロートの区間が短くなり、`throat_ratio` の梃子が短くなる。**床の特異点を
+    # 直したぶんではない**（旧テンプレで 2.854 → 2.853 と 0.001 しか動かない）。
+    #
+    # なお 06e67ab の間はここが 2.588 で通っていたが、**そのときピークは 8 本しか
+    # 出ていなかった**（特異点で床が 3.5 倍深く、高次が平たくなって検出から落ちた）。
+    # 直すと 12 本に戻り、同じ 12 本どうしで比べた値が 1.372。**06e67ab で
+    # 「共鳴 12 → 8 は窓の長さの効果」と書いたのは誤りで、あれはバグだった。**
+    # 閾値は従来どおり観測値の半分に置く。
     shift = sum(abs(narrow[i]["freq"] - base[i]["freq"]) for i in range(3, 8))
-    assert shift > 1.5, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
+    assert len(base) == len(narrow) == 12, (len(base), len(narrow))
+    assert shift > 0.68, [(b["freq"], n["freq"]) for b, n in zip(base, narrow)]
     assert abs(narrow[0]["freq"] - base[0]["freq"]) < 1.0     # 第1共鳴はほぼ不変
 
 

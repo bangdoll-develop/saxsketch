@@ -328,23 +328,34 @@ def main() -> None:
 
     print("\n## ビーク高さの下限 —— バッフル天井がビーク下の肉厚に当たる")
     sb = specs["beak_height"]
+
+    def roof_hit(bh: float) -> list[str]:
+        """**この探索が探しているのは天井の頭打ちだけ。**
+
+        以前は `cavity_warnings` が空かどうかで二分していたが、あの一覧には
+        `beak_height` と無関係な警告（窓の後端・息の通り道）も入る。1 つでも
+        混ざると下端でも上端でも真になり、「可動域の全域で当たっている」と
+        嘘をつく。種類で絞る。
+        """
+        return [w for w in profiles.cavity_warnings(dict(p, beak_height=bh))
+                if "ビーク下の肉厚" in w]
+
     lo, hi = sb.min, sb.max
-    if profiles.cavity_warnings(dict(p, beak_height=hi)):
+    if roof_hit(hi):
         print("  可動域の全域で当たっている")
-    elif not profiles.cavity_warnings(dict(p, beak_height=lo)):
+    elif not roof_hit(lo):
         print("  可動域の全域で当たらない")
     else:
         for _ in range(40):
             mid = 0.5 * (lo + hi)
-            lo, hi = ((mid, hi) if profiles.cavity_warnings(dict(p, beak_height=mid))
-                      else (lo, mid))
+            lo, hi = (mid, hi) if roof_hit(mid) else (lo, mid)
         print(f"  当たり始める beak_height = {hi:.3f} mm"
               f"（可動域 {sb.min:.1f}〜{sb.max:.1f}）")
         for tag, bh in (("設計", p["beak_height"]),
                         ("PHROX 実測", MEASURED.get("beak_height", (0.0, 0.0))[1])):
             if not bh:
                 continue
-            w = profiles.cavity_warnings(dict(p, beak_height=bh))
+            w = roof_hit(bh)
             print(f"  {tag} {bh:6.2f}（閾値の {bh - hi:+.2f}mm）→ "
                   + (w[0] if w else "警告なし"))
 

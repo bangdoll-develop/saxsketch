@@ -967,6 +967,9 @@ _CAVITY_D = [
     (0.875, -0.210), (0.900, -0.260), (0.930, -0.288), (0.960, -0.321),
     (0.990, -0.354), (1.000, -0.367),
 ]
+#: `_CAVITY_D` が 0 を横切る σ ＝ **実測品の窓の終端**。`cavity_floor_y` はこの点を
+#: 設計の `window_end_z` へ写像する。テーブルを差し替えたらここも引き直すこと。
+_CAVITY_D_ZERO = 0.838
 #: `side_rail_width` を基準値から動かしたときに W が効く重み。窓の区間で 1、
 #: ボアでは 0（ボア径はレール幅と無関係）。
 _RAIL_WEIGHT = [(0.000, 1.0), (0.700, 1.0), (0.838, 0.85), (0.940, 0.3),
@@ -1211,19 +1214,43 @@ def cavity_floor_y(p: dict, z: float) -> float:
     リード面からの落とし込み `D = (cut_top_y − F)/bore_radius` として持つ。D>0 の
     間だけ窓が開き、**D が 0 を横切る z が窓の終端**になる。段差もランプも要らない。
 
-    実測テーブルはアフィン変換（a·D + b）で 2 つの端条件へ合わせる:
+    合わせる端条件は 2 つ:
       - `window_end_z` で D=0（＝窓がそこで閉じる。`window_length` が効く）
       - `bore_start_z` で F = −bore_radius（＝遷移区間を別式で繋がなくてよい）
-    アフィンなので PCHIP の C1 性はそのまま残る。
+
+    **σ を写像して合わせる。振幅を掛けてはいけない。** 旧実装は実測テーブルを
+    振幅方向のアフィン `a·(D(σ) − t0)` で合わせていて、`a = target/(D(1) − D(s_we))`
+    が **s_we → 1 で特異**だった（s_we = `window_end_z`/`bore_start_z`）。
+    `_CAVITY_D` は σ=`_CAVITY_D_ZERO` で 0 を横切るので、s_we がそこに載っている
+    間だけ a≈1 になる —— そして 3 サイズともたまたま載っていた
+    （soprano 0.8408 / tenor 0.8380 / 旧 alto 0.8382）。**「揃い」に幾何が荷重を
+    掛けていた**わけで、アルトの窓を実測（`window_length` 35.02 → 38.67）へ直した
+    とたんに s_we が 0.9078 へ動き、分母が −0.367 → −0.098 に縮んで **a=3.48**。
+    床が丸ごと 3.5 倍深くなり、先端の落とし込み D(0)=0.100（0.79mm）が 2.73mm に
+    化けて**ティップレールのくさびが消えた**（空洞高さ 0.60 → 4.44mm）。
+    爆発は連続していて、窓の後端からボアまでの間隔で見ると
+    6.9mm で a=0.97 / 4.0mm で 3.48 / 2.0mm で 6.48 / 1.0mm で 12.30 ——
+    `window_end_z` の `zb − 4.0` が唯一の歯止めになっていた。
+
+    写像なら割り算が消える。窓を伸ばすことは「床が上がってくる位置が後ろへ動く」
+    ことであって、「空洞全体が深くなる」ことではない:
+
+      - M: 0→0, s_we→`_CAVITY_D_ZERO`, 1→1 の単調写像（3 点 PCHIP）
+      - 尾側だけ端条件へ寄せる滑らかな重み g: g(0)=1, g(1)=target/D(1)
+
+    先端は σ=0 → M(0)=0 なので **D(0) が実測のまま素通り**（`window_length` は
+    先端に一切効かない ＝ 効くべきでない）。窓の終端は D(M(s_we))=0 なので
+    **g が何であれ厳密**。PCHIP × 滑らかな重みなので C1 も残る。
     """
     rb = bore_radius(p)
     zb = bore_start_z(p)
-    t0 = _pchip(_CAVITY_D, window_end_z(p) / zb if zb > 1e-9 else 1.0)
-    t1 = _pchip(_CAVITY_D, 1.0)
+    sig = _cav_sigma(p, z)
+    # 写像が退化する側だけ止める。手前は `cavity_layout_error` が見ている。
+    s_we = min(window_end_z(p) / zb if zb > 1e-9 else 1.0, 0.99)
+    d = _pchip(_CAVITY_D, _pchip([(0.0, 0.0), (s_we, _CAVITY_D_ZERO), (1.0, 1.0)], sig))
     target = (cut_top_y(p, zb) + rb) / rb
-    span = t1 - t0
-    a = target / span if abs(span) > 1e-6 else 1.0
-    d = a * (_pchip(_CAVITY_D, _cav_sigma(p, z)) - t0)
+    k = target / _pchip(_CAVITY_D, 1.0)
+    d *= 1.0 + (k - 1.0) * _smoothstep(sig)
     return _soft_max(cut_top_y(p, z) - rb * d, _floor_limit(p, z))
 
 
@@ -2313,13 +2340,53 @@ def baffle_handles(p: dict) -> list[dict]:
     ]
 
 
+#: 息の通り道をサンプルする分割数。上の天井の頭打ち検査と同じ密度。
+_AIRWAY_SAMPLES = 100
+
+
+def airway_profile(p: dict, z: float) -> float:
+    """息の通り道の高さ [mm]（リードの接地面から空洞の天井まで）。
+
+    リードは `table_plane_y`（テーブル平面）に接して座り、ティップ側では
+    マウスピース側のフェイシングがリードから逃げていく。だから息が通れる高さは
+    **リード面（`cut_top_y`）ではなく接地面から測る** —— リード面で測ると
+    ティップ開きぶんを丸ごと数え落とし、入口の高さが 0 に見える。
+    """
+    return cavity_roof_y(p, z) - table_plane_y(p, z)
+
+
+def airway_min(p: dict) -> tuple[float, float, float]:
+    """通り道の (入口の高さ, 最狭部の高さ, 最狭部の z)。
+
+    **入口はティップ（z=0）で、そこがいちばん狭くあるべき** —— リード先端から
+    入った息が、その奥でさらに絞られてはいけない。だから比較の相手は入口自身で、
+    **閾値を置く必要がない**（この repo で根拠の無い丸い数字を増やさずに済む
+    数少ない判定）。既定の 3 サイズはいずれも最狭部が z=0 ＝ 入口そのもの。
+    """
+    z1 = window_end_z(p)
+    ent = airway_profile(p, 0.0)
+    z_min, h_min = 0.0, ent
+    for i in range(1, _AIRWAY_SAMPLES + 1):
+        z = z1 * i / _AIRWAY_SAMPLES
+        h = airway_profile(p, z)
+        if h < h_min:
+            z_min, h_min = z, h
+    return ent, h_min, z_min
+
+
 @_scoped
 def cavity_warnings(p: dict) -> list[str]:
-    """断面エディタに出す注意。**形が法則どおりに出ていない箇所**だけを挙げる。
+    """断面エディタに出す注意。エラーではないが利用者が知るべきこと。
 
     バッフルだけの話ではない（窓の前縁も後端もここで見る）ので `cavity_`。
-    共通しているのは「スライダの値と実際の形が食い違っていて、しかも
-    エラーにはならない」という 1 点だけ。
+    2 種類ある:
+
+    - **形が法則どおりに出ていない** —— スライダの値と実際の形が食い違っていて、
+      しかもエラーにはならない（天井の頭打ち・窓の前縁・窓の後端）
+    - **形は指定どおりだが吹けない** —— 息の通り道が入口より奥で絞られる
+
+    2 つ目は他と性質が違うので、**呼ぶ側が種類で絞れるように**それぞれ固有の
+    語を含めてある（`inspection_values.py` は「ビーク下の肉厚」で絞っている）。
     """
     out: list[str] = []
     zb = bore_start_z(p)
@@ -2351,6 +2418,15 @@ def cavity_warnings(p: dict) -> list[str]:
                    f"{bore_start_z(p):.1f} − 4.0mm」で頭打ちになります。"
                    f"ここから先へ伸ばすには全長を長く / ボア長を短くしてください"
                    f"（ウィンドウ長を上げても形は変わりません）")
+    # 息の通り道。`_soft_min` の丸め（最大 k/2）は差と見ない。
+    ent, h_min, z_min = airway_min(p)
+    if ent - h_min > _ROOF_SOFT_K / 2.0:
+        out.append(f"息の通り道が入口より奥で狭くなっています: 入口（ティップ）"
+                   f"{ent:.2f}mm に対し z≈{z_min:.1f}mm で {h_min:.2f}mm ＝ "
+                   f"入口の {h_min / ent * 100:.0f}%。リード先端から入った息を"
+                   f"ここで絞ります。バッフル高さ {p['baffle_height']:.1f}mm を"
+                   f"下げてください（**ティップ開きを広げると悪くなります** —— "
+                   f"上がるのは入口だけで、奥は動きません）")
     return out
 
 
