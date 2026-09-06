@@ -55,6 +55,15 @@
   ... sweep_limits.py chamber_to_bore_mm --with window_length=44
   ... sweep_limits.py baffle_curvature --with baffle_type=curve
 
+**打ち切りは「段数 × 刻み」で決まる。** 既定 40 段なので、刻みの細い
+パラメータは短い綱でしか歩けない ——`bore_dia` は刻み 0.05mm なので帯の端から
+**2.0mm しか外へ出られず**、シャンクが残る限界が決める壁（実測で 3.8〜6.4mm 先）へ届かないまま
+「40 段まで通った（打ち切り）」で終わる。**打ち切りを壁と読み違えないこと。**
+綱は `--steps` で伸ばす（段 1〜2 は速いので伸ばしても数秒。段 3 は境界の
+周りだけなので増えない）:
+
+  ... sweep_limits.py bore_dia --steps 200
+
 実行（WSL2 の SaxSketch 環境。リポジトリ直下で）:
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/sweep_limits.py tip_opening
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/sweep_limits.py tip_opening alto
@@ -79,7 +88,9 @@ from saxsketch.instruments.saxophone.components import profiles as pf  # noqa: E
 
 SIZES = ("soprano", "alto", "tenor")
 
-#: 帯の外へ何段まで歩くか。帯幅に対する倍率で、`min − STEPS·step` まで見る。
+#: 帯の外へ何段まで歩くかの**既定**（`--steps` で上書き）。`min − STEPS·step`
+#: まで見る。**届く距離は段数 × 刻み**なので、刻みの細いパラメータではここが
+#: そのまま「未測定の始まる場所」になる（`bore_dia` は 0.05×40 ＝ 2.0mm）。
 OUT_STEPS = 40
 
 #: ステーションが退化したとみなす閾値。既定 3 サイズは 34〜43 枚、先端 0.60〜0.70mm。
@@ -313,7 +324,7 @@ def _build_ok(comp, p: dict) -> str | None:
 
 
 def _walk(comp, base: dict, key: str, step: float, sign: int,
-          grids: dict) -> tuple[float, str, float | None]:
+          grids: dict, steps: int = OUT_STEPS) -> tuple[float, str, float | None]:
     """帯の端から外へ 1 段ずつ歩く。
 
     返すのは（最後に通った値、止まった理由、**最後に形が動いた値**）。
@@ -322,10 +333,11 @@ def _walk(comp, base: dict, key: str, step: float, sign: int,
     別のところで決まっている。
     """
     last = base[key]
-    why = f"{OUT_STEPS} 段まで通った（打ち切り。壁はもっと外）"
+    why = (f"{steps} 段まで通った（打ち切り ＝ 帯の端から "
+           f"{steps * step:g} 外まで。**その先は未測定**。--steps で伸ばせる）")
     k0 = _fingerprint(_axes(base, grids))
     live = None
-    for i in range(1, OUT_STEPS + 1):
+    for i in range(1, steps + 1):
         v = base[key] + sign * step * i
         p = dict(base, **{key: v})
         bad = _cheap_ok(comp, p)
@@ -365,7 +377,8 @@ def _build_around(comp, b: dict, key: str, last: float, step: float,
 
 
 def sweep(key: str, sizes=SIZES, do_build: bool = True,
-          extra: dict | None = None, axis: str | None = None) -> None:
+          extra: dict | None = None, axis: str | None = None,
+          steps: int = OUT_STEPS) -> None:
     reg = get_registry()
     for size in sizes:
         comp = reg.get("saxophone").make_component("mouthpiece", size)
@@ -388,7 +401,7 @@ def sweep(key: str, sizes=SIZES, do_build: bool = True,
         hi_base = dict(base, **{key: spec.max})
         for edge, b, sign in (("下", lo_base, -1), ("上", hi_base, +1)):
             t0 = time.time()
-            last, why, live = _walk(comp, b, key, step, sign, grids)
+            last, why, live = _walk(comp, b, key, step, sign, grids, steps)
             if live is None:
                 # 歩いても形が動かない。**壁が無いのではなく効いていない。**
                 print(f"  {edge}へ: {spec.min if sign < 0 else spec.max:g}"
@@ -474,7 +487,7 @@ def sweep(key: str, sizes=SIZES, do_build: bool = True,
                 _build_around(comp, b, key, last, step, sign)
 
 
-def parse_args(argv: list[str]) -> tuple[list, set, dict, str | None]:
+def parse_args(argv: list[str]) -> tuple[list, set, dict, str | None, int]:
     """引数を (対象, フラグ, 拘束, 軸) に分ける。
 
     `--with` は **float でなければ文字列のまま渡す** —— `baffle_curvature` は
@@ -483,7 +496,7 @@ def parse_args(argv: list[str]) -> tuple[list, set, dict, str | None]:
     **この 2 本は永久に測れない**（「効いていない」と出るだけ）。
     """
     rest, flags, extra = [], set(), {}
-    axis = None
+    axis, steps = None, OUT_STEPS
     it = iter(argv)
     for a in it:
         if a == "--with":
@@ -494,11 +507,13 @@ def parse_args(argv: list[str]) -> tuple[list, set, dict, str | None]:
                 extra[k] = v
         elif a == "--axis":
             axis = next(it, "")
+        elif a == "--steps":
+            steps = int(next(it, "") or OUT_STEPS)
         elif a.startswith("--"):
             flags.add(a)
         else:
             rest.append(a)
-    return rest, flags, extra, axis
+    return rest, flags, extra, axis, steps
 
 
 def main(argv: list[str]) -> int:
@@ -506,7 +521,7 @@ def main(argv: list[str]) -> int:
     # すると既定が CP932 になり、`docs/sweeps/` に残した生ログが化けていた。
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    rest, flags, extra, axis = parse_args(argv[1:])
+    rest, flags, extra, axis, steps = parse_args(argv[1:])
     if axis is not None and axis not in AXES:
         print(f"--axis は {AXES} のどれか（{axis!r} は無い）")
         return 2
@@ -522,7 +537,7 @@ def main(argv: list[str]) -> int:
     sizes = tuple(a for a in rest[1:] if a in SIZES) or SIZES
     for key in keys:
         sweep(key, sizes, do_build="--no-build" not in flags, extra=extra,
-              axis=axis)
+              axis=axis, steps=steps)
     return 0
 
 

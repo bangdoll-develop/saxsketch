@@ -1602,7 +1602,8 @@ _STATION_DZ = 1.6
 
 #: 窓が窓として成立する最小の長さ [mm]。
 #:
-#: `window_end_z` は既に `bore_start_z − 4.0` で頭打ちにしてあるので、
+#: `window_end_z` は既に `bore_start_z − chamber_to_bore_mm` で頭打ちに
+#: してあるので、
 #: 「窓がボアに飲まれる」側は防いである。防いでいないのは**その頭打ちが
 #: 窓の始まりを追い越す**場合で、窓の長さが 0 以下になる。ステーションの
 #: 最小間隔 0.40mm を数枚は置ける値として 2.0mm を採る。既定の窓長は
@@ -1651,6 +1652,19 @@ def cavity_layout_error(p: dict) -> str | None:
         return (f"ティップ開きが {p['tip_opening']:.2f}mm ＝ リードとの隙間が"
                 f"ありません。フェイシングの円弧が定義できず、息の入口も"
                 f"閉じます。0 より大きい値にしてください。")
+    # ボアも**長さを持たなければならない**。`bore_length <= 0` は「ボアが部品の
+    # 外から始まる」で、削る円柱の高さが `overall_length − zb + 1.5` ＝
+    # `bore_length + 1.5` なので、−1.5 を割ると `Solid.make_cylinder` が
+    # `Null TopoDS_Shape` を返してビルドが素の `ValueError` で落ちる
+    # （B-3 の掃引で発見。3 サイズとも −1.5 までソリッド 1 個、−2.0 で落ちる）。
+    # **落ちる手前の 0〜−1.5 も通してはいけない** —— 円柱が 1 ビットも削らない
+    # ので「ボア長を縮めるほど体積が増える」逆向きの形になり、しかも
+    # `cavity_stations` は平然と通る（段 1〜2 は −21mm まで素通りした）。
+    if p["bore_length"] <= 0.0:
+        return (f"ボア長が {p['bore_length']:.1f}mm ＝ 長さを持ちません。"
+                f"ボアの始まり z={zb:.1f}mm が全長 "
+                f"{p['overall_length']:.1f}mm の外にあり、円筒が 1 ビットも"
+                f"削りません。0 より大きい値にしてください。")
     if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
@@ -1666,12 +1680,44 @@ def cavity_layout_error(p: dict) -> str | None:
             f"頭打ちになっています）。")
 
 
+def shank_warnings(p: dict) -> list[str]:
+    """シャンクの肉厚についての注意 ＝ **形は指定どおりだが刷れない**側。
+
+    空洞は `shell_limit` が `min_wall` を守らせるのに、**ボアの円柱は素で
+    引かれる**（`mouthpiece._bore_solid`）。同じ法則が片方にしか掛かって
+    いないので、ボア径を上げるとシャンクの肉厚だけが黙って薄くなる。
+    肉厚 0 以下は `outer_layout_error` が弾くので、**ここが受け持つのは
+    0 と `min_wall` の間**（B-3 の実測で soprano は帯の上端 φ14.8 が
+    肉厚 1.94mm ＝ `min_wall` 1.8 まで 0.14mm しかない）。
+
+    `cavity_warnings` と別にしてあるのは出所が違うから ——
+    あちらは空洞の法則、こちらは外形と製造。`mouthpiece.warnings()` が
+    2 つを繋いで 1 枚のカードにする。
+    """
+    r_sh, r_bore, mw = shank_radius(p), bore_radius(p), p["min_wall"]
+    wall = r_sh - r_bore
+    # **ちょうど `min_wall` は警告しない。** 1e-6 の遊びが無いと、
+    # `shank_dia − 2·min_wall`（23.2 − 3.6 = 19.599999999999998）を入れた
+    # だけで肉厚が 1.7999999999999972 と出て警告が立つ ——
+    # 利用者が「言われたとおりの値」を入れた直後に警告が出ることになる。
+    if not (0.0 < wall < mw - 1e-6):
+        return []
+    return [f"シャンクの肉厚が {wall:.2f}mm ＝ 最小肉厚 {mw:.1f}mm を"
+            f"下回っています（シャンク径 φ{r_sh * 2.0:.2f} に対しボア径 "
+            f"φ{p['bore_dia']:.2f}）。形は指定どおり出ますが、この厚みでは"
+            f"印刷したシャンクが割れます。ボア径を "
+            f"φ{r_sh * 2.0 - 2.0 * mw:.2f}mm 以下にするか、シャンク径を "
+            f"φ{p['bore_dia'] + 2.0 * mw:.2f}mm 以上にしてください。"]
+
+
 def outer_layout_error(p: dict) -> str | None:
     """外形の並びが成立しないときに理由を返す。成立していれば `None`。
 
-    条件は 1 つだけ ——**最大径は本当に最大でなければならない**（`body_dia` ≥
-    `shank_dia`）。この 2 つは各自のレンジが独立していて、`ParamSpec` は 1 本ずつ
-    しか見ないので、**UI のスライダ 2 本から到達できる**。逆転すると:
+    条件は 2 つ。どちらも「各自のレンジは守っているのに組で破れる」型で、
+    `ParamSpec` は 1 本ずつしか見ないので **UI のスライダ 2 本から到達できる**。
+
+    **(1) 最大径は本当に最大でなければならない**（`body_dia` ≥ `shank_dia`）。
+    逆転すると:
 
     - 肩プロファイルが内向きではなく**外向き**になる。`outer_radius_nominal` は
       `r_sh + (r_max − r_sh)·shape` なので `r_max < r_sh` だと符号が反転し、
@@ -1685,8 +1731,25 @@ def outer_layout_error(p: dict) -> str | None:
     ソプラノとアルトはたまたま割れずに残るが、**3 サイズとも最大径がシャンク径を
     下回っている**（下限 18.0 に対しシャンク径は 18.7 / 21.1 / 23.0）ので、
     割れなかったほうが偶然。サイズで挙動が変わる組合せは弾く側に倒す。
+
+    **(2) ボアはシャンクの中に収まらなければならない**（`bore_dia` <
+    `shank_dia`）。ボアの円柱（`mouthpiece._bore_solid`）は**素で引かれる** ——
+    空洞のほうは `shell_limit` で `min_wall` を守らせているのに、こちらには
+    同じ法則が掛かっていない。B-3 の実測では、肉厚が 0 になっても −1.0mm に
+    なっても `params_error` は `None`、OCCT も**ソリッド 1 個**を返す
+    （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる ＝ シャンクが丸ごと
+    消えて部品が短くなっている）。段 3 が「1 個か」しか見ていないので、
+    掃引では捕まらない。0 と `min_wall` の間は `shank_warnings` が注意を出す。
     """
     r_max, r_sh = p["body_dia"] / 2.0, shank_radius(p)
+    r_bore = bore_radius(p)
+    if r_bore >= r_sh:
+        return (f"ボア径がシャンク径以上です: ボア径 φ{p['bore_dia']:.2f} ≥ "
+                f"シャンク径 φ{r_sh * 2.0:.2f} mm。ボアの円筒がシャンクを"
+                f"丸ごと削り、ネックに挿す部分が無くなります（肉厚 "
+                f"{r_sh - r_bore:+.2f}mm）。ボア径を φ{r_sh * 2.0:.2f}mm 未満に"
+                f"するか、シャンク径を φ{p['bore_dia']:.2f}mm より太くして"
+                f"ください。")
     if r_max >= r_sh:
         return None
     return (f"最大径がシャンク径より細くなっています: 最大径 "

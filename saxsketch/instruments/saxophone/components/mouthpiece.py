@@ -273,19 +273,54 @@ def _specs(t: dict) -> list[ParamSpec]:
                          "馬蹄=太くまとまる／フラットサイドウォール=芯のある明るさ",
                   limit_kind="convention"),
         # --- ボア ---
+        # 壁は掃引で測った（`sweep_limits.py bore_dia --steps 200`）。**既定の
+        # 40 段では届かない** —— 刻みが 0.05mm なので帯の端から 2.0mm しか外へ
+        # 出られず、3 サイズとも「打ち切り」で終わる。届く距離は段数 × 刻みで
+        # 決まるので、**打ち切りを壁と読み違えると本当の壁の 3.8〜6.4mm 手前で
+        # 止まる**（`--steps` を足したのはこのため）。
+        #
+        # 上は**シャンクが残ること**（肉厚 > 0）。ボアの円柱は素で引かれるので
+        # （空洞は `shell_limit` で `min_wall` を守っているのに）、**肉厚 0 でも
+        # −1.0mm でも `params_error` は `None`・OCCT はソリッド 1 個**を返す
+        # （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる）。段 3 は「1 個か」
+        # しか見ないので掃引では捕まらない。成立条件は `outer_layout_error` に
+        # 1 か所書き、ここは安い掛け金。0 と `min_wall` の間は
+        # `shank_warnings` が注意を出す（**soprano は帯の上端 φ14.8 が肉厚
+        # 1.94mm ＝ min_wall まで 0.14mm しかない**）。
+        # 下は帯の端から 10mm 下まで 3 サイズともソリッド 1 個・応答 40〜49%。
         f("bore_dia", "ボア径", "ボア", "mm", t["bore_dia"] - 1.0, t["bore_dia"] + 1.0, 0.05,
           "ネックコルクとの適合寸法。音程の基準に直結", advanced=True,
-          kind="convention", src="テンプレートの実測値 ±1.0mm"),
+          kind="convention",
+          src="帯はテンプレートの実測値 ±1.0mm。壁は掃引で測った"
+              "（上はシャンク径の 1 段手前 ＝ シャンクが残る限界、"
+              "下は帯の端から 10mm まで通した ＝ その先は未測定）",
+          hlo=round(t["bore_dia"] - 11.0, 2), hhi=round(t["shank_dia"] - 0.05, 2)),
         # レンジをテンプレート基準にするのは `bore_dia` と同じ理由に加えて、
         # **絶対値の 18〜60 が 3 サイズ共通だと単独で形状を潰せる**ため。
         # ボアの始まり = 全長 − ボア長 で、これが窓の手前へ来ると空洞が消える
         # （`profiles.cavity_layout_error`）。テナー既定 57.5 に対し上限 60 は
         # 全長 107.5 なら無害だが、全長側の下限 60 と組むと成立しない。
+        # 壁は掃引で測った（`sweep_limits.py bore_length`）。**掃引器が止まった
+        # 58 / 78 / 95mm は道具の目**（`MIN_STATIONS` 20 枚）で、モデル自身の
+        # 成立条件はその 6.5mm 外 —— 65.2 / 85.5 / 101.1mm で
+        # `cavity_layout_error` が窓の長さ 2.0mm を割る。
+        # 止まる場所は 3 サイズとも **ボアの始まり zb ＝ 6.2〜6.4mm** で揃う。
+        # 壁を決めているのはボア長ではなく zb なので、`overall_length` を帯の
+        # 下限にすると壁も同じだけ下がる（47.3 / 62.8 / 74.2）。**`window_length`
+        # を 44 にしても動かない** —— 窓の後端は既に `zb − chamber_to_bore_mm` で
+        # 頭打ちなので、この向きで相手になるのは全長のほう。
+        # 下は 0。ボアが長さを失うと円柱が 1 ビットも削らず（体積が逆に増える）、
+        # −1.5 を割ると OCCT が `Null TopoDS_Shape` を返してビルドが落ちる。
+        # 段 1〜2 は −21mm まで素通りしたので、成立条件を
+        # `cavity_layout_error` に書いた。刻み 1.0 の 1 段手前で止める。
         f("bore_length", "ボア長", "ボア", "mm",
           round(0.5 * t["bore_length"]), round(1.25 * t["bore_length"]), 1.0,
           "円筒ボア部の長さ。コーク挿入深さ＋数mm が下限", advanced=True,
           kind="convention",
-          src="テンプレート実測値の 0.5〜1.25 倍（絶対値の共通レンジは単独で形状を潰せる）"),
+          src="帯はテンプレート実測値の 0.5〜1.25 倍（絶対値の共通レンジは単独で"
+              "形状を潰せる）。壁は掃引で測った（上は窓が 2.0mm を割る手前 ＝ "
+              "全長 − 6.5mm、下はボアが長さを失う手前）",
+          hlo=1.0, hhi=round(t["overall_length"] - 6.5, 1)),
         f("cork_depth", "コーク挿入深さ", "ボア", "mm", 12.0, 32.0, 1.0,
           "ネックの標準挿入量。音程チェックの基準位置",
           kind="convention",
@@ -700,12 +735,18 @@ class MouthpieceComponent(Component):
     def warnings(self, params: dict) -> list[str]:
         """形が法則どおり出ていない／形は指定どおりだが吹けない、の注意。
 
-        **出所はここ 1 つ**（`profiles.cavity_warnings`）。以前は `section()` の
-        戻り値に埋まっていて、断面タブ（`/api/section`）を開いた人にしか届か
-        なかった —— 3D タブでスライダを上げると「形が動かない・理由も出ない」
-        になる。いまは `simulate()` の便にも載る（`AppState.simulate`）。
+        **出所は `profiles` の 2 つだけ**。空洞の法則（`cavity_warnings`）と
+        外形・製造（`shank_warnings`）で持ち主が違うので分けてあり、ここで
+        繋いで 1 枚のカードにする。**判定はここに書かない** —— 書くと
+        `profiles` と 2 部になって、片方だけ直る（代理変数）。
+
+        以前は `section()` の戻り値に埋まっていて、断面タブ（`/api/section`）を
+        開いた人にしか届かなかった —— 3D タブでスライダを上げると「形が動かない・
+        理由も出ない」になる。いまは `simulate()` の便にも載る
+        （`AppState.simulate`）。
         """
-        return profiles.cavity_warnings(params)
+        return (profiles.cavity_warnings(params)
+                + profiles.shank_warnings(params))
 
     def section(self, params: dict) -> dict:
         """中央面 x=0 の断面と、バッフル／外形のドラッグハンドル。
@@ -927,8 +968,11 @@ class MouthpieceComponent(Component):
             # **基準条件での値**であって実演奏の位置の予測ではない（volume.py の
             # モジュール docstring）。仕様書は単独で読まれるので条件をラベルに書く。
             (f"目標音が出る挿し込み量（{ob.TEMPERATURE_C:.0f}°C 基準）",
-             f"{tune['in_tune_mm']:.1f} mm"
-             f"（実用域 {tune['range_mm'][0]:.0f}〜{tune['range_mm'][1]:.0f} mm、"
+             (f"{tune['in_tune_mm']:.1f} mm" if tune['in_tune_mm'] is not None
+              # 合う位置が無い形もある（ボアがほとんど無いなど）。数字を作らない。
+              # 理由はすぐ後ろの括弧が言う（傾きが 0.00 セント/mm と出る）。
+              else "**無し**")
+             + f"（実用域 {tune['range_mm'][0]:.0f}〜{tune['range_mm'][1]:.0f} mm、"
              f"1mm 押し込むと {tune['cents_per_mm']:+.2f} セント）"),
         ]
         # 各部名称（参照サイト準拠）を寸法表に畳み込む。コア（spec.py）は dimensions と

@@ -1176,3 +1176,29 @@ wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/m
 alto マウスピースの実測: `section()` **7.23 ms** に対し寸法の幾何は **0.29 ms**
 （うち 0.28ms は `table_cut_end_z` の二分法 60 回。どの寸法にも要らないので呼ばない）。
 `regions()` は 0.029 ms。
+## ボアは肉厚を守っていなかった（Phase 4-E B-3、2026-09-06）
+
+壁の一覧と数字は `docs/param-limits.md`、生ログは
+`docs/sweeps/b3-bore-window.txt`。ここには形の側の話だけ書く。
+
+**空洞とボアで同じ法則の掛かり方が違った。** 空洞は `shell_limit` が
+`ro − min_wall` に収めるのに、ボアは `mouthpiece._bore_solid` が素の円柱を
+引いて引き算するだけ。だから `bore_dia` を上げるとシャンクの肉厚だけが
+黙って薄くなり、**肉厚 0（シャンクが丸ごと消える）でも `params_error` は
+`None`、OCCT もソリッド 1 個**を返す。soprano の実測で体積は
+11776 → 6570mm3（−44%）、肉厚 −1.0mm で 4541mm3（−61%）。
+
+つまり **「ソリッドが 1 個できる」は壁の必要条件でしかない**。掃引器の段 3 は
+1 個かどうかと体積 > 100mm3 しか見ないので、この形を通す。いまは
+肉厚 ≤ 0 を `outer_layout_error` が弾き、0 と `min_wall` の間は
+`shank_warnings` が注意カードに出す（`min_wall` 自身がスライダなので、
+そちらを壁にすると黙ったクランプになる）。
+
+**`bore_length` の壁は長さではなく「ボアの始まり」が決めている。** 3 サイズ
+とも `bore_start_z` ＝ 6.2 / 6.2 / 6.4mm で窓が 2.0mm を割り、そこが壁。
+全長を縮めると壁も同じだけ下がる。`window_length` を上げても**動かない** ——
+窓の後端は既に `zb − chamber_to_bore_mm` で頭打ちだから。
+
+**掃引器の打ち切りを壁と読まないこと。** 帯の外へ歩ける距離は段数 × 刻みで、
+`bore_dia` は刻み 0.05mm なので既定 40 段では 2.0mm しか出られない
+（本当の壁は 3.8〜6.4mm 先）。`--steps` を足した。

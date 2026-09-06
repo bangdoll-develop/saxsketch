@@ -148,18 +148,21 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
     out_mm, in_mm = tuning["headroom_mm"]
     slope = tuning["cents_per_mm"]
 
-    if not tuning["reachable"]:
+    if z is None:
+        # **合う挿し込み量が無い**（`tuning_method` は "unsolved"）。ここで
+        # 数字を作らない —— 以前は NaN が `round()` を通って API の JSON 化で
+        # 500 になっていた（B-3 で `bore_length` の壁を 1.0mm まで広げて踏んだ）。
+        status = "unreachable"
+        advice = (f"目標音で鳴らせる挿し込み量が**無い**。1mm 押し込んでも音程は "
+                  f"{slope:+.2f} セントしか動かず、実用域 {lo:.0f}〜{hi:.0f}mm の"
+                  f"両端でも目標音を挟まない。チューニングでは合わせられないので"
+                  f"形状側を直す必要がある。")
+    elif not tuning["reachable"]:
         status = "unreachable"
         side = "深く" if z > hi else "浅く"
         advice = (f"目標音で鳴らせる挿し込み量が {z:.1f}mm で、実用域 "
                   f"{lo:.0f}〜{hi:.0f}mm の外にある（{side}挿さないと合わない）。"
                   f"チューニングでは埋められないので形状側を直す必要がある。")
-        if headroom_cc is not None and effective + headroom_cc < target:
-            advice += (f"チェンバー断面積比を上限まで上げても増えるのは "
-                       f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
-                       f"欠損円錐 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の"
-                       f"肉厚で、これ以上増やすにはボディ径を上げるか最小肉厚を"
-                       f"下げる必要がある。")
     else:
         tight = min(out_mm, in_mm) < TUNING_MARGIN_MM
         status = "tight" if tight else "ok"
@@ -187,6 +190,16 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
                            "向きすら揃っていない。")
             advice += ("数字で詰めずに、実物のマウスピースを"
                        "止まるまで押し込んでどこで止まるかを確かめること。")
+
+    # 容積の頭打ちは**届かないとき共通**の理由なので、分岐の外で足す
+    # （合う位置が域外のときも、そもそも無いときも同じことが起きている）。
+    if (status == "unreachable" and headroom_cc is not None
+            and effective + headroom_cc < target):
+        advice += (f"チェンバー断面積比を上限まで上げても増えるのは "
+                   f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
+                   f"欠損円錐 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の"
+                   f"肉厚で、これ以上増やすにはボディ径を上げるか最小肉厚を"
+                   f"下げる必要がある。")
 
     # 容積の比較は**判定ではなく理由**として出す。両者は一対一で動かない:
     # マウスピースは代替する欠損円錐より短いので、容積が数十%多くても音程が
@@ -217,7 +230,7 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
         "effective_cc": round(effective, 2),
         "target_cc": round(target, 2),
         "deviation_cents": round(cents, 1),
-        "in_tune_mm": round(z, 2),
+        "in_tune_mm": None if z is None else round(z, 2),
         "cork_range_mm": [round(lo, 1), round(hi, 1)],
         "cents_per_mm": round(slope, 2),
         "current_mm": round(tuning["current_mm"], 2),

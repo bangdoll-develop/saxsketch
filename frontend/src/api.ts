@@ -25,7 +25,9 @@ export interface Tier1 {
   // deviation_cents は「いまの挿し込み量での」ズレ。判定そのものは in_tune_mm が
   // cork_range_mm に入るかで出ている（コーク挿入深さは寸法ではなくチューニング）。
   deviation_cents: number;
-  in_tune_mm: number; cork_range_mm: [number, number];
+  // **null は「合う挿し込み量が無い」**（1mm 押しても音程が動かない形）。
+  // サーバは NaN を返さない —— JSON にできず 500 になる（openwind_bridge）。
+  in_tune_mm: number | null; cork_range_mm: [number, number];
   cents_per_mm: number; current_mm: number; tuning_method: string;
   status: string; advice: string; note: string;
 }

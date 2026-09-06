@@ -1,5 +1,6 @@
 """SaxSketch 結合テスト: ジオメトリ・音響・プロジェクトI/O・API。"""
 import collections
+import json
 import math
 from pathlib import Path
 
@@ -1081,9 +1082,11 @@ def test_the_warning_reaches_every_tab_not_just_the_section(alto):
             "component_id": cid}).status_code == 200
         assert c.get("/api/project").json()["simulation"]["warnings"] == [], cid
 
-    # 出所は 1 つ（代理変数を作らない）
+    # 出所は `profiles` の 2 つだけ（代理変数を作らない）。`Component.warnings`
+    # は繋ぐだけで、判定は書かない —— B-3 でシャンクの肉厚が 2 つ目になった。
     p = dict(base, window_length=44.0)
-    assert comp.warnings(p) == profiles.cavity_warnings(p)
+    assert comp.warnings(p) == (profiles.cavity_warnings(p)
+                                + profiles.shank_warnings(p))
 
 
 def test_widening_a_band_does_not_leave_the_analysis_silently_flat():
@@ -1240,7 +1243,7 @@ def test_the_sweeper_can_pin_a_choice_parameter():
     「効いていない」としか出なかった。
     """
     sw = _sweeper()
-    rest, flags, extra, axis = sw.parse_args(
+    rest, flags, extra, axis, steps = sw.parse_args(
         ["baffle_curvature", "alto", "--no-build",
          "--with", "baffle_type=curve", "--with", "window_length=44",
          "--axis", "cavity_a"])
@@ -1248,6 +1251,12 @@ def test_the_sweeper_can_pin_a_choice_parameter():
     assert flags == {"--no-build"}
     assert extra == {"baffle_type": "curve", "window_length": 44.0}
     assert axis == "cavity_a"
+    assert steps == sw.OUT_STEPS                     # 既定は据え置き
+
+    # B-3 で足した `--steps`。**届く距離は段数 × 刻み**なので、刻みの細い
+    # パラメータ（`bore_dia` は 0.05mm）では既定 40 段が打ち切りになる。
+    _r, _f, _e, _a, steps = sw.parse_args(["bore_dia", "--steps", "200"])
+    assert steps == 200
 
     p = _template_params("mouthpiece", "alto")
     for key, kind in (("baffle_curvature", "curve"), ("rollover_radius", "rollover")):
@@ -1589,6 +1598,151 @@ def test_the_baffle_walls_clamp_and_say_which_wall():
     pl = specs["baffle_plateau"]
     assert (pl.hard_min, pl.hard_max) == (None, None)
     assert pl.validate_report(0.9)[1]["at"] == "band"
+
+
+def test_the_bore_walls_are_relations_not_numbers():
+    """**ボア 2 本の壁は他のパラメータとの関係で決まる（Phase B-3）。**
+
+    - `bore_dia` 上 …… シャンクが残ること（`bore_dia` < `shank_dia`）
+    - `bore_length` 上 …… 窓が 2.0mm 残ること。止まる位置は 3 サイズとも
+      **ボアの始まり zb ＝ 6.2〜6.4mm** で揃い、`overall_length` を動かすと
+      壁も同じだけ動く。**`window_length` を動かしても動かない** ——
+      窓の後端は既に `zb − chamber_to_bore_mm` で頭打ちなので、この向きで
+      相手になるのは全長のほう。
+
+    掛け金の数字だけを書き写すと、相手が動いたときに嘘になる。だからここは
+    **関係のほうを主張する**（数字は `hard_*` が持ち、成立条件は
+    `outer_layout_error` / `cavity_layout_error` が 1 か所ずつ持つ）。
+    """
+    reg = get_registry().get("saxophone")
+
+    def top(comp, base):
+        """`params_error` が通る最大の `bore_length`（0.1mm 刻み）。"""
+        v = base["bore_length"]
+        while comp.params_error(dict(base, bore_length=round(v + 0.1, 1))) is None:
+            v = round(v + 0.1, 1)
+        return v
+
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+
+        # --- bore_dia: 壁はシャンク径の 1 段手前 ＝ シャンクが残る限界
+        bd = specs["bore_dia"]
+        assert bd.hard_max == pytest.approx(round(base["shank_dia"] - 0.05, 2))
+        assert comp.params_error(dict(base, bore_dia=bd.hard_max)) is None, tid
+        err = comp.params_error(dict(base, bore_dia=base["shank_dia"]))
+        assert err is not None and "シャンク径" in err, tid
+        # 下は帯の端から 10mm（掃引で 3 サイズともソリッド 1 個まで確認した）
+        assert bd.hard_min == pytest.approx(round(base["bore_dia"] - 11.0, 2))
+        assert comp.params_error(dict(base, bore_dia=bd.hard_min)) is None, tid
+
+        # --- bore_length: 壁を決めているのは長さではなく zb
+        t_def = top(comp, base)
+        zb = round(base["overall_length"] - t_def, 2)
+        assert 6.0 <= zb <= 6.6, (tid, zb)
+        assert specs["bore_length"].hard_max <= t_def, tid      # 掛け金は内側
+        short = specs["overall_length"].min
+        t_short = top(comp, dict(base, overall_length=short))
+        assert short - t_short == pytest.approx(zb, abs=0.15), tid
+        assert t_short < t_def - 1.0, tid                       # 壁が動いた
+        # ウィンドウ長は**この向きでは相手にならない**
+        assert top(comp, dict(base, window_length=44.0)) == pytest.approx(t_def)
+
+
+def test_the_bore_cylinder_ignores_min_wall_and_the_card_says_so():
+    """**空洞は `min_wall` を守るのに、ボアの円柱は守らない（B-3 の実測）。**
+
+    `shell_limit` は空洞を `ro − min_wall` に収めるが、`_bore_solid` は素の
+    円柱を引く。**同じ法則が片方にしか掛かっていない**ので、肉厚 0 でも
+    −1.0mm でも `params_error` は `None`、OCCT もソリッド 1 個を返した
+    （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる ＝ シャンクが丸ごと
+    消えている）。段 3 は「1 個か」しか見ないので掃引では捕まらない。
+
+    線引き:
+      肉厚 ≤ 0        → `outer_layout_error`（壁。越えさせない）
+      0 < 肉厚 < 壁厚 → 注意カード（形は指定どおり出るが刷れない）
+      肉厚 ≥ 壁厚     → 何も言わない
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    sh, mw = base["shank_dia"], base["min_wall"]
+
+    # ちょうど min_wall では言わない（浮動小数の縁で立たせない）
+    assert profiles.shank_warnings(dict(base, bore_dia=sh - 2.0 * mw)) == []
+    thin = dict(base, bore_dia=round(sh - 2.0 * mw + 0.5, 2))
+    w = profiles.shank_warnings(thin)
+    assert len(w) == 1 and "シャンクの肉厚" in w[0] and "1.55mm" in w[0]
+    # カードへ届く経路（`Component.warnings` が 2 つの出所を繋ぐ）
+    assert w[0] in comp.warnings(thin)
+    # 肉厚 0 は注意ではなく壁
+    assert profiles.shank_warnings(dict(base, bore_dia=sh)) == []
+    assert comp.params_error(dict(base, bore_dia=sh)) is not None
+    # 空洞のほうは同じ肉厚を守っている（片方にしか掛かっていなかったことの記録）
+    z = profiles.bore_start_z(base) * 0.5
+    assert profiles.shell_limit(base, z)["half_width"] == pytest.approx(
+        profiles.outer_radius(base, z) - mw)
+
+
+def test_a_bore_without_length_is_rejected_before_occt_sees_it():
+    """**ボアは長さを持たなければならない（B-3）。**
+
+    `bore_length <= 0` は「ボアが部品の外から始まる」。円柱が 1 ビットも
+    削らないので体積が逆に増え、−1.5 を割ると `Solid.make_cylinder` が
+    `Null TopoDS_Shape` を返してビルドが素の `ValueError` で落ちる
+    （掃引で 3 サイズとも −1.5 までソリッド 1 個、−2.0 で落ちた）。
+
+    書く前は**段 1〜2 が −21mm まで素通りしていた** —— `cavity_stations` は
+    平然とステーションを返し、掃引器の段 3 で初めて落ちた（生ログ
+    `docs/sweeps/b3-bore-window.txt`）。条件を `cavity_layout_error` に
+    1 か所書いたので、いまは `params_error` と `cavity_stations` の
+    **両方が同じ理由**を返す。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        spec = next(s for s in comp.param_specs() if s.key == "bore_length")
+        assert spec.hard_min == 1.0
+        assert comp.params_error(dict(base, bore_length=1.0)) is None, tid
+        assert len(profiles.cavity_stations(dict(base, bore_length=1.0))) > 20
+        for v in (0.0, -1.0, -2.0):
+            err = comp.params_error(dict(base, bore_length=v))
+            assert err is not None and "ボア長" in err, (tid, v)
+            # 出所は 1 つ ——ステーション側も同じ理由で断る
+            with pytest.raises(ValueError, match="ボア長"):
+                profiles.cavity_stations(dict(base, bore_length=v))
+
+
+def test_no_wall_value_makes_the_analysis_emit_something_json_cannot_carry():
+    """**壁まで開けた値で `simulate()` が JSON になること。**
+
+    B-3 で `bore_length` の壁を 1.0mm まで広げたら、そこで
+    `tier1.in_tune_mm` が **NaN** になり `PUT /api/project/params` が 500 で
+    落ちた —— ボアがほとんど無いとコーク線が空洞の終端でクランプされ、
+    1mm 押しても音程が動かない（傾き 0）。零点が出ないのを NaN で表していた。
+
+    いまは `None`（＝「合う挿し込み量が無い」）を返す。**壁を広げると下流が
+    壊れる**のは Phase A で 4 か所出た型なので、ここは 1 本ずつではなく
+    **壁を持つ全パラメータ × 3 サイズ**をまとめて見る。
+    """
+    reg = get_registry().get("saxophone")
+    checked = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {sp.key: sp.default for sp in comp.param_specs()}
+        for spec in comp.param_specs():
+            for wall in (spec.hard_min, spec.hard_max):
+                if wall is None:
+                    continue
+                p = dict(base, **{spec.key: wall})
+                assert comp.params_error(p) is None, (tid, spec.key, wall)
+                res = comp.simulate(p)
+                # allow_nan=False —— FastAPI の JSON 化と同じ厳しさで見る
+                json.dumps(res, allow_nan=False, default=str)
+                checked += 1
+    assert checked >= 30, checked
 
 
 def test_reed_and_spec_use_the_window_that_exists():

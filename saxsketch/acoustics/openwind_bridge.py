@@ -786,7 +786,10 @@ def tuning_position(params: dict, size_info: dict,
     だった（実測を入れて解き直すと 3 サイズとも実用域の内側に入る）。
 
     返す量:
-      in_tune_mm      合う挿し込み量
+      in_tune_mm      合う挿し込み量。**存在しないときは `None`**（1mm 押しても
+                      音程が動かず、実用域の両端でも目標音を挟まない形）。
+                      NaN では返さない ——JSON にできず API が 500 になる
+                      （B-3 で `bore_length` の壁を 1.0mm まで広げたら踏んだ）
       method          "linear"（既定の速い経路）/ "solved"（`exact=True`、または
                       速い経路の推定が実用域の外へ出て解き直したとき）
       range_mm        実用域 [浅い側, 深い側]
@@ -834,7 +837,10 @@ def tuning_position(params: dict, size_info: dict,
     base = min(max(cur, lo), hi - _TUNE_SLOPE_MM)
     c_base = c_cur if abs(base - cur) < 1e-9 else cents_at(base)
     slope = (cents_at(base + _TUNE_SLOPE_MM) - c_base) / _TUNE_SLOPE_MM
-    z = base - c_base / slope if abs(slope) > 1e-9 else float("nan")
+    # 傾きが取れないときは **None**。ボアがほとんど無い形（B-3 で壁を 1.0mm まで
+    # 広げた先）では、コーク線が空洞の終端でクランプされて 1mm 押しても音程が
+    # 動かない。ここで NaN を入れると `round()` を通って API の JSON 化で落ちる。
+    z = base - c_base / slope if abs(slope) > 1e-9 else None
     method = "linear"
     c_range = None
 
@@ -845,7 +851,7 @@ def tuning_position(params: dict, size_info: dict,
     # 悪い知らせを出す直前だけ。（この例は以前ボア 46mm・1.61 → 5.05 だったが、
     # `cavity_floor_y` の特異点を直して床が実物の深さへ戻ったら 46mm では
     # 推定が域内に収まった。ガードが消えたのではなく設定が当たらなくなっただけ。）
-    if exact or not lo <= z <= hi:
+    if exact or z is None or not lo <= z <= hi:
         c_lo, c_hi = cents_at(lo), cents_at(hi)
         c_range = [c_lo, c_hi]
         if c_lo * c_hi <= 0.0:
@@ -863,6 +869,10 @@ def tuning_position(params: dict, size_info: dict,
                 else:
                     a, ca = z, cz
             method = "solved"
+        elif z is None:
+            # 傾きも取れず、実用域の両端でも目標音を挟まない ＝
+            # **合う挿し込み量が無い**。数字を作らずにそう言う。
+            method = "unsolved"
         # 挟まないなら零点は実用域の外。速い経路の線形外挿をそのまま残す
         # （どこまで要るかは出るが、reachable=False の方が伝えたいこと）。
 
@@ -874,8 +884,8 @@ def tuning_position(params: dict, size_info: dict,
         "cents_per_mm": slope,
         "current_mm": cur,
         "cents_at_current": c_cur,
-        "reachable": bool(lo <= z <= hi),
-        "headroom_mm": [z - lo, hi - z],
+        "reachable": z is not None and bool(lo <= z <= hi),
+        "headroom_mm": [None, None] if z is None else [z - lo, hi - z],
     }
 
 

@@ -80,9 +80,10 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
             容積の行は判定の理由として並べてある（両者は一対一で動かない）。 */}
         <h3>チューニング位置</h3>
         <div className={`big ${t1.status}`}>
-          {t1.in_tune_mm.toFixed(1)} mm
+          {t1.in_tune_mm === null ? "—" : `${t1.in_tune_mm.toFixed(1)} mm`}
           <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-            {t1.status === "ok" ? "実用域の内側" :
+            {t1.in_tune_mm === null ? "合う位置が無い" :
+             t1.status === "ok" ? "実用域の内側" :
              t1.status === "tight" ? "端に寄っている" : "実用域の外"}
           </span>
         </div>
