@@ -1103,18 +1103,23 @@ def window_end_z(p: dict) -> float:
 def window_length_effective(p: dict) -> float:
     """実際に開く窓の長さ [mm]。指定した `window_length` とは限らない。
 
-    `window_end_z` は `zb − 4.0` 側でも頭打ちになる。そちらが効くと
-    **`window_length` を上げても形が一切変わらない**。`cavity_layout_error` は
-    窓が `_MIN_WINDOW_SPAN_MM` を割るまで黙っているので、その手前に
-    「落ちないし壊れてもいないが、スライダが効いていない」帯がある。
-
-    既定値で測ると soprano は可動域 24〜44mm のうち **28.5mm 以上が丸ごと死んでいる**
-    （alto は 37.9mm 以上、tenor は全域が効く）。全長側から入っても同じで、
-    既定の窓長が届かなくなるのは soprano 70.1 / alto 88.7 / tenor 103.3mm 以下。
-    （アルトの 2 つは 4-C.5 で測り直した。旧記載の 41.1 / 95.0 はテンプレートが
-    変わる前の値で、いまの `bore_start_z` 42.65 とは合わない。）
+    `window_end_z` は `bore_start_z − chamber_to_bore_mm` 側でも頭打ちになる。
+    そちらが効くと **`window_length` を上げても形が一切変わらない**。
+    `cavity_layout_error` は窓が `_MIN_WINDOW_SPAN_MM` を割るまで黙っているので、
+    その手前に「落ちないし壊れてもいないが、スライダが効いていない」帯がある。
     `ParamSpec.validate` の黙ったクランプ（Stage F）と同じ種類だが、こちらは
     **導出側で起きるのでレンジを見ても分からない**。だから量として公開する。
+
+    凍る点は導出できる ——
+
+        window_length_freeze = bore_start_z − chamber_to_bore_mm − window_front_z
+
+    **この数字を docstring に焼くのはやめた。** 3 つの項がどれもテンプレートに
+    ぶら下がっているので、テンプレートを直すたびに本文だけが古くなる。実際
+    ここは 2 世代連続で腐った（4-C.5 で 41.1/95.0 → 37.92/88.7 に直し、
+    9/05 の `bore_length` 実測でまた 38.67/91.70 になった）。いまの値は
+    `test_the_window_freeze_point_is_where_the_docs_say_it_is` が持っていて、
+    テンプレートが動けばそのテストが落ちて新しい値を教える。
     """
     return window_end_z(p) - window_front_z(p)
 
@@ -1653,9 +1658,12 @@ def cavity_layout_error(p: dict) -> str | None:
             f"最低 {_MIN_WINDOW_SPAN_MM:.1f}mm 要ります。"
             f"ボアの始まり（全長 {p['overall_length']:.1f} − ボア長 "
             f"{p['bore_length']:.1f} ＝ {zb:.2f}mm）が手前すぎるためで、"
-            f"ボア長を短く / 全長を長く すれば直ります"
+            f"「チェンバー→ボアの遷移」を縮める / ボア長を短く / 全長を長く "
+            f"すれば直ります"
             f"（ウィンドウ長 {p['window_length']:.1f}mm はこの場合効きません —— "
-            f"窓の後端は {zb:.2f} − 4.0 で頭打ちになっています）。")
+            f"窓の後端は {zb:.2f} − チェンバー→ボアの遷移 "
+            f"{p.get('chamber_to_bore_mm', _CHAMBER_TO_BORE_DEFAULT_MM):.1f} で"
+            f"頭打ちになっています）。")
 
 
 def outer_layout_error(p: dict) -> str | None:
@@ -2521,12 +2529,21 @@ def cavity_warnings(p: dict) -> list[str]:
     # スライダの可動域から到達できる（`window_length_effective` を見ること）。
     short = window_length_shortfall(p)
     if short > 0.05:
+        # **止めている量を直値で書かないこと。** 以前はここが「ボアの始まり
+        # {zb} − 4.0mm」で、その 4.0 は Phase 4-A で `chamber_to_bore_mm` に
+        # なっている。直値のままだと、利用者がその値を 0.5 にして窓が実際に
+        # 伸びても文面は 4.0 と言い続け、しかも**直し方に本命のつまみが
+        # 挙がらない** —— `window_length` の説明文だけが「これを縮める」と
+        # 言っていて、実際に読まれる警告が古い、という食い違いだった。
+        gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
         out.append(f"ウィンドウ長が {short:.1f}mm 届いていません"
                    f"（指定 {p['window_length']:.1f} → 実際 "
                    f"{window_length_effective(p):.1f}mm）。窓の後端は"
                    f"チェンバー→ボアの遷移区間を残すため「ボアの始まり "
-                   f"{bore_start_z(p):.1f} − 4.0mm」で頭打ちになります。"
-                   f"ここから先へ伸ばすには全長を長く / ボア長を短くしてください"
+                   f"{bore_start_z(p):.1f} − チェンバー→ボアの遷移 "
+                   f"{gap:.1f}mm」で頭打ちになります。ここから先へ伸ばすには"
+                   f"「チェンバー→ボアの遷移」を縮める / 全長を長く / "
+                   f"ボア長を短くしてください"
                    f"（ウィンドウ長を上げても形は変わりません）")
     # 息の通り道。`_soft_min` の丸め（最大 k/2）は差と見ない。
     ent, h_min, z_min = airway_min(p)

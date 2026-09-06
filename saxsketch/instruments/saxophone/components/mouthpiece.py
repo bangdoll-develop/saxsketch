@@ -293,9 +293,15 @@ def _specs(t: dict) -> list[ParamSpec]:
         # --- ウィンドウ ---
         # **上限は広げない。** 掃引で soprano / alto は 44mm から先が死に帯だと
         # 出た（`window_end_z` が `bore_start_z − chamber_to_bore_mm` で頭打ち。
-        # tenor だけ 45.5mm まで生きている）。壁ではなく**別のパラメータの
+        # tenor だけ 45.15mm まで生きている）。壁ではなく**別のパラメータの
         # 影**なので、伸ばしたいときに動かす相手は `chamber_to_bore_mm` の側 ——
         # そちらを表に出したのでこの死に帯は初めて開けられるようになった。
+        # **ただし「44 から先」は帯の外の話で、実際は帯の内側で既に凍る** ——
+        # 凍る点は soprano 28.54 / alto 38.67 / tenor 45.15mm。soprano は帯の
+        # 23% しか生きておらず、**アルトは既定 38.67 がちょうど凍る点に載って
+        # いる**（9/05 の `bore_length` 実測の帰結。`docs/print-inspection.md`）
+        # ので、既定から上げるぶんは 1 目盛りも効かない。この 3 つの数字は
+        # `test_the_window_freeze_point_is_where_the_docs_say_it_is` が持つ。
         # 下は 4.0mm まで 3 サイズともソリッド 1 個（3.5 も通る）。
         f("window_length", "ウィンドウ長", "ウィンドウ", "mm", 24.0, 44.0, 0.5,
           "リード振動部の長さ。長いほど低音が豊か。**上げても形が変わらない**"

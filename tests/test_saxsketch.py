@@ -601,6 +601,136 @@ def test_window_length_says_when_it_stops_doing_anything():
         assert profiles.cavity_layout_error(wide) is None, tid
 
 
+#: 既定テンプレートでの `window_length` の凍る点 [mm]
+#: （= `bore_start_z − chamber_to_bore_mm − window_front_z`）。
+#: **本文に焼くのをやめてここへ移した数字。** 3 つの項がどれもテンプレート
+#: ぶら下がりなので、テンプレートを直すたびに散らばった散文だけが古くなる ——
+#: `window_length_effective` の docstring は 2 世代連続で腐った。ここが落ちたら
+#: 値を書き換えるだけでなく、下の `_WINDOW_FREEZE_DOCS` の 3 か所も直すこと。
+_WINDOW_FREEZE_MM = {"soprano": 28.54, "alto": 38.67, "tenor": 45.15}
+
+#: 上の数字を散文で持っている場所。テストは中身までは見ない（読む人への地図）。
+_WINDOW_FREEZE_DOCS = (
+    "saxsketch/instruments/saxophone/components/mouthpiece.py（window_length のコメント）",
+    "cad/windycity/README.md（寸法図示で食い違った量の表）",
+    "docs/param-limits.md（Phase 4-E の帯と壁の表）",
+)
+
+
+def test_the_window_freeze_point_is_where_the_docs_say_it_is():
+    """**ウィンドウ長が効かなくなる点を数字で釘打つ。**
+
+    「窓の後端はボアに阻まれる」という規則そのものは
+    `test_window_length_says_when_it_stops_doing_anything` が見ている。ここが
+    見るのは**どこで阻まれるか** —— 散文が持っていて腐った数字のほう。
+
+    腐り方はいつも同じで、`bore_length` なりテンプレートなりが実測で動き、
+    形とテストは追随するのに**散文だけ置き去りになる**。実際この数字は
+    4-C.5 で 1 度直され（41.1 → 37.92）、9/05 の `bore_length` 実測でまた
+    動いた（→ 38.67）のに、docstring も README も 4-C.5 のままだった。
+    テンプレートが動いたらこのテストが落ちて新しい値を教える。
+
+    **アルトが既定でちょうど凍る点に載っているのは事故ではない。**
+    `bore_length` を PHROX 実測が許す上限 48.30 に置いた帰結で、
+    `docs/print-inspection.md` に「承知のうえで踏んだ」と記録がある。
+    だから既定は「届いている」（不足 0）と「1 目盛り上げたら効かない」を
+    同時に満たす —— 両方ここで固定する。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        p = _template_params("mouthpiece", tid)
+        freeze = (profiles.bore_start_z(p) - p["chamber_to_bore_mm"]
+                  - profiles.window_front_z(p))
+        assert freeze == pytest.approx(_WINDOW_FREEZE_MM[tid], abs=0.01), (
+            tid, freeze, "散文の数字も直すこと:", _WINDOW_FREEZE_DOCS)
+        # 凍る点は「指定した窓長が実効値と一致する上限」でもある。
+        assert profiles.window_length_effective(
+            dict(p, window_length=freeze + 5.0)) == pytest.approx(freeze, abs=1e-6), tid
+
+        spec = next(s for s in comp.param_specs() if s.key == "window_length")
+        live = min(freeze, spec.max) - spec.min
+        assert live > 0.0, (tid, "帯が丸ごと死んでいる")
+
+    # アルトだけ、既定がちょうど天井に載っている（意図的）。
+    alto = _template_params("mouthpiece", "alto")
+    assert profiles.window_length_shortfall(alto) == pytest.approx(0.0), "既定は届く"
+    up = dict(alto, window_length=alto["window_length"] + 0.5)
+    assert profiles.window_length_effective(up) == pytest.approx(
+        alto["window_length"], abs=1e-6), "1 目盛り上げても 1 ビットも動かない"
+
+    # **ステーションの等値比較はしない。** `window_end_z` は
+    # `min(前縁 + 窓長, zb − gap)` で、既定はちょうど両辺が並ぶ点なので
+    # どちらの式で計算したかによって答えが 1 ULP ずれ、`s_we = z_we/zb` を
+    # 通った `_section_exponents` の指数に nx 6.0 対 6.000000000000001 として
+    # 出る。**形の違いではなく、同じ数の別の計算経路**（OCCT の三角形分割は
+    # 一致する）。だから許容付きで見る。
+    def _same(a, b, tol=1e-9):
+        return len(a) == len(b) and all(
+            set(x) == set(y) and all(
+                (x[k] == y[k]) if isinstance(x[k], str) else abs(x[k] - y[k]) <= tol
+                for k in x)
+            for x, y in zip(a, b))
+
+    assert _same(profiles.cavity_stations(up), profiles.cavity_stations(alto))
+    # 下げるほうは生きている（凍っているのは上だけ、と言い切れること）
+    down = dict(alto, window_length=alto["window_length"] - 0.5)
+    assert not _same(profiles.cavity_stations(down), profiles.cavity_stations(alto))
+
+    # そして「見た目のモデル」そのもので 1 度だけ確かめる —— 利用者が見るのは
+    # ステーションではなくソリッド。帯の上端まで上げても体積が動かないこと。
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    v_default = comp.build(alto).volume
+    v_top = comp.build(dict(alto, window_length=44.0)).volume
+    assert v_top == pytest.approx(v_default, abs=1e-6), "既定から上は形が動かない"
+
+
+def test_the_window_warning_names_the_gap_that_is_actually_stopping_it():
+    """**警告は「いま止めている量」を言うこと。直値を書かない。**
+
+    以前ここは「ボアの始まり 43.4 − 4.0mm」と書いていた。その 4.0 は
+    Phase 4-A で `chamber_to_bore_mm` になっているので、利用者がそれを 0.5 に
+    縮めて窓が実際に伸びても、**文面だけ 4.0 と言い続ける**。しかも直し方に
+    本命のつまみが挙がっておらず（全長 / ボア長しか出てこない）、
+    `window_length` の説明文だけが「これを縮める」と言っていた ——
+    **説明文と、実際に読まれる警告が食い違っていた。**
+
+    代理変数が 1 か所直しても終わらない型（`min`/`max` がスキーマの外で
+    4 か所消費されていたのと同じ）。ここは文面に数字を持たせず `p` から読む。
+    """
+    p = _template_params("mouthpiece", "alto")
+    wide = dict(p, window_length=44.0)
+
+    def why(q):
+        return [w for w in profiles.cavity_warnings(q) if "ウィンドウ長" in w]
+
+    for gap, eff in ((4.0, 38.67), (2.0, 40.67), (0.5, 42.17)):
+        q = dict(wide, chamber_to_bore_mm=gap)
+        assert profiles.window_length_effective(q) == pytest.approx(eff, abs=0.01)
+        msg = why(q)
+        assert len(msg) == 1, (gap, msg)
+        assert f"{gap:.1f}mm" in msg[0], (gap, msg[0])
+        # 効いていない量を名指ししない。4.0 のときだけは値が一致するので除く。
+        if gap != 4.0:
+            assert "− 4.0mm" not in msg[0], (gap, msg[0])
+        # 直し方に本命が入っている。
+        assert "「チェンバー→ボアの遷移」を縮める" in msg[0], (gap, msg[0])
+
+    # 実効値も文面の中で更新されること（実際の頭打ちを書く）。
+    assert "42.2mm" in why(dict(wide, chamber_to_bore_mm=0.5))[0]
+
+    # **同じ直値が `cavity_layout_error` にもあった。** こちらは注意ではなく
+    # エラーで、窓が `_MIN_WINDOW_SPAN_MM` を割ったときに出る文。1 か所直して
+    # 終わりにしないこと（代理変数の型）。
+    # 遷移を縮めれば直る側に居ると当然エラーが消えるので、どちらの gap でも
+    # 割るところまでボアを伸ばす（88.0 は gap 0.5 なら成立してしまう）。
+    for gap in (4.0, 0.5):
+        broke = dict(p, bore_length=90.0, chamber_to_bore_mm=gap)
+        err = profiles.cavity_layout_error(broke)
+        assert err is not None and "チェンバー→ボアの遷移" in err, (gap, err)
+        assert f"チェンバー→ボアの遷移 {gap:.1f}" in err, (gap, err)
+
+
 def test_window_length_does_not_touch_the_tip():
     """**ウィンドウ長は先端の形に効いてはいけない。**
 
