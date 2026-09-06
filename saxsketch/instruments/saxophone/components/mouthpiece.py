@@ -49,6 +49,24 @@ def _heel_floor_step_back(t: dict, key: str, step: float) -> float:
     return round(math.floor(cross / step) * step - step, 4)
 
 
+def _inside(cross: float, step: float, upper: bool) -> float:
+    """母線が単調でなくなる点 `cross` から**刻み 1 段だけ内側**の格子点。
+
+    ちょうどの点を壁にすると、浮動小数の丸めでスライダ側と
+    `profiles.outer_layout_error` の側が食い違う（`_heel_floor_step_back` と
+    同じ寄せ方）。格子点が `cross` そのものに乗ったときはもう 1 段逃がす。
+
+    **この関数は限界値を持たない。** `profiles.body_waist_limits()` /
+    `shoulder_fullness_limits()` が実測プロファイル表から解いた値を受けるだけ
+    ——数字を書き写すと、表を差し替えたときに片方だけ古くなる。
+    """
+    n = math.floor(cross / step) if upper else math.ceil(cross / step)
+    v = n * step
+    if abs(v - cross) < 1e-12:
+        v = (n - 1 if upper else n + 1) * step
+    return round(v, 6)
+
+
 def _specs(t: dict) -> list[ParamSpec]:
     """テンプレート値 t を初期値としてスキーマを構築。
 
@@ -382,15 +400,36 @@ def _specs(t: dict) -> list[ParamSpec]:
           "使用リード規格の幅。テーブル・窓幅の基準", advanced=True,
           kind="convention", src="市販リード規格の幅（出典未記録）"),
         # --- 外形 ---
-        # レンジをボディ径基準にするのは、胴の全高 0.9·body_dia を超える値が形状として
-        # 意味を持たない（ビーク面が本体の外に出る）ため。既定 0.55·body_dia は幾何的な
-        # 暫定値で実測ではない → ノギスでの上書きが本筋。
+        # **上端は「胴の全高 0.9·body_dia」ではなかった**（Phase B-4b で実測）。
+        # 稜線が胴の外へ出るのは**バイトポイントでの**胴の全高で、
+        # 0.723 / 0.734 / 0.746·body_dia ——**比は一定ですらない**
+        # （バイトは全長の 1/4 で、そこの胴の太さは踵までの比で決まる）。
+        # 旧レンジの上端 0.75·body_dia は 3 サイズとも**その外**にあり、
+        # 帯が壁を跨いでいた。いまは帯も壁も
+        # `profiles.beak_height_at_body_top` から引く ——比を書き写すと、
+        # 胴のプロファイルを変えたときに片方だけ古くなる。
+        #
+        # 下端は「稜線が前下がりになる点」（`beak_height_flat`）の 1 段上。
+        # **どちらも OCCT は無言** ——掃引（B-4b）は 3 サイズとも +48.8〜53.1mm
+        # まで段 1〜3 が ok で、割れるのは 0.5mm。壁はどちらもずっと内側で、
+        # 決めているのは「壊れる」ではなく**量の定義が壊れる**こと
+        # （B-4a の `shoulder_ratio` と同じ決め方）。
+        #
+        # 掃引器の `beak_y` 軸は**この頭打ちを見ていなかった**（解析式の稜線を
+        # そのまま測っていて、胴の外へ出ても線形に伸び続ける）。B-4b で
+        # `min(稜線, 外半径)` に直したら、上向きの応答が 100% → 41〜48% になった。
         f("beak_height", "ビーク高さ", "外形", "mm",
-          round(0.35 * t["body_dia"], 1), round(0.75 * t["body_dia"], 1), 0.5,
+          round(0.35 * t["body_dia"], 1),
+          _inside(profiles.beak_height_at_body_top(t), 0.5, upper=True), 0.5,
           "バイトポイント（ティップから全長の1/4）でのテーブル面からの高さ。"
-          "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨",
+          "くわえたときの口の開き量。既定は暫定値なので実測での上書きを推奨。"
+          "上端より上げても稜線が胴の外へ出るだけで口の開きは変わらない",
           kind="convention",
-          src="ボディ径の 0.35〜0.75 倍。既定 0.55 倍は幾何的な暫定値で実測ではない"),
+          src="下端 0.35 倍は暫定値（既定 0.55 倍も実測ではない）。壁は B-4b で"
+              "実測 ——上はバイトポイントでの胴の全高、下は稜線が前下がりに"
+              "なる点。旧 src の「0.9·body_dia」は外れていた",
+          hlo=_inside(profiles.beak_height_flat(t), 0.5, upper=False),
+          hhi=_inside(profiles.beak_height_at_body_top(t), 0.5, upper=True)),
         # 径 2 本（Phase B-4a の掃引）。**壁は 2 本とも「数字」ではなく「関係」**で、
         # 成立条件は `profiles.outer_layout_error` が 1 か所で持っている:
         #     ボア径 < シャンク径 ≤ 最大径
@@ -471,18 +510,50 @@ def _specs(t: dict) -> list[ParamSpec]:
           hhi=_heel_floor_step_back(t, "shoulder_ratio", 0.005)),
         # --- 外形の曲がり具合（断面タブでドラッグする）---
         # どちらも実測プロファイル（`profiles._BODY_PROFILE` / `_SHOULDER_PROFILE`）を
-        # 基準 0 として歪める。**最大径は頂点**で、この 2 つはそこを跨がない。
+        # 基準 0 として歪める。**壁は 2 本とも同じ 1 つの主張**「母線は単調」——
+        # 胴は最大径に向かって太る一方、肩はシャンクへ細る一方
+        # （`profiles.ligature_seat_range` / `outer_radius_nominal` が乗っている）。
+        #
+        # **この 2 本は掃引器では測れない。** Phase B-4b の掃引は `body_waist` を
+        # ±0.36、`shoulder_fullness` を ±4.0 まで歩いて **3 サイズとも段 1〜3 が
+        # 全部 ok** ——ソリッドは 1 個のまま、応答も返り続ける。壊れるのは形では
+        # なく**主張**なので、`profiles.outer_apex` / `shoulder_dip`（形を直に
+        # 測る側）を作って初めて見えた。B-3 の「ソリッド 1 個は必要条件でしかない」
+        # の 2 例目。
+        #
+        # 限界は実測プロファイル表だけで決まる（`r/r_max` に正規化した形の性質
+        # なので **3 サイズ共通・他のパラメータに依らない**）。数字は書き写さず
+        # `profiles.*_limits()` から引く ——表を差し替えたら壁も一緒に動く。
         f("body_waist", "胴の膨らみ", "外形", "比", -0.06, 0.06, 0.005,
           "ティップ〜最大径の胴をどれだけ膨らませるか。0 が実測形。両端は動かない"
           "ので、ティップの立ち方と最大径は変わらない（アルトで中ほど ±0.77mm）",
           advanced=True,
-          kind="convention", src="実測プロファイルからの歪み量（0 が実測形。端は未測定）"),
-        f("shoulder_fullness", "肩の張り", "外形", "比", -1.0, 1.0, 0.05,
+          kind="convention",
+          src="実測プロファイルからの歪み量（0 が実測形）。壁は掃引（B-4b）ではなく"
+              "母線の単調性 ——上 +0.0726 で最大径が頂点から外れ、"
+              "下 −0.1614 で胴の中ほど（u≈0.23）に凹みが出る",
+          hlo=_inside(profiles.body_waist_limits()[0], 0.005, upper=False),
+          hhi=_inside(profiles.body_waist_limits()[1], 0.005, upper=True)),
+        # **帯の下端 −1.0 は壁の外にあった**（Phase B-4b で発覚）。−1.0 は
+        # 肩の中ほど（s≈0.73）がシャンク径を 0.26〜0.34mm 下回る ＝ えぐれで、
+        # しかも**えぐれは必ずボアの上に来る**ので `shank_warnings` が言う肉厚
+        # （`r_shank − r_bore`）が最薄でなくなり、注意の数字そのものが甘くなる。
+        # 単調が破れるのは −0.3607 とさらに手前なので、そこを壁にして
+        # **帯の下端も壁と同じにした** ——内側に置ける目印が無い（+1＝円錐の
+        # ような landmark が負側には無い）ので、margin を発明しない。
+        f("shoulder_fullness", "肩の張り", "外形", "比",
+          _inside(profiles.shoulder_fullness_limits()[0], 0.05, upper=False),
+          1.0, 0.05,
           "最大径からシャンクへ絞る肩の曲がり方。0 が実測形、+1 で母線が直線に"
-          "なり円錐、−1 で実測と逆向きに張る（アルトで中ほど ±0.92mm）。"
+          "なり円錐（アルトで中ほど +0.92mm）。負側は肩が反って張るが、"
+          "−0.36 より下は肩の中ほどがシャンク径より細くなる。"
           "+1 かつシャンク長 0 なら最大径から端まで完全な円錐", advanced=True,
           kind="geometry",
-          src="パラメータの定義域そのもの（0=実測形、+1=母線が直線＝円錐）"),
+          src="壁は母線の単調性（B-4b で実測）——下 −0.3607 で肩がシャンク径を"
+              "割り、上 +1.8633 で肩の中ほどが膨らむ。旧 src の「定義域そのもの」"
+              "は**両側とも定義域ではなかった**",
+          hlo=_inside(profiles.shoulder_fullness_limits()[0], 0.05, upper=False),
+          hhi=_inside(profiles.shoulder_fullness_limits()[1], 0.05, upper=True)),
         # ここも実測基準の ±25%。以前は 3 サイズ共通の 60〜130 で、**テナーを
         # 下限 60 にするだけで空洞が消えた**（既定ボア長 57.5 が全長を食い切る）。
         # サイズを跨いだ絶対レンジは「ソプラノの長さのテナー」を許してしまう。

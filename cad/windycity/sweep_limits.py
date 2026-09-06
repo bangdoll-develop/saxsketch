@@ -162,6 +162,19 @@ def _axes(p: dict, grids: dict) -> dict:
 
     `outer_r` / `beak_y` は `min(z, L − ε)` で当該形状の端に丸める ——
     `overall_length` 自身を掃引するときにグリッドが部品の外へ出るため。
+
+    **`beak_y` は胴の頂点で頭打ちにする（Phase B-4b で直した）。**
+    `pf.beak_y` はビーク稜線の**解析式**で、稜線が胴の外へ出ても線形に伸び
+    続ける ——だが部品の上面は `min(稜線, 外半径)` なので、そこから先は
+    形が 1 ビットも動かない。直す前は `beak_height` を既定の 4 倍
+    （soprano 48.8mm）まで上げても「beak_y 100% 生きている」と報告して
+    いた。実際には 0.53〜0.58·`body_dia` から先は死んでいる。
+    **式を測っていて形を測っていない**型で、同じ日に `sweep_outer.py` の
+    主張 (1) でも出た（あちらは `heel_z` の式）。
+
+    既定では稜線は胴の内側にあるので、この頭打ちは B-1〜B-4a の掃引には
+    掛からない（`tip_opening` を回し直して committed ログと一致を確認済み。
+    `docs/sweeps/b4b-outer-curves.txt` の §3）。
     """
     st = pf.cavity_stations(p)
     zs = [s["z"] for s in st]
@@ -175,7 +188,9 @@ def _axes(p: dict, grids: dict) -> dict:
         "cavity_w": tuple(_interp(zs, ws, z) for z in cav),
         "cavity_a": tuple(_interp(zs, ar, z) for z in cav),
         "outer_r": tuple(pf.outer_radius(p, min(z, lim)) for z in grids["outer"]),
-        "beak_y": tuple(pf.beak_y(p, min(z, lim)) for z in grids["outer"]),
+        "beak_y": tuple(min(pf.beak_y(p, min(z, lim)),
+                            pf.outer_radius(p, min(z, lim)))
+                        for z in grids["outer"]),
         "_disc": (float(len(st)), pf.window_end_z(p), pf.bore_start_z(p)),
     }
 

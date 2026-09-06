@@ -119,11 +119,49 @@ def main(argv: list[str]) -> int:
         #     `body_dia` は半径のスケールなので `heel_z`（軸方向）には効かず、
         #     肩の 2 つは連動して解いてあるので保たれる。1 つでも動いたら
         #     「頂点を跨がない」が崩れている。
+        #
+        #     **測るのは `outer_apex`（形）であって `heel_z`（式）ではない。**
+        #     Phase B-4b まではここが `heel_z` を比べていたが、`heel_z` は
+        #     (全長 − シャンク長)/(1 + 肩比) という軸方向の式なので、
+        #     `body_waist` / `shoulder_fullness` では**定義上動かない** ——
+        #     いちばん頂点を壊しそうな 2 本に対して構造的に無力で、
+        #     この掃引が `body_waist=max` を毎回通していたのはそのため。
+        #     両方を主張する: 形の頂点が動いていないことと、それが式と
+        #     一致していること（ずれたらどちらが動いたかログで分かる）。
         for label, p in cases:
+            # **弾かれた組は主張の対象外。** `_cases` はわざと成立しない組
+            # （`body_dia=min` など「最大径 < シャンク径」）も踏むので、
+            # そこで「頂点が動いた」と言っても当たり前でしかない。ビルド側は
+            # 既に `continue` していたが、主張側は全件を回していた ——
+            # 旧 `heel_z` の目ではそれらが動かなかったので露見しなかった。
+            if comp.params_error(p) is not None:
+                continue
             if abs(pf.heel_z(p) - heel0) > 1e-5:
-                bad.append(f"{size} / {label}: 最大径の位置が動いた "
+                bad.append(f"{size} / {label}: 最大径の位置（式）が動いた "
                            f"({pf.heel_z(p):.5f} != {heel0:.5f})")
-                print(f"  *** 最大径の位置が動いた: {label}", flush=True)
+                print(f"  *** 最大径の位置（式）が動いた: {label}", flush=True)
+            apex_z, apex_r = pf.outer_apex(p)
+            if abs(apex_z - heel0) > 1e-3:
+                bad.append(f"{size} / {label}: 最大径の位置（形）が動いた "
+                           f"(z={apex_z:.3f} != {heel0:.3f}, r={apex_r:.4f})")
+                print(f"  *** 最大径の位置（形）が動いた: {label} "
+                      f"z={apex_z:.3f}", flush=True)
+            bz, drop = pf.body_dip(p)
+            if drop > 1e-9:
+                bad.append(f"{size} / {label}: 胴が太るのをやめた "
+                           f"(z={bz:.3f} で {drop:.4f}mm 細る)")
+                print(f"  *** 胴に凹みが出た: {label} {drop:.4f}mm", flush=True)
+            sz, bulge = pf.shoulder_bulge(p)
+            if bulge > 1e-9:
+                bad.append(f"{size} / {label}: 肩が細るのをやめた "
+                           f"(z={sz:.3f} で {bulge:.4f}mm 太る)")
+                print(f"  *** 肩が膨らんだ: {label} {bulge:.4f}mm", flush=True)
+            dip_z, dip_r = pf.shoulder_dip(p)
+            if dip_r < pf.shank_radius(p) - 1e-9:
+                bad.append(f"{size} / {label}: 肩がシャンク径より細くなった "
+                           f"(z={dip_z:.3f} で r={dip_r:.4f} < "
+                           f"{pf.shank_radius(p):.4f})")
+                print(f"  *** 肩がえぐれた: {label} r={dip_r:.4f}", flush=True)
         # (2) 円錐は母線 2 点＝ CONICAL_SURFACE 1 枚で出る
         cone = _cone_params(base)
         segs = pf.body_segments(cone)

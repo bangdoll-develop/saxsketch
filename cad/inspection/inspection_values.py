@@ -340,7 +340,11 @@ def main() -> None:
         return [w for w in profiles.cavity_warnings(dict(p, beak_height=bh))
                 if "ビーク下の肉厚" in w]
 
-    lo, hi = sb.min, sb.max
+    # **可動域は `bounds()`（壁）であって帯ではない。** Phase B-4b で
+    # `beak_height` に壁が付いたので、`min`/`max` を可動域と呼ぶと下側を
+    # 4.3〜5.9mm ぶん取りこぼす（`min`/`max` を可動域の代理として読む型の
+    # 再発。Phase A で 4 か所直したのと同じ）。
+    lo, hi = sb.bounds()
     if roof_hit(hi):
         print("  可動域の全域で当たっている")
     elif not roof_hit(lo):
@@ -350,7 +354,8 @@ def main() -> None:
             mid = 0.5 * (lo + hi)
             lo, hi = (mid, hi) if roof_hit(mid) else (lo, mid)
         print(f"  当たり始める beak_height = {hi:.3f} mm"
-              f"（可動域 {sb.min:.1f}〜{sb.max:.1f}）")
+              f"（可動域 {sb.bounds()[0]:.1f}〜{sb.bounds()[1]:.1f}"
+              f"、勧める帯 {sb.min:.1f}〜{sb.max:.1f}）")
         for tag, bh in (("設計", p["beak_height"]),
                         ("PHROX 実測", MEASURED.get("beak_height", (0.0, 0.0))[1])):
             if not bh:

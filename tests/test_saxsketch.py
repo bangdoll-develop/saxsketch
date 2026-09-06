@@ -1966,6 +1966,228 @@ def test_the_sweeper_says_when_the_band_edge_itself_fails():
     assert len(profiles.cavity_warnings(thin)) < len(comp.warnings(thin))
 
 
+def test_the_apex_is_a_claim_the_formula_can_never_check():
+    """**「最大径は踵」は主張であって計算結果ではない（Phase B-4b）。**
+
+    `heel_z` は (全長 − シャンク長)/(1 + 肩比) という**軸方向の式**なので、
+    形を歪める 2 本では定義上 1 ビットも動かない ——つまり `heel_z` を見張って
+    いる限り、この 2 本が頂点を壊しても**永久に検出できない**。
+    `cad/windycity/sweep_outer.py` の主張 (1) は B-4b までそれだった。
+
+    ここで固定するのは 3 つ:
+      1. 壁の内側では形の頂点（`outer_apex`）が踵と一致する
+      2. 壁の 1 段外では**一致しなくなる**（形が壊れている）
+      3. そのあいだ `heel_z` は**どちらでも動かない**（古い目が盲だった証拠）
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        heel = profiles.heel_z(base)
+        for key in ("body_waist", "shoulder_fullness"):
+            spec = specs[key]
+            for edge, out in ((spec.hard_min, spec.hard_min - spec.step),
+                              (spec.hard_max, spec.hard_max + spec.step)):
+                inside = dict(base, **{key: edge})
+                outside = dict(base, **{key: out})
+                # (3) 式はどちらでも動かない
+                assert profiles.heel_z(inside) == pytest.approx(heel)
+                assert profiles.heel_z(outside) == pytest.approx(heel)
+                # (1) 壁の内側では形が主張どおり
+                az, _ = profiles.outer_apex(inside)
+                _, dr = profiles.shoulder_dip(inside)
+                assert az == pytest.approx(heel, abs=1e-3), (tid, key, edge)
+                assert dr >= profiles.shank_radius(inside) - 1e-9, (tid, key)
+                assert profiles.body_dip(inside)[1] == pytest.approx(0.0)
+                assert profiles.shoulder_bulge(inside)[1] == pytest.approx(0.0)
+                # (2) 1 段外では壊れる。**壊れ方は 4 通りあって、どの目も
+                #     少なくとも 1 つを見落とす** ——頂点が移る（waist 上）、
+                #     胴が凹む（waist 下）、肩がえぐれる（fullness 下）、
+                #     肩が膨らむだけ（fullness 上。最大径は超えずシャンク径も
+                #     割らないので `outer_apex` も `shoulder_dip` も無言）。
+                #     主張そのものは 1 つ「母線は単調」で、それを見るのが
+                #     `body_dip` と `shoulder_bulge`。
+                az2, _ = profiles.outer_apex(outside)
+                _, dr2 = profiles.shoulder_dip(outside)
+                _, drop2 = profiles.body_dip(outside)
+                _, bulge2 = profiles.shoulder_bulge(outside)
+                broke = (abs(az2 - heel) > 1e-3
+                         or dr2 < profiles.shank_radius(outside) - 1e-9
+                         or drop2 > 1e-9 or bulge2 > 1e-9)
+                assert broke, (tid, key, out, az2, dr2, drop2, bulge2)
+                # 単調の 2 つは**必ず**どちらかが鳴る（症状の 2 つと違って）
+                assert drop2 > 1e-9 or bulge2 > 1e-9, (tid, key, out)
+
+
+def test_the_curve_walls_come_from_the_measured_profile_tables():
+    """**壁の数字はどこにも書いていない（実測表から解く）。**
+
+    `body_waist` / `shoulder_fullness` の限界は `r/r_max` に正規化した形の
+    性質なので **3 サイズ共通・他のパラメータに依らない**。だから
+    `profiles.*_limits()` が `_BODY_PROFILE` / `_SHOULDER_PROFILE` から解き、
+    `mouthpiece._inside` が刻みへ寄せるだけ ——数字を書き写すと、表を
+    差し替えたときに片方だけ古くなる（この設計で繰り返し出ている型）。
+
+    **主張は 1 つ「母線は単調」** ——胴は最大径へ太る一方、肩はシャンクへ細る
+    一方。肩では単調のほうが「値が [0,1] を出る」より先に破れる。
+    """
+    lo_w, hi_w = profiles.body_waist_limits()
+    lo_k, hi_k = profiles.shoulder_fullness_limits()
+
+    def apex_u(w):
+        n = 4000
+        best_u, best_r = 1.0, 1.0
+        for i in range(n + 1):
+            u = i / n
+            r = (profiles._pchip(profiles._BODY_PROFILE, u)
+                 * (1.0 + w * profiles._waist_bump(u)))
+            if r > best_r:
+                best_u, best_r = u, r
+        return best_u
+
+    # 別解法で答え合わせ（閉じた式ではなく素の走査）
+    assert apex_u(hi_w - 1e-4) == pytest.approx(1.0)
+    assert apex_u(hi_w + 1e-3) < 0.999
+    assert lo_w == pytest.approx(-0.161380, abs=1e-5)
+    assert hi_w == pytest.approx(0.072572, abs=1e-5)
+    assert lo_k == pytest.approx(-0.360730, abs=1e-5)
+    assert hi_k == pytest.approx(1.863339, abs=1e-5)
+
+    reg = get_registry().get("saxophone")
+    walls = set()
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_waist", "shoulder_fullness"):
+            sp = specs[key]
+            walls.add((key, sp.hard_min, sp.hard_max))
+            lo, hi = (lo_w, hi_w) if key == "body_waist" else (lo_k, hi_k)
+            assert lo < sp.hard_min and sp.hard_max < hi, (tid, key)
+    # 3 サイズで同じ壁（形の正規化量なのでサイズに依らない）
+    assert len(walls) == 2, sorted(walls)
+
+
+def test_the_shoulder_band_no_longer_crosses_its_own_wall():
+    """**帯の下端 −1.0 は壁の外にあった（B-4b で発覚）。**
+
+    B-4a の径 2 本は「相手で動く壁を静的な帯で表せない」ので端が届かなくて
+    よかったが、こちらは**相手がいない**（形の正規化量だけで決まる）ので、
+    帯が壁を跨いでいるのは端的に帯の欠陥。いまは 3 本とも帯の端が全部通る。
+
+    −1.0 が何をしていたかも固定する ——肩の中ほど（s≈0.73）がシャンク径を
+    下回る「えぐれ」で、しかも**えぐれは必ずボアの上に来る**ので
+    `shank_warnings` が言う肉厚（シャンク径 − ボア径）が最薄でなくなる。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_waist", "shoulder_fullness", "beak_height"):
+            sp = specs[key]
+            assert sp.hard_min <= sp.min and sp.max <= sp.hard_max, (tid, key)
+            for edge in (sp.min, sp.max):
+                v, rep = sp.validate_report(edge)
+                assert v == pytest.approx(edge) and rep is None, (tid, key)
+                assert comp.params_error(dict(base, **{key: edge})) is None
+        # 旧下端 −1.0 が壊していたもの
+        old = dict(base, shoulder_fullness=-1.0)
+        dz, dr = profiles.shoulder_dip(old)
+        assert dr < profiles.shank_radius(old) - 1e-3, tid
+        assert dz >= profiles.bore_start_z(old), tid
+        # 壁の外なので、いまは丸められて**壁だと名乗る**
+        v, rep = specs["shoulder_fullness"].validate_report(-1.0)
+        assert v == pytest.approx(specs["shoulder_fullness"].hard_min)
+        assert rep is not None and rep["at"] == "wall"
+
+
+def test_the_beak_height_wall_is_where_the_number_stops_describing_the_part():
+    """**`beak_height` の壁は「壊れる点」ではなく「定義が壊れる点」（B-4b）。**
+
+    定義は「バイトポイントでのテーブル面からの高さ ＝ 口の開き量」。稜線が
+    そこで胴の頂点を越えると、上面は胴のままになって**与えた数字が部品の
+    どこにも現れない**。旧コメントはそこを「胴の全高 0.9·body_dia」と書いて
+    いたが、実測は 0.72〜0.75·body_dia で、**比は一定ですらない**
+    （旧レンジの上端 0.75 倍は 3 サイズとも壁の外だった）。
+
+    OCCT が割れるのは 0.5mm で、壁（4.5 / 5.5 / 6.0）のずっと下。
+    掃引器の「−21.2mm まで通る」は段 1〜2 の打ち切りで、そこを
+    「割れる点」と読むと嘘になる。
+    """
+    reg = get_registry().get("saxophone")
+    ratios = set()
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        sp = next(s for s in comp.param_specs() if s.key == "beak_height")
+        z_bite = profiles._BEAK_BITE * base["overall_length"]
+        top = profiles.beak_height_at_body_top(base)
+        flat = profiles.beak_height_flat(base)
+        ratios.add(round(top / base["body_dia"], 3))
+        # 壁は両方とも landmark の内側、刻み 0.5 の格子に乗る
+        assert flat < sp.hard_min <= sp.min, tid
+        assert sp.max == sp.hard_max < top, tid
+        assert sp.hard_max % 0.5 == pytest.approx(0.0), tid
+        # 壁の内側では稜線が胴の中、1 段外では外へ出て切除が効かない
+        inside = dict(base, beak_height=sp.hard_max)
+        outside = dict(base, beak_height=sp.hard_max + sp.step)
+        assert (profiles.beak_y(inside, z_bite)
+                <= profiles.outer_radius(inside, z_bite) + 1e-9), tid
+        assert (profiles.beak_y(outside, z_bite)
+                > profiles.outer_radius(outside, z_bite)), tid
+        # 下側は「稜線が前下がり」——壁ではまだ上向き、下れば負になる
+        assert profiles.beak_angle(dict(base, beak_height=sp.hard_min)) > 0.0
+        below = dict(base, beak_height=sp.hard_min - 2.0 * sp.step)
+        assert profiles.beak_angle(below) < 0.0, tid
+        # 旧レンジの上端 0.75 倍は壁の外だった
+        assert round(0.75 * base["body_dia"], 1) > sp.hard_max, tid
+        # **この壁は「関係」**（B-3・B-4a と同じ型）——`hard_*` はテンプレート
+        # 値での掛け金でしかなく、相手を動かせば壁も動く。だから成立条件は
+        # `outer_layout_error` が 1 か所で持つ。
+        wide = dict(base, body_dia=base["body_dia"] + 6.0)
+        assert profiles.beak_height_at_body_top(wide) > top + 3.0, tid
+        assert comp.params_error(dict(base, beak_height=sp.hard_max + sp.step))
+        assert comp.params_error(dict(wide, beak_height=sp.hard_max
+                                      + sp.step)) is None, tid
+    # **比は一定ではない**（0.9 という単一の数字では書けない）
+    assert len(ratios) == 3, sorted(ratios)
+
+
+def test_the_beak_axis_measures_the_part_not_the_formula():
+    """**掃引器の `beak_y` 軸が式を測っていた（B-4b で直した）。**
+
+    `pf.beak_y` はビーク稜線の解析式で、稜線が胴の外へ出ても線形に伸び続ける。
+    部品の上面は `min(稜線, 外半径)` なので、そこから先は形が動かない。
+    直す前は `beak_height` を既定の 4 倍まで上げても「100% 生きている」と
+    報告していた。`sweep_outer.py` の主張 (1) と**同じ型の盲目**。
+
+    既定では稜線は胴の内側にあるので、この頭打ちは B-0〜B-4a の掃引には
+    掛からない（`tip_opening` を回し直して committed ログと一致を確認済み。
+    `docs/sweeps/b4b-outer-curves.txt` の §3）。
+    """
+    import importlib.util
+    spec_f = importlib.util.spec_from_file_location(
+        "sweep_limits", "cad/windycity/sweep_limits.py")
+    sw = importlib.util.module_from_spec(spec_f)
+    spec_f.loader.exec_module(sw)
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    grids = sw._grids(base)
+    lim = base["overall_length"] - 1e-6
+    # 既定では頭打ちは効かない（＝過去の掃引と比較できる）
+    axes = sw._axes(base, grids)
+    raw = tuple(profiles.beak_y(base, min(z, lim)) for z in grids["outer"])
+    assert axes["beak_y"] == raw
+    # 稜線が胴の外へ出る高さでは、式と形が食い違う
+    high = dict(base, beak_height=3.0 * base["body_dia"])
+    axes_h = sw._axes(high, grids)
+    raw_h = tuple(profiles.beak_y(high, min(z, lim)) for z in grids["outer"])
+    assert axes_h["beak_y"] != raw_h
+    assert all(a <= b + 1e-12 for a, b in zip(axes_h["beak_y"], raw_h))
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 

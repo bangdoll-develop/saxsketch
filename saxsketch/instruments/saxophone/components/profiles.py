@@ -326,6 +326,11 @@ def ligature_seat_range(p: dict) -> tuple[float, float]:
 
     実物は「最大径に向かって単調に太る」形なので、旧実装のような r/rb==1.0 の
     平坦区間は存在しない。踵（最大径）から前方へリガチャー幅ぶん取った帯を座とする。
+
+    **この「単調に太る」に座の定義が乗っている。** `body_waist` を強く負へ振ると
+    胴の中ほど（u≈0.23）に凹みが出て前提が崩れ、座は最大径ではない所に置かれる
+    ——`heel_z` は軸方向の式なので何も言わない。Phase B-4b でそこをスライダの壁に
+    した（`body_waist_limits`）。
     """
     heel = heel_z(p)
     return heel - _SEAT_LENGTH_RATIO * heel, heel
@@ -423,6 +428,13 @@ def outer_radius_nominal(p: dict, z: float) -> float:
     `shoulder_fullness` は z > heel_z だけを動かし、どちらも境の半径 `r_max` を
     動かさない。動かすのは `body_dia` だけ。実物も滑らかな極大ではなく角で、
     `_SHOULDER_PROFILE` の s=0 の傾きは胴側の傾きと一致しない。
+
+    **ただし「境の半径を動かさない」＝「境が最大」ではない。** 歪みが強いと
+    胴の途中や肩の途中がそこを追い越す ——`heel_z` は軸方向の式なので**動かず**、
+    OCCT もソリッド 1 個を返すので、Phase B-4b までこれは誰にも見えていなかった。
+    いまは母線の単調性（`body_waist_limits` / `shoulder_fullness_limits`）が
+    スライダの壁として掛かっていて、範囲内なら頂点は踵にある。壊れていないことを
+    直に確かめるのは `outer_apex` / `shoulder_dip`。
     """
     r_max = p["body_dia"] / 2.0
     heel = heel_z(p)
@@ -434,6 +446,205 @@ def outer_radius_nominal(p: dict, z: float) -> float:
     if s >= 1.0:
         return r_sh
     return r_sh + (r_max - r_sh) * shoulder_shape(p, s)
+
+
+# ---------------------------------------------------------------- 頂点は「主張」
+#
+# 「最大径は踵（`heel_z`）にある」は**設計の主張であって計算結果ではない**。
+# `heel_z` は (全長 − シャンク長)/(1 + 肩比) という**軸方向の式**なので、形を歪める
+# 2 本（`body_waist` / `shoulder_fullness`）では定義上 1 ビットも動かない ——
+# つまり `heel_z` を見張っても、この 2 本が頂点を壊したことは**永久に検出できない**
+# （`cad/windycity/sweep_outer.py` の主張 (1) が Phase B-4b までそうだった。
+# 式を検算していて形を見ていない）。だから形を直に測る側をここに置く。
+#
+# 壊れ方は 2 通りあり、**どちらも OCCT はソリッド 1 個を返す**（掃引の段 3 が
+# 「1 個か」しか見ていないので素通りする。B-3 の「1 個は必要条件でしかない」の
+# 2 例目）:
+#
+#   - 頂点が胴／肩の途中へ移る → `ligature_seat_range` は `heel_z` 基準なので
+#     **リガチャー座の位置そのものが嘘**になる（セット適合の基準でもある）。
+#   - 肩の途中が `shank_radius` を下回る → 「最大径からシャンクへ絞る」が破れて
+#     **えぐれ（アンダーカット）**になる。単調に細るという前提の上に立っている
+#     ものが全部ずれる。
+#
+# 限界値は `_BODY_PROFILE` / `_SHOULDER_PROFILE` だけで決まる（`r/r_max` に
+# 正規化した形の性質なので **3 サイズ共通・他のパラメータに依らない**）。
+# **数字を書き写さずに表から解く** —— 実測表を差し替えたら限界も一緒に動く。
+# 散文へ焼くと腐るのは Phase B-2 で踏んだとおり。
+
+
+def _min_on_unit(fn, n: int = 4000) -> float:
+    """`fn(t)` の最小値を t∈(0,1) で。走査で括ってから黄金分割で詰める。
+
+    端は分母が 0 に落ちるので除く。呼び出し側はどれもキャッシュ付きなので、
+    精度側に倒して走査を粗くしない。
+    """
+    ts = [(i + 1) / (n + 1) for i in range(n)]
+    vals = [fn(t) for t in ts]
+    k = min(range(n), key=vals.__getitem__)
+    a = ts[k - 1] if k > 0 else 0.0
+    b = ts[k + 1] if k < n - 1 else 1.0
+    phi = (math.sqrt(5.0) - 1.0) / 2.0
+    c, d = b - phi * (b - a), a + phi * (b - a)
+    fc, fd = fn(c), fn(d)
+    for _ in range(200):
+        if b - a < 1e-13:
+            break
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - phi * (b - a)
+            fc = fn(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + phi * (b - a)
+            fd = fn(d)
+    return min(vals[k], fc, fd)
+
+
+#: 数値微分の刻み（`_pchip` は C1 なので中心差分で十分）。
+_D = 1e-6
+
+
+def _deriv(fn, t: float) -> float:
+    a, b = max(t - _D, 0.0), min(t + _D, 1.0)
+    return (fn(b) - fn(a)) / (b - a)
+
+
+@functools.lru_cache(maxsize=1)
+def body_waist_limits() -> tuple[float, float]:
+    """`body_waist` が「胴は最大径に向かって単調に太る」を保つ範囲。
+
+    `r(u) = P(u)·(1 + w·B(u))` の微分から
+    `P' + w·(P·B)' ≥ 0` ——`(P·B)'` の符号で上下に割れるので、
+    正のところが上限を、負のところが下限を決める。
+
+    **上限は「頂点が u=1 から外れる点」と同じ事象**（頂点が端から外れるのは、
+    端の直前で母線が下り始めることだから）。実測で 0.072573 と 0.072572 が
+    一致する。下限のほうは胴の中ほど（u≈0.23）に凹みが出る点で、
+    こちらは頂点を見ていても永久に分からない。
+    """
+    prof = lambda u: _pchip(_BODY_PROFILE, u)          # noqa: E731
+    both = lambda u: prof(u) * _waist_bump(u)          # noqa: E731
+
+    def hi(u: float) -> float:
+        g = _deriv(both, u)
+        return _deriv(prof, u) / -g if g < -1e-12 else float("inf")
+
+    def lo(u: float) -> float:
+        g = _deriv(both, u)
+        return _deriv(prof, u) / g if g > 1e-12 else float("inf")
+
+    return -_min_on_unit(lo), _min_on_unit(hi)
+
+
+@functools.lru_cache(maxsize=1)
+def shoulder_fullness_limits() -> tuple[float, float]:
+    """`shoulder_fullness` が「肩は最大径からシャンクへ単調に細る」を保つ範囲。
+
+    `v(s) = S(s) + k·(L(s) − S(s))`（`L(s) = 1 − s` は直線）の微分から
+    `S' + k·(L − S)' ≤ 0`。
+
+    **単調のほうが「値が [0, 1] を出る」より先に破れる**（実測 −0.3607 /
+    +1.8633 に対し、シャンク径を割るのは −0.3729、最大径を超えるのは
+    +2.6175）ので、こちらを壁にする。+1（母線が直線＝円錐）は内側に残る。
+    """
+    prof = lambda s: _pchip(_SHOULDER_PROFILE, s)               # noqa: E731
+    gap = lambda s: (1.0 - s) - _pchip(_SHOULDER_PROFILE, s)    # noqa: E731
+
+    def hi(s: float) -> float:
+        g = _deriv(gap, s)
+        return -_deriv(prof, s) / g if g > 1e-12 else float("inf")
+
+    def lo(s: float) -> float:
+        g = _deriv(gap, s)
+        return _deriv(prof, s) / g if g < -1e-12 else float("inf")
+
+    return -_min_on_unit(lo), _min_on_unit(hi)
+
+
+def outer_apex(p: dict, n: int = 2000) -> tuple[float, float]:
+    """外形の**実際の**最大半径とその z（面取り前の `outer_radius_nominal` 基準）。
+
+    `heel_z` と食い違ったら「最大径は踵」という主張が破れている。**式ではなく
+    形を見る**ためのものなので、ここでは閉じた式を使わず素直に走査する
+    （`*_limit()` の解と互いの答え合わせになる）。
+    """
+    heel = heel_z(p)
+    sl = shoulder_length(p)
+    best_z, best_r = heel, outer_radius_nominal(p, heel)
+    for span, base in ((heel, 0.0), (sl, heel)):
+        if span <= 0.0:
+            continue
+        for i in range(n + 1):
+            z = base + span * i / n
+            r = outer_radius_nominal(p, z)
+            if r > best_r:
+                best_z, best_r = z, r
+    return best_z, best_r
+
+
+def body_dip(p: dict, n: int = 2000) -> tuple[float, float]:
+    """胴（ティップ〜踵）が**太るのをやめる**点と、その落ち込み量 [mm]。
+
+    単調に太っていれば `(heel_z, 0.0)`。`shoulder_dip` が半径を返すのと違って
+    第 2 要素は**落ち込み量**（0 なら健全）——凹みは局所的なので、絶対値では
+    なく「前より細くなったか」で見るしかない。
+
+    `outer_apex` では捕まらない。負の `body_waist` が作るのは中ほどの凹みで、
+    最大径は踵のままだから ——**壊れ方が 3 通りあるので、目も 3 つ要る**。
+    """
+    heel = heel_z(p)
+    if heel <= 0.0:
+        return heel, 0.0
+    worst_z, worst = heel, 0.0
+    prev = outer_radius_nominal(p, 0.0)
+    for i in range(1, n + 1):
+        z = heel * i / n
+        r = outer_radius_nominal(p, z)
+        if prev - r > worst:
+            worst_z, worst = z, prev - r
+        prev = r
+    return worst_z, worst
+
+
+def shoulder_bulge(p: dict, n: int = 2000) -> tuple[float, float]:
+    """肩（踵〜シャンク平行部）が**細るのをやめる**点と、その膨らみ量 [mm]。
+
+    単調に細っていれば `(heel_z, 0.0)`。`body_dip` の肩側の相方で、2 つ合わせて
+    「母線は単調」という主張そのものになる ——`outer_apex` と `shoulder_dip` は
+    その主張が破れたときに**見える症状**でしかなく、症状が出ないまま主張だけが
+    破れる帯がある（肩比 1.86〜2.62 は膨らむのに最大径を超えず、シャンク径も
+    割らないので、その 2 つは何も言わない）。
+    """
+    heel, sl = heel_z(p), shoulder_length(p)
+    if sl <= 0.0:
+        return heel, 0.0
+    worst_z, worst = heel, 0.0
+    prev = outer_radius_nominal(p, heel)
+    for i in range(1, n + 1):
+        z = heel + sl * i / n
+        r = outer_radius_nominal(p, z)
+        if r - prev > worst:
+            worst_z, worst = z, r - prev
+        prev = r
+    return worst_z, worst
+
+
+def shoulder_dip(p: dict, n: int = 2000) -> tuple[float, float]:
+    """肩（踵〜シャンク平行部）の**最小**半径とその z。
+
+    `shank_radius` を下回っていたらえぐれている。
+    """
+    heel, sl = heel_z(p), shoulder_length(p)
+    if sl <= 0.0:
+        return heel, outer_radius_nominal(p, heel)
+    best_z, best_r = heel + sl, outer_radius_nominal(p, heel + sl)
+    for i in range(n + 1):
+        z = heel + sl * i / n
+        r = outer_radius_nominal(p, z)
+        if r < best_r:
+            best_z, best_r = z, r
+    return best_z, best_r
 
 
 # ティップ前縁の面取り
@@ -810,6 +1021,34 @@ def beak_top_y(p: dict, z: float, x: float = 0.0) -> float:
 def beak_y(p: dict, z: float) -> float:
     """[互換] ビーク稜線の Y。`beak_top_y(p, z, 0.0)` と同じ。"""
     return beak_apex_y(p, z)
+
+
+def beak_height_flat(p: dict) -> float:
+    """ビーク稜線がティップ〜バイトポイントで**水平**になる `beak_height` [mm]。
+
+    ティップ側の頂点 `beak_apex_y0` は「テーブル＋ティップ開き＋ティップレール厚」
+    で固定なので、これを下回ると稜線が**前下がり**になる ——ビークが後ろへ向かって
+    低くなる形は、実測 18.0° の「ティップからバイトへ立ち上がる」直線ランプでは
+    もはやない。Phase B-4b でスライダの `hard_min` にした。
+    """
+    return beak_apex_y0(p) - table_plane_y(p, _BEAK_BITE * p["overall_length"])
+
+
+def beak_height_at_body_top(p: dict) -> float:
+    """バイトポイントで稜線が胴の頂点に届く `beak_height` [mm]。
+
+    `beak_height` は「バイトポイントでのテーブル面からの高さ ＝ くわえたときの
+    口の開き量」と定義されている。これを超えると**その定義が壊れる** ——
+    稜線が胴の外（空中）に出て切除が効かず、バイトポイントの上面は胴のままに
+    なるので、与えた数字は部品のどこにも現れない。
+
+    **旧コメントの「胴の全高 0.9·`body_dia`」は外れていた。** 実測すると
+    0.723 / 0.734 / 0.746·`body_dia`（3 サイズ）で、**比は一定ですらない** ——
+    バイトポイントは全長の 1/4 で、そこの胴の太さは踵までの比で決まるため。
+    旧レンジの上端 0.75·`body_dia` は 3 サイズとも**この壁の外**にあった。
+    """
+    z_bite = _BEAK_BITE * p["overall_length"]
+    return outer_radius(p, z_bite) - table_plane_y(p, z_bite)
 
 
 #: 切除ソリッドをティップより手前へ出す量 [mm]。
@@ -1754,8 +1993,21 @@ def shank_warnings(p: dict) -> list[str]:
 def outer_layout_error(p: dict) -> str | None:
     """外形の並びが成立しないときに理由を返す。成立していれば `None`。
 
-    条件は 3 つ。どれも「各自のレンジは守っているのに組で破れる」型で、
+    条件は 6 つ。前の 3 つは「各自のレンジは守っているのに組で破れる」型で、
     `ParamSpec` は 1 本ずつしか見ないので **UI のスライダ 2 本から到達できる**。
+
+    **(4)(5) は相手のいない 1 本の拘束**（Phase B-4b の「母線は単調」）。
+    `ParamSpec.hard_*` でも表せるが、そちらは**スライダの刻みへ丸めた**値
+    なので、刻みに乗らない経路（プロジェクトファイル、直に組んだ dict、
+    掃引器）はすり抜ける。`hard_*` が刻みの格子で止め、ここが**真の交差**で
+    断る ——B-4a の踵の床（`shank_length` / `shoulder_ratio`）と同じ組み方。
+    どちらも数字は持たず `body_waist_limits` / `shoulder_fullness_limits` が
+    実測プロファイル表から解いた値を使うので、置き場所が 2 つでもずれない。
+
+    **(6) はまた「関係」**（B-3・B-4a で 5 本出たのと同じ型）。`beak_height` の
+    上下は `body_dia`・全長・テーブル角・ティップ開き・ティップレール厚で動く
+    ので、`hard_*` はテンプレート値での**掛け金**にしかならない ——相手を
+    動かせば帯の端が壁の外へ出ることもある。成立条件はここが 1 か所で持つ。
 
     **(1) 最大径は本当に最大でなければならない**（`body_dia` ≥ `shank_dia`）。
     逆転すると:
@@ -1826,6 +2078,63 @@ def outer_layout_error(p: dict) -> str | None:
                 f"シャンク長を {shank_length_at_heel_floor(p):.1f}mm 以下、"
                 f"または肩の長さ比を {shoulder_ratio_at_heel_floor(p):.3f} "
                 f"以下にしてください。")
+    # (4)(5) 母線は単調（Phase B-4b）。**壊れ方が 4 通りあるので、名指しは
+    # 症状の出ているほうを選ぶ** ——壁のすぐ外では逸脱量が 1µm に満たず、
+    # 量を印字しても「0.00mm」としか出ない。どこで何が起きるかを言う。
+    heel = heel_z(p)
+    w_lo, w_hi = body_waist_limits()
+    w = body_waist(p)
+    if not (w_lo <= w <= w_hi):
+        az, _ = outer_apex(p)
+        if abs(az - heel) > 1e-3:
+            why = (f"最大径が踵（z={heel:.1f}mm）ではなく z={az:.1f}mm へ"
+                   f"移ります")
+        else:
+            why = f"胴が z={body_dip(p)[0]:.1f}mm で太るのをやめます"
+        return (f"胴の膨らみ {w:+.3f} では母線が単調でなくなります: {why}。"
+                f"「最大径に向かって単調に太る」が崩れると、リガチャー座"
+                f"（`ligature_seat_range`）が最大径ではない所に置かれます"
+                f"——**形は通り、OCCT もソリッド 1 個を返す**ので、"
+                f"出来上がりを見ても気づけません。"
+                f"{w_lo:+.3f}〜{w_hi:+.3f} の範囲にしてください。")
+    k_lo, k_hi = shoulder_fullness_limits()
+    k = shoulder_fullness(p)
+    if not (k_lo <= k <= k_hi):
+        _, dr = shoulder_dip(p)
+        r_sh = shank_radius(p)
+        if dr < r_sh - 1e-9:
+            why = (f"肩の途中の最小半径 {dr:.3f}mm がシャンク半径 "
+                   f"{r_sh:.3f}mm を下回り、えぐれます ——**最薄の肉厚が"
+                   f"シャンクではなくそこ**になるので、肉厚の注意の数字も"
+                   f"甘くなります")
+        else:
+            why = f"肩が z={shoulder_bulge(p)[0]:.1f}mm で細るのをやめます"
+        return (f"肩の張り {k:+.3f} では母線が単調でなくなります: {why}。"
+                f"「最大径からシャンクへ単調に細る」が崩れます ——"
+                f"**形は通り、OCCT もソリッド 1 個を返す**ので、"
+                f"出来上がりを見ても気づけません。"
+                f"{k_lo:+.3f}〜{k_hi:+.3f} の範囲にしてください。")
+    bh = p.get("beak_height")
+    if bh is not None:
+        top, flat = beak_height_at_body_top(p), beak_height_flat(p)
+        z_bite = _BEAK_BITE * p["overall_length"]
+        if bh > top:
+            return (f"ビーク高さ {bh:.2f}mm がバイトポイント（z="
+                    f"{z_bite:.1f}mm）での胴の全高 {top:.2f}mm を超えています。"
+                    f"ビークは切除ソリッドなので、稜線が胴の外へ出ると"
+                    f"**そこは何も削られず**、上面は胴のままになります ——"
+                    f"「くわえたときの口の開き量」という `beak_height` の"
+                    f"定義が成り立たなくなり、寸法図だけが与えた数字を"
+                    f"印字し続けます。{top:.2f}mm 以下にするか、最大径か"
+                    f"全長を大きくしてください。")
+        if bh < flat:
+            return (f"ビーク高さ {bh:.2f}mm ではビーク稜線が**前下がり**に"
+                    f"なります（水平になるのは {flat:.2f}mm）。ティップ側の"
+                    f"頂点はテーブル＋ティップ開き＋ティップレール厚で"
+                    f"決まっているので、これを下回るとビークがティップから"
+                    f"後ろへ向かって低くなります ——実測 18.0° の"
+                    f"「ティップからバイトへ立ち上がる直線ランプ」ではもはや"
+                    f"ありません。{flat:.2f}mm 以上にしてください。")
     return None
 
 
