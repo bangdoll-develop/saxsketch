@@ -1179,6 +1179,228 @@ def test_the_facing_walls_clamp_and_say_which_wall():
     assert v == pytest.approx(0.0) and rep["at"] == "band"
 
 
+def test_the_lifted_baffle_clamps_reach_the_shape():
+    """**外した掛け金が本当に外れていることの回帰テスト（Phase B-2）。**
+
+    `baffle_step_rise` は `_v_step` の中で 0.85 に、`baffle_curvature` は
+    `_v_curve` の中で ±1 に頭打ちにされていた。**スキーマの帯と同じ数字が
+    コードの中にもう 1 部あった**ので、`hard_max` だけ広げてもつまみは
+    空回りする。ここで見るのは「旧クランプの外で天井が動くこと」。
+
+    下限のほうは外していない。`baffle_step_rise` が負のときは
+    `if r <= 0.0: return base` が実測どおりの肩を返すので、**分岐そのものが
+    下限 0 の理由**（測定ではない）。それも一緒に固定する。
+    """
+    p = _template_params("mouthpiece", "alto")
+    zb = profiles.bore_start_z(p)
+
+    def roof(**kw):
+        return [profiles.cavity_roof_y(dict(p, **kw), zb * i / 40.0)
+                for i in range(41)]
+
+    assert roof(baffle_type="step", baffle_step_rise=1.2) !=         roof(baffle_type="step", baffle_step_rise=0.85)
+    assert roof(baffle_type="curve", baffle_curvature=1.5) !=         roof(baffle_type="curve", baffle_curvature=1.0)
+    assert roof(baffle_type="curve", baffle_curvature=-1.5) !=         roof(baffle_type="curve", baffle_curvature=-1.0)
+    # 負の段は構造として効かない（クランプではなく分岐）
+    assert roof(baffle_type="step", baffle_step_rise=-0.5) ==         roof(baffle_type="step", baffle_step_rise=0.0)
+
+
+def test_the_rollover_fillet_saturates_by_arithmetic_not_by_a_clamp():
+    """ロールオーバーの肩は **w ≥ 1 で式そのものが飽和する**。
+
+    `f(u) = u²/(2w) (u<w) / u−w/2 (u≥w)` を `f(t)/f(1)` で正規化しているので、
+    `w = rollover_radius / span` が 1 を超えると t は常に w 未満 ＝ `t²` に
+    なり、**w が消える**。外した 0.9 のクランプはこの飽和のすぐ内側にいた
+    だけで、壁を作っていたのは掛け金ではなく算数のほう。
+
+    下限 0.02 は残してある —— `u²/(2w)` の割り算が w→0 で発散する。
+    `_pchip_table` の節点衝突・`cavity_floor_y` の特異点・`_chamber_weight`・
+    `facing_rise` の円弧半径に続く、同じ型の 5 つ目。
+    """
+    p = dict(_template_params("mouthpiece", "alto"), baffle_type="rollover")
+    zb = profiles.bore_start_z(p)
+    span = (1.0 - profiles.baffle_plateau(p)) * zb
+
+    def roof(r):
+        return [profiles.cavity_roof_y(dict(p, rollover_radius=r), zb * i / 40.0)
+                for i in range(41)]
+
+    assert roof(span) == pytest.approx(roof(5.0 * span), abs=1e-9)   # w≥1 で飽和
+    assert roof(0.999 * span) != roof(span)        # その手前はまだ動く
+    assert roof(0.0) == pytest.approx(roof(0.02 * span), abs=1e-9)   # 下はガードで一定
+    for r in (0.0, 1e-9, 0.01 * span):             # 発散しない
+        assert all(abs(y) < 1e3 for y in roof(r)), r
+
+
+def test_the_brightness_cap_is_policy_not_a_missed_edit():
+    """`brightness` が壁の外で頭打ちなのは**わざと**。
+
+    `baffle_step_rise` の 0.85 は 3 か所にあった —— スキーマの `max`、
+    `_v_step` のクランプ、そして `brightness._baffle_bonus` の正規化 `/0.85`。
+    幾何の掛け金は外したが、**あちらは回帰の有効範囲**であって幾何の壁では
+    ないので外さない（Phase A の Tier2 と同じ扱い）。数値が同じでも意味が違う。
+
+    これを書いておかないと、次に読む人が「片方だけ直し忘れ」として直す。
+    """
+    from saxsketch.acoustics import brightness
+    p = dict(_template_params("mouthpiece", "alto"), baffle_type="step")
+    at_band = brightness.tone_metrics(dict(p, baffle_step_rise=0.85))["brightness"]
+    for v in (1.5, 2.85):
+        assert brightness.tone_metrics(
+            dict(p, baffle_step_rise=v))["brightness"] == at_band, v
+    # 形のほうは動いている（＝ 頭打ちなのは音響モデルだけ）
+    zb = profiles.bore_start_z(p)
+    assert (profiles.cavity_roof_y(dict(p, baffle_step_rise=2.85), 0.9 * zb)
+            != profiles.cavity_roof_y(dict(p, baffle_step_rise=0.85), 0.9 * zb))
+
+
+def test_the_throat_ratio_is_invisible_to_the_old_fingerprint():
+    """**B-0 で足した軸が無いと `throat_ratio` は測れない。**
+
+    初版の指紋は「ステーション枚数・先端高さ・最大高さ・窓の後端・ボアの
+    始まり」の 5 つのスカラーだった。`throat_ratio` は空洞の**途中**を相似に
+    絞るだけなので、この 5 つは 1 ビットも動かない ——「効いていない」と
+    誤判定される。掃引の実測でも本命の軸は `cavity_a`（応答 117〜118%）。
+
+    `chamber_ratio` のほうは最大高さが動くので旧指紋でも見えていた。
+    **同じ節のパラメータでも、見える／見えないは別々に決まる。**
+    """
+    p = _template_params("mouthpiece", "alto")
+
+    def coarse(q):
+        st = profiles.cavity_stations(q)
+        return (len(st), st[0]["h"], max(s["h"] for s in st),
+                profiles.window_end_z(q), profiles.bore_start_z(q))
+
+    def areas(q):
+        return [profiles.section_area(s) for s in profiles.cavity_stations(q)]
+
+    assert coarse(dict(p, throat_ratio=0.7)) == coarse(p)      # 旧指紋は盲
+    assert areas(dict(p, throat_ratio=0.7)) != areas(p)        # 新しい軸は見える
+    assert coarse(dict(p, chamber_ratio=1.6)) != coarse(p)     # こちらは見えていた
+
+
+def test_the_baffle_plateau_band_is_a_union_across_types():
+    """`baffle_plateau` の帯は**どの型のものでもない**（Phase B-2 の実測）。
+
+    実効範囲は `_PLATEAU_RANGE` が型ごとに決めていて、スキーマの帯
+    0.02〜0.75 は 4 型を覆う和集合。だから**どの型で見てもスライダの端は
+    死んでいる** —— straight / curve では上側の 86%、step / rollover では
+    合わせて 18% が動かない。掃引も 3 サイズ全部で「帯の端から先は形が
+    動かない」と出た（＝ 壁はスキーマではなく型の定義の側にある）。
+
+    `_PLATEAU_RANGE` は外さない。「長い棚を許せばそれはもうストレートでは
+    なくステップ」という**理由が書いてある**掛け金だから ——理由が
+    「未測定」「出所なし」「循環」だった 3 本とはそこが違う。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "baffle_plateau")
+    assert (spec.hard_min, spec.hard_max) == (None, None)      # 広げていない
+    base = {s.key: s.default for s in comp.param_specs()}
+    zb = profiles.bore_start_z(base)
+
+    def roof(bt, v):
+        return [profiles.cavity_roof_y(
+            dict(base, baffle_type=bt, baffle_plateau=v), zb * i / 40.0)
+            for i in range(41)]
+
+    for bt in ("step", "straight", "curve", "rollover"):
+        lo, hi = profiles._PLATEAU_RANGE[bt]
+        assert spec.min < lo or spec.max > hi, bt        # 帯のほうが広い
+        assert roof(bt, spec.min) == roof(bt, lo)        # 端は型の実効範囲へ丸まる
+        assert roof(bt, spec.max) == roof(bt, hi)
+        assert roof(bt, lo) != roof(bt, hi)              # 実効範囲の中では効く
+
+
+#: Phase B-2 で掃引して壁を書いた「バッフル ＋ チェンバー」5 本と、
+#: それが生きるバッフル型。`baffle_plateau` は**わざと入っていない** ——
+#: 壁が `_PLATEAU_RANGE`（型の定義）の側にあると測定で分かったので広げていない。
+_B2_WALLED = (("baffle_step_rise", "step"), ("baffle_curvature", "curve"),
+              ("rollover_radius", "rollover"), ("throat_ratio", "step"),
+              ("chamber_ratio", "step"))
+
+
+def test_the_baffle_and_chamber_walls_hold_up_as_geometry():
+    """**B-2 で測った壁が 3 サイズとも幾何として成立していること。**
+
+    B-1 と同じ流儀 —— 壁の数字を書き写すのではなく、壁で形が成立することを
+    主張する。掃引はここで OCCT のソリッドまで確かめている（生ログは
+    `docs/sweeps/b2-baffle-chamber.txt`）が、テストは段 1〜2 を押さえる。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, kind in _B2_WALLED:
+            spec = specs[key]
+            lo, hi = spec.bounds()
+            assert lo is not None and hi is not None, key
+            assert lo < spec.min or hi > spec.max, key       # 帯より広いこと
+            for v in (lo, hi):
+                p = dict(base, baffle_type=kind, **{key: v})
+                assert comp.params_error(p) is None, (tid, key, v)
+                st = profiles.cavity_stations(p)
+                assert len(st) > 20, (tid, key, v, len(st))
+                assert st[0]["h"] < 1.6, (tid, key, v, st[0]["h"])
+
+
+def test_the_widened_baffle_band_is_not_a_dead_band():
+    """**広げた先でつまみが効いていること。**
+
+    B-2 は 4 本で「壁がスキーマではなくコードの中にあった」ので、
+    `hard_*` を広げただけでは足りない ——`profiles` 側の掛け金を外して
+    初めて形が動く。ここはその両方が揃っていることの回帰。
+
+    型ごとに効く本が違うので、`_B2_WALLED` の型を当ててから比べる
+    （既定の `step` のままだと `baffle_curvature` と `rollover_radius` は
+    どちらの端でも同じ形になり、テストが素通りする）。
+    """
+    def shape(p):
+        st = profiles.cavity_stations(p)
+        return ([round(x["h"], 9) for x in st], [round(x["w"], 9) for x in st],
+                [round(profiles.section_area(x), 9) for x in st])
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    checked = 0
+    for key, kind in _B2_WALLED:
+        spec = specs[key]
+        lo, hi = spec.bounds()
+        for edge, wall in ((spec.min, lo), (spec.max, hi)):
+            if wall == edge:
+                continue                      # その向きへは広げていない
+            assert shape(dict(base, baffle_type=kind, **{key: edge})) !=                 shape(dict(base, baffle_type=kind, **{key: wall})), (key, edge, wall)
+            checked += 1
+    assert checked == 9, checked      # baffle_step_rise の下だけ広げていない
+
+
+def test_the_baffle_walls_clamp_and_say_which_wall():
+    """帯の外は通し、壁の外は丸めて**壁だと名乗る**こと（B-2 の 5 本）。"""
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    specs = {s.key: s for s in comp.param_specs()}
+
+    ro = specs["rollover_radius"]
+    assert (ro.hard_min, ro.hard_max) == (0.5, 21.0)
+    v, rep = ro.validate_report(20.5)                 # 帯の外・壁の内
+    assert v == pytest.approx(20.5) and rep is None
+    v, rep = ro.validate_report(40.0)                 # 壁の外
+    assert v == pytest.approx(21.0) and rep["at"] == "wall"
+    assert "越えられない壁" in rep["message"]
+
+    # 下だけ広げていない `baffle_step_rise` は、下は帯・上は壁と名乗り分ける
+    sr = specs["baffle_step_rise"]
+    assert sr.hard_min is None and sr.hard_max == 2.85
+    assert sr.validate_report(-0.5)[1]["at"] == "band"
+    assert sr.validate_report(4.0)[1]["at"] == "wall"
+
+    # 広げていない `baffle_plateau` は両側とも帯のまま
+    pl = specs["baffle_plateau"]
+    assert (pl.hard_min, pl.hard_max) == (None, None)
+    assert pl.validate_report(0.9)[1]["at"] == "band"
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 

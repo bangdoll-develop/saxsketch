@@ -1397,7 +1397,13 @@ def _v_step(p: dict, sigma: float) -> float:
     してあるので、型の作り直しで既定形状は 1μm も動かない。
     """
     a = baffle_plateau(p)
-    r = min(max(p.get("baffle_step_rise", 0.0), 0.0), 0.85)
+    # **上限のクランプは外した**（Phase 4-E B-2）。以前は 0.85 で頭打ちにして
+    # いたが、`src` は「上限は未測定」で**止めている理由が無かった**。r は
+    # `r·smoothstep + (1−r)·base` の混合重みなので 1 を超えると外挿になるだけで、
+    # 式は壊れない。壁は掃引で測って `ParamSpec.hard_max` に置く。
+    # 負のほうは下の `if` が `base` を返すので**構造として効かない** ——
+    # 下限 0 の理由は測定ではなくこの分岐そのもの。
+    r = p.get("baffle_step_rise", 0.0)
     base = _pchip(_CAVITY_C, _plateau_warp(sigma, a))
     if r <= 0.0:
         return base
@@ -1422,7 +1428,11 @@ def _v_rollover(p: dict, sigma: float) -> float:
     """
     a = baffle_plateau(p)
     span = max((1.0 - a) * bore_start_z(p), 1e-6)
-    w = min(max(p.get("rollover_radius", 8.0) / span, 0.02), 0.9)
+    # 上限 0.9 は外した（Phase 4-E B-2。`src` が空 ＝ 止めている理由が無かった）。
+    # **下限 0.02 は残す** —— 下の `f` が `u²/(2w)` で割るので w→0 で発散する。
+    # `_pchip_table` の節点衝突・`cavity_floor_y` の特異点・`_chamber_weight`・
+    # `facing_rise` の円弧半径に続く、割り算が潰れる同じ型の 5 つ目。
+    w = max(p.get("rollover_radius", 8.0) / span, 0.02)
     t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
 
     def f(u: float) -> float:
@@ -1447,7 +1457,10 @@ def _v_curve(p: dict, sigma: float) -> float:
     （c=−1 で 0.87mm/mm）。ふくらみ側とスクープ側は、この式で互いの鏡像になる。
     """
     a = baffle_plateau(p)
-    c = min(max(p.get("baffle_curvature", 0.5), -1.0), 1.0)
+    # ±1 のクランプは外した（Phase 4-E B-2）。`src` は「パラメータの定義域
+    # そのもの」と書いてあったが、n = 2^(1.6|c|) も t^n も |c|>1 で普通に解ける
+    # ので、**定義域を定義域で説明した循環**だった。壁は掃引で測る。
+    c = p.get("baffle_curvature", 0.5)
     t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
     n = 2.0 ** (1.6 * abs(c))
     return t ** n if c >= 0.0 else 1.0 - (1.0 - t) ** n
