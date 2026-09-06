@@ -371,7 +371,11 @@ def _build_around(comp, b: dict, key: str, last: float, step: float,
             continue
         t1 = time.time()
         bad = _build_ok(comp, p)
-        warn = len(pf.cavity_warnings(p))
+        # **部品に聞く**（`pf.cavity_warnings` を直に数えない）。注意の出所は
+        # `profiles` に複数あり、B-3 で `shank_warnings` が増えたときここだけ
+        # 取り残された —— シャンクの肉厚が薄くなる掃引で**まさに出る注意**を
+        # 道具が落とす。`Component.warnings` が唯一の集約点（`registry.py`）。
+        warn = len(comp.warnings(p))
         print(f"    {tag} {v:g}: {'ok' if bad is None else '*** ' + bad}"
               f"  ({time.time() - t1:.1f}s, 注意 {warn} 件)", flush=True)
 
@@ -401,12 +405,37 @@ def sweep(key: str, sizes=SIZES, do_build: bool = True,
         hi_base = dict(base, **{key: spec.max})
         for edge, b, sign in (("下", lo_base, -1), ("上", hi_base, +1)):
             t0 = time.time()
+            # **帯の端そのものを先に試す。** `_walk` は端を起点にして外へ歩くだけ
+            # なので、端が既に弾かれていても「1 段外で壁」としか言えない ——
+            # `shank_dia` の帯の下端 14.0 はアルト（ボア 15.8）・テナー（17.0）で
+            # **端そのものが通らない**のに、そう読める行が 1 行も出なかった。
+            # 帯は「勧める」ものなので、端が通らないなら壁より先に帯が誤り。
+            edge_bad = _cheap_ok(comp, b)
+            if edge_bad is not None:
+                print(f"  {edge}へ: **帯の端 {b[key]:g}{spec.unit} 自体が"
+                      f"通らない**（帯が壁の外へはみ出している）: {edge_bad}",
+                      flush=True)
+                continue
             last, why, live = _walk(comp, b, key, step, sign, grids, steps)
             if live is None:
-                # 歩いても形が動かない。**壁が無いのではなく効いていない。**
-                print(f"  {edge}へ: {spec.min if sign < 0 else spec.max:g}"
-                      f"{spec.unit} から先は**形が動かない**（この向きでは"
-                      f"効いていない。拘束は別のところで決まっている）", flush=True)
+                # 形が動かないまま終わった。**2 つの別の話が同じ枝に来る** ——
+                #   (a) 1 段も進めなかった: 帯の端の**すぐ外に壁がある**。
+                #       理由は `why` が持っている（`params_error` の文面）。
+                #   (b) 歩けたのに指紋が変わらない: この向きでは効いていない。
+                # 初版は (a) にも「効いていない。拘束は別のところで決まって
+                # いる」と書いていた。**当たってはいるが、どこで決まっているかを
+                # 測ったのに捨てていた** —— `body_dia` を下へ掃くと 1 段目で
+                # 「最大径がシャンク径より細い」が返るのに、ログには壁が
+                # 1 文字も残らなかった。`last` が起点のままかどうかで分かれる。
+                stuck = last == b[key]
+                head = (f"  {edge}へ: {spec.min if sign < 0 else spec.max:g}"
+                        f"{spec.unit} ")
+                if stuck:
+                    print(head + f"の 1 段外で**壁**。{why}", flush=True)
+                else:
+                    print(head + f"から先は**形が動かない**（この向きでは"
+                          f"効いていない。拘束は別のところで決まっている）"
+                          f"  {why}", flush=True)
                 continue
             if live != last:
                 print(f"  {edge}へ: 幾何は {last:g}{spec.unit} まで通るが、"

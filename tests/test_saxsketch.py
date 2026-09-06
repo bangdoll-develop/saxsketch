@@ -1726,9 +1726,15 @@ def test_no_wall_value_makes_the_analysis_emit_something_json_cannot_carry():
     いまは `None`（＝「合う挿し込み量が無い」）を返す。**壁を広げると下流が
     壊れる**のは Phase A で 4 か所出た型なので、ここは 1 本ずつではなく
     **壁を持つ全パラメータ × 3 サイズ**をまとめて見る。
+
+    **B-4a で「壁に立てない」組が出た。** 径 2 本の壁は相手との関係
+    （ボア径 < シャンク径 ≤ 最大径）で、掛け金は相手を壁まで寄せたときに
+    届く所に置いてある。だから既定の相手のままだと `hard_min` に立てない ——
+    それは壊れているのではなく**関係だから**なので、通らないときは理由が
+    相手の名前を挙げていることだけ確かめて数えない。
     """
     reg = get_registry().get("saxophone")
-    checked = 0
+    checked, relational = 0, 0
     for tid in SIZES:
         comp = reg.make_component("mouthpiece", tid)
         base = {sp.key: sp.default for sp in comp.param_specs()}
@@ -1737,12 +1743,227 @@ def test_no_wall_value_makes_the_analysis_emit_something_json_cannot_carry():
                 if wall is None:
                     continue
                 p = dict(base, **{spec.key: wall})
-                assert comp.params_error(p) is None, (tid, spec.key, wall)
+                err = comp.params_error(p)
+                if err is not None:
+                    # 関係で決まる壁だけが既定の相手で立てない。理由が相手を
+                    # 名指ししていることを確かめる（黙って通さない）。
+                    assert spec.key in ("body_dia", "shank_dia"), (tid, spec.key)
+                    assert ("ボア径" in err or "最大径" in err
+                            or "シャンク径" in err), (tid, spec.key, err)
+                    relational += 1
+                    continue
                 res = comp.simulate(p)
                 # allow_nan=False —— FastAPI の JSON 化と同じ厳しさで見る
                 json.dumps(res, allow_nan=False, default=str)
                 checked += 1
     assert checked >= 30, checked
+    assert relational == 9, relational
+
+
+def test_the_outer_diameter_walls_are_relations_not_numbers():
+    """**径 2 本の壁は相手で決まる（Phase B-4a）。**
+
+    測ったのは「通る範囲そのもの」で、帯の外へ歩く掃引では出せない ——
+    帯の端が既に弾かれている組があるため（下のテスト）。範囲の端は 3 サイズとも
+    ぴったり相手の値になる:
+
+        ボア径 < シャンク径 ≤ 最大径
+
+    ここでも数字ではなく**関係**を主張する。掛け金（`hard_*`）は相手を壁まで
+    寄せたときに届く所に置いてあるだけで、成立条件は `outer_layout_error` が
+    1 か所で持つ。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+
+        def span(key, lo, hi, step, b=None, _c=comp, _base=base):
+            """`params_error` が通る値の最小と最大（総当たり）。"""
+            b = _base if b is None else b
+            ok = [round(lo + step * i, 3)
+                  for i in range(int(round((hi - lo) / step)) + 1)
+                  if _c.params_error(
+                      dict(b, **{key: round(lo + step * i, 3)})) is None]
+            return (ok[0], ok[-1]) if ok else (None, None)
+
+        # --- 最大径: 下はシャンク径そのもの。上はこの範囲では見つからない
+        lo, hi = span("body_dia", 10.0, 40.0, 0.1)
+        assert lo == pytest.approx(base["shank_dia"], abs=0.1), (tid, lo)
+        assert hi == pytest.approx(40.0), (tid, hi)
+        # 相手を動かすと壁も動く（数字ではない）
+        lo2, _ = span("body_dia", 10.0, 40.0, 0.1,
+                      dict(base, shank_dia=20.0, bore_dia=15.0))
+        assert lo2 == pytest.approx(20.0, abs=0.1), (tid, lo2)
+
+        # --- シャンク径: 下はボア径、上は最大径。**両端とも関係**
+        lo, hi = span("shank_dia", 8.0, 40.0, 0.1)
+        assert lo == pytest.approx(base["bore_dia"] + 0.1, abs=0.1), (tid, lo)
+        assert hi == pytest.approx(base["body_dia"], abs=0.1), (tid, hi)
+        lo2, hi2 = span("shank_dia", 8.0, 40.0, 0.1,
+                        dict(base, bore_dia=12.0, body_dia=34.0))
+        assert lo2 == pytest.approx(12.1, abs=0.1), (tid, lo2)
+        assert hi2 == pytest.approx(34.0, abs=0.1), (tid, hi2)
+
+
+def test_a_relation_wall_leaves_band_ends_that_cannot_be_reached():
+    """**帯の端が壁の外へはみ出すことがある（B-4a の実測）。**
+
+    径 2 本の帯は 3 サイズ共通の絶対レンジ（18〜34 / 14〜28）で、既定の相手の
+    ままだと **12 端（2 本 × 2 端 × 3 サイズ）のうち 6 端が弾かれる** ——
+    最大径の下端 18.0 は 3 サイズとも、シャンク径の下端 14.0 はアルトと
+    テナー、上端 28.0 はソプラノ。これは帯の数字が下手なのではなく、
+    **相手で動く壁を静的な帯で表せない**ということ ——相手を一緒に動かせば
+    どの端も届く。
+
+    大事なのは黙って丸めないこと。`hard_*` を入れた今は、帯の端に置いた値は
+    クランプされず、通らないときは**理由つきで断られる**（相手の名前が文面に
+    出る）。
+
+    なお 18.0 / 14.0 という数字は `f1e79e8` で「ソプラノ実測 シャンク径 15.3mm
+    が入る位置」として下げたものだが、**その 15.3 はもう存在しない**（旧軸
+    スケール 0.664 の導出値で、テンプレートの note 自身が「肉厚 0.74mm で
+    min_wall を割る」と否定している）。理由の消えた追従。
+    """
+    reg = get_registry().get("saxophone")
+    dead = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, partner in (("body_dia", "シャンク径"),
+                             ("shank_dia", "ボア径")):
+            spec = specs[key]
+            for edge in (spec.min, spec.max):
+                # 帯の端は**壁の内側**なので、まずクランプされない
+                v, rep = spec.validate_report(edge)
+                assert v == pytest.approx(edge) and rep is None, (tid, key)
+                err = comp.params_error(dict(base, **{key: edge}))
+                if err is None:
+                    continue
+                dead += 1
+                assert partner in err or "最大径" in err, (tid, key, edge, err)
+    assert dead == 6, dead
+
+
+def test_the_heel_floor_is_a_stated_wall_not_a_silent_clamp():
+    """**踵の床を黙ったクランプから壁へ（Phase B-4a、8 例目）。**
+
+    `heel_z` は `max(heel_raw, 0.30·全長)` で床を持つ。掃引は
+    `shank_length` を 110mm まで、`shoulder_ratio` を 2.45 まで素通りさせ、
+    段 1〜3 が全部 ok を返した —— **形は床から先で 1 ビットも動かないのに**。
+    寸法図と仕様書は与えた数字を印字し続けるので、図と形が食い違う。
+
+    ここで見るのは 3 つ: 壁の内側では踵が式どおり動くこと、床の外は理由つきで
+    断られること、そして**断らなければ形が凍っていたこと**（＝ 壁の必要性）。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, step in (("shank_length", 0.5), ("shoulder_ratio", 0.005)):
+            wall = specs[key].hard_max
+            assert wall is not None and wall > specs[key].max, (tid, key)
+            assert comp.params_error(dict(base, **{key: wall})) is None, (tid, key)
+            # 壁の内側では踵が床ではなく式で決まる
+            p_wall = dict(base, **{key: wall})
+            assert profiles.heel_raw(p_wall) > profiles.heel_floor(p_wall), tid
+            assert profiles.heel_z(p_wall) == pytest.approx(
+                profiles.heel_raw(p_wall)), (tid, key)
+            # 床の外は理由つきで断る
+            cross = (profiles.shank_length_at_heel_floor(base)
+                     if key == "shank_length"
+                     else profiles.shoulder_ratio_at_heel_floor(base))
+            assert wall < cross, (tid, key, wall, cross)     # 掛け金は 1 段内側
+            over = round(cross + 2 * step, 4)
+            err = comp.params_error(dict(base, **{key: over}))
+            assert err is not None and "食い尽くし" in err, (tid, key, err)
+            # 断らなかったら踵が凍っていた（壁の必要性そのもの）
+            a = dict(base, **{key: over})
+            b = dict(base, **{key: round(over + 10 * step, 4)})
+            assert profiles.heel_z(a) == pytest.approx(profiles.heel_z(b)), tid
+            # **凍り方は 2 本で違う。** `shank_length` は外形まで丸ごと凍る
+            # （踵も肩の長さも動かない）。`shoulder_ratio` は踵が凍っても
+            # 肩の長さ ＝ 比 × 踵 が伸び続けるので母線は変わる —— それでも
+            # 「最大径位置に対する比」という**この量の意味が成り立たない**
+            # ので壁にした。掃引の応答が 0% にならなかったのはこのため。
+            z = 0.6 * base["overall_length"]
+            same = profiles.outer_radius(a, z) == pytest.approx(
+                profiles.outer_radius(b, z))
+            assert same == (key == "shank_length"), (tid, key)
+        # **2 本の壁は互いに「相手が既定のとき」の値**（ブラウザで踏んだ）。
+        # 床は 2 本の組で決まるので、両方を壁へ置くと当然その先へ出る ——
+        # 掛け金は静的な数字なのでそれを表せない。径 2 本とまったく同じ形で、
+        # 断るときに理由が出ることだけを確かめる（黙って丸めない）。
+        both = dict(base, shank_length=specs["shank_length"].hard_max,
+                    shoulder_ratio=specs["shoulder_ratio"].hard_max)
+        err = comp.params_error(both)
+        assert err is not None and "食い尽くし" in err, (tid, err)
+
+
+def test_a_shoulder_ratio_of_minus_one_is_refused_before_the_division():
+    """**踵の分母が 0 になる点を素の例外にしない（B-4a、割り算 7 例目）。**
+
+    掃引が `shoulder_ratio` を下へ歩いて −1 ちょうどで
+    `ZeroDivisionError: float division by zero` を踏んだ。手前（−0.99）は
+    段 1〜2 を素通りして**段 3 でソリッドが 2〜3 個**に割れる。
+
+    帯の下限 0.02 があるので UI からは届かないが、**出所の分からない例外が
+    上がるのがいちばん悪い**ので理由を返すようにした。下限は広げない ——
+    負の肩比は形の意味を持たない。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    spec = next(s for s in comp.param_specs() if s.key == "shoulder_ratio")
+    assert spec.hard_min is None and spec.min == pytest.approx(0.02)
+    for v in (-1.0, -1.5):
+        p = dict(base, shoulder_ratio=v)
+        err = comp.params_error(p)                       # 例外ではなく理由
+        assert err is not None and "−1 以下" in err, (v, err)
+        assert math.isfinite(profiles.heel_z(p))         # 呼んでも落ちない
+    # 帯の下限そのものは通る
+    assert comp.params_error(dict(base, shoulder_ratio=spec.min)) is None
+
+
+def test_the_sweeper_says_when_the_band_edge_itself_fails():
+    """**掃引器が「効いていない」と「壁がある」を取り違えないこと（B-4a）。**
+
+    `_walk` は帯の端を起点に外へ歩くだけなので、初版は 2 つの別の話を同じ
+    「形が動かない ＝ この向きでは効いていない」にまとめていた:
+
+      (a) 1 段目で `params_error` に弾かれた（＝ すぐ外に壁がある）
+      (b) 歩けたのに指紋が変わらない（＝ 本当に効いていない）
+
+    さらに**帯の端そのもの**は一度も試していなかった。`shank_dia` の帯の
+    下端 14.0 はアルト（ボア 15.8）でその端自体が通らないのに、ログには
+    「1 段外で壁」としか出なかった。道具が測った理由を捨てるのは、測って
+    いないのと同じ。
+    """
+    sw = _sweeper()
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    grids = sw._grids(base)
+
+    # (a) 帯の端そのものが通らない
+    edge = dict(base, shank_dia=specs["shank_dia"].min)
+    assert sw._cheap_ok(comp, edge) is not None
+    # (b) 端が通る向きは歩けて、止まった理由が残る
+    top = dict(base, shank_dia=specs["shank_dia"].max)
+    assert sw._cheap_ok(comp, top) is None
+    last, why, live = sw._walk(comp, top, "shank_dia", 0.1, +1, grids, steps=40)
+    assert live is not None and last == pytest.approx(base["body_dia"], abs=0.1)
+    assert "最大径" in why, why
+    # (c) 1 段目で弾かれると `last` は起点のまま ＝ すぐ外が壁
+    near = dict(base, shank_dia=round(base["bore_dia"] + 0.1, 2))
+    last2, why2, live2 = sw._walk(comp, near, "shank_dia", 0.1, -1, grids,
+                                  steps=40)
+    assert live2 is None and last2 == pytest.approx(near["shank_dia"])
+    assert "ボア径" in why2, why2
+    # 注意の件数は**部品に聞く**（`cavity_warnings` を直に数えない）
+    thin = dict(base, shank_dia=round(base["bore_dia"] + 1.0, 2))
+    assert len(profiles.cavity_warnings(thin)) < len(comp.warnings(thin))
 
 
 def test_reed_and_spec_use_the_window_that_exists():

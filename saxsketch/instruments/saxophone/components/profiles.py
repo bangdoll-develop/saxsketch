@@ -251,16 +251,57 @@ def shank_radius(p: dict) -> float:
     return p.get("shank_dia", 0.747 * p["body_dia"]) / 2.0
 
 
+#: 最大径の位置の下限（全長に対する比）。**これは床であって設計値ではない** ——
+#: シャンク平行部と肩が全長を食い尽くすと踵が原点へ寄って形が潰れるので、
+#: そこで止めている。**止めた先では `heel_z` が凍る**（`shank_length` も
+#: `shoulder_ratio` も動かしても形が 1 ビットも変わらない）ので、
+#: `outer_layout_error` が床に当たる組を弾き、スライダの `hard_max` はその
+#: 手前に置いてある（Phase B-4a で実測。黙ったクランプの 8 例目だった）。
+HEEL_FLOOR_RATIO = 0.30
+
+
+def heel_raw(p: dict) -> float:
+    """床を掛ける**前**の最大径位置。`heel_z` との差が「床に当たっているか」。
+
+    肩比が −1 以下だと分母が 0 以下になる。掃引（B-4a）は `shoulder_ratio`
+    を下へ歩いて **−1 ちょうどで素の `ZeroDivisionError`** を踏んだ
+    （割り算が潰れる型の 7 つ目）。ここでは `-inf` を返して
+    `outer_layout_error` に理由を言わせる —— 例外の出所が分からないまま
+    上がるのがいちばん悪い。
+    """
+    denom = 1.0 + shoulder_ratio(p)
+    if denom <= 0.0:
+        return float("-inf")
+    return (p["overall_length"] - shank_length(p)) / denom
+
+
+def heel_floor(p: dict) -> float:
+    return HEEL_FLOOR_RATIO * p["overall_length"]
+
+
+def shank_length_at_heel_floor(p: dict) -> float:
+    """`shank_length` がこれを超えると `heel_z` が床で凍る（他は既定のまま）。"""
+    return p["overall_length"] * (1.0 - HEEL_FLOOR_RATIO
+                                  * (1.0 + shoulder_ratio(p)))
+
+
+def shoulder_ratio_at_heel_floor(p: dict) -> float:
+    """`shoulder_ratio` がこれを超えると `heel_z` が床で凍る（他は既定のまま）。"""
+    length = p["overall_length"]
+    return (length - shank_length(p)) / (HEEL_FLOOR_RATIO * length) - 1.0
+
+
 def heel_z(p: dict) -> float:
     """最大径の位置 = リード踵 = テーブル平面が胴に接する z。
 
     ここから後ろは肩テーパ→シャンク平行部。全長からシャンク構成を引いて決めるので、
     `shank_length` を変えても踵の位置とテーブル長が正しく追従する。
+
+    床（`HEEL_FLOOR_RATIO`）は**もう届かない**はずの守り ——`outer_layout_error`
+    が床に当たる組を先に弾く。残してあるのは、部分的な dict で呼ばれる経路
+    （`.get` の既定に頼る呼び出し）が素の負値や 0 除算に落ちないようにするため。
     """
-    length = p["overall_length"]
-    sh = shank_length(p)
-    heel = (length - sh) / (1.0 + shoulder_ratio(p))
-    return max(heel, 0.30 * length)
+    return max(heel_raw(p), heel_floor(p))
 
 
 def shoulder_length(p: dict) -> float:
@@ -1713,7 +1754,7 @@ def shank_warnings(p: dict) -> list[str]:
 def outer_layout_error(p: dict) -> str | None:
     """外形の並びが成立しないときに理由を返す。成立していれば `None`。
 
-    条件は 2 つ。どちらも「各自のレンジは守っているのに組で破れる」型で、
+    条件は 3 つ。どれも「各自のレンジは守っているのに組で破れる」型で、
     `ParamSpec` は 1 本ずつしか見ないので **UI のスライダ 2 本から到達できる**。
 
     **(1) 最大径は本当に最大でなければならない**（`body_dia` ≥ `shank_dia`）。
@@ -1740,6 +1781,16 @@ def outer_layout_error(p: dict) -> str | None:
     （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる ＝ シャンクが丸ごと
     消えて部品が短くなっている）。段 3 が「1 個か」しか見ていないので、
     掃引では捕まらない。0 と `min_wall` の間は `shank_warnings` が注意を出す。
+
+    **(3) 踵が全長の `HEEL_FLOOR_RATIO` より前に来てはならない**（Phase B-4a）。
+    `heel_z` は `max(heel_raw, 0.30·全長)` で床を持っていて、**床に当たった先は
+    `shank_length` も `shoulder_ratio` も形を 1 ビットも動かさない** ——
+    掃引では `shank_length` が 100mm まで、`shoulder_ratio` が 3.0 まで素通りし、
+    段 1〜3 が全部 ok を返しながら応答だけが 0% になる（黙ったクランプ 8 例目）。
+    しかも寸法図と仕様書は与えた数字を印字し続けるので、**図と形が食い違う**。
+    床に当たる点は `shank_length_at_heel_floor` /
+    `shoulder_ratio_at_heel_floor` が返し、スライダの `hard_max` は
+    そこから 1 目盛り内側に置いてある。
     """
     r_max, r_sh = p["body_dia"] / 2.0, shank_radius(p)
     r_bore = bore_radius(p)
@@ -1750,14 +1801,32 @@ def outer_layout_error(p: dict) -> str | None:
                 f"{r_sh - r_bore:+.2f}mm）。ボア径を φ{r_sh * 2.0:.2f}mm 未満に"
                 f"するか、シャンク径を φ{p['bore_dia']:.2f}mm より太くして"
                 f"ください。")
-    if r_max >= r_sh:
-        return None
-    return (f"最大径がシャンク径より細くなっています: 最大径 "
-            f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
-            f"肩が最大径からシャンクへ**太る**向きになり、"
-            f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
-            f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
-            f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+    if r_max < r_sh:
+        return (f"最大径がシャンク径より細くなっています: 最大径 "
+                f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
+                f"肩が最大径からシャンクへ**太る**向きになり、"
+                f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
+                f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
+                f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+    if 1.0 + shoulder_ratio(p) <= 0.0:
+        # 肩比 ≤ −1。踵の式の分母が 0 以下になる（掃引が素の ZeroDivisionError
+        # を踏んだ点）。ここだけは「踵の z」を出せないので別文にする。
+        return (f"肩の長さ比が {shoulder_ratio(p):.3f} ＝ −1 以下です。"
+                f"踵の位置 (全長 − シャンク長)/(1 + 肩比) の分母が 0 以下に"
+                f"なり、形が定義できません。肩の長さ比を 0 より大きくして"
+                f"ください。")
+    raw, floor = heel_raw(p), heel_floor(p)
+    if raw < floor - 1e-9:
+        return (f"シャンク平行部と肩が全長を食い尽くしています: 踵（最大径の"
+                f"位置）が z={raw:.1f}mm ＝ 全長 {p['overall_length']:.1f}mm の"
+                f"{HEEL_FLOOR_RATIO * 100:.0f}%（{floor:.1f}mm）より前に"
+                f"来ます。この先は踵が {floor:.1f}mm で頭打ちになり、"
+                f"**シャンク長も肩比も形を動かさなくなります**"
+                f"（寸法図だけが与えた数字を印字し続けます）。"
+                f"シャンク長を {shank_length_at_heel_floor(p):.1f}mm 以下、"
+                f"または肩の長さ比を {shoulder_ratio_at_heel_floor(p):.3f} "
+                f"以下にしてください。")
+    return None
 
 
 def _station_zs(p: dict) -> list[float]:
