@@ -954,6 +954,15 @@ class AppState:
         if cached is not None:
             return cached
         res = ms.component.simulate(dict(ms.paramset.values))
+        # 警告は**ここで足す**。各コンポーネントの `simulate()` に書かせると、
+        # 部品が増えるたびに書き足し忘れる経路ができる（`/api/section` が
+        # `dimensions()` をルート側で足しているのと同じ理由）。
+        #
+        # この便に載せるのが要点 —— 右パネルは `GET /api/project` と
+        # `PUT /api/project/params` の 2 経路しか見ていないので、載せれば
+        # **スライダ 1 目盛ごとに更新される**。以前は `section()` の戻り値に
+        # だけ入っていて、断面タブを開いた人にしか届かなかった。
+        res["warnings"] = ms.component.warnings(dict(ms.paramset.values))
         if len(ms.sim_cache) > 4:
             ms.sim_cache.clear()
         ms.sim_cache[key] = res

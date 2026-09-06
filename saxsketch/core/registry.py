@@ -146,6 +146,23 @@ class Component(ABC):
         """
         return []
 
+    def warnings(self, params: dict) -> list[str]:
+        """いまのパラメータについての注意。**CAD ビルドを伴わないこと**。
+
+        `params_error` と違い、値は**適用されている**（弾いてはいない）。
+        「形が法則どおり出ていない」「形は指定どおりだが吹けない」を伝える経路。
+
+        空リストなら UI は警告カードを出さない。**「どの部品が警告を持つか」を
+        UI に書かない**（`GET /api/section` の 404 で断面タブを出し分けるのと
+        同じ約束）。
+
+        **便に載せるのはコア側**（`AppState.simulate` が `simulate()` の結果へ
+        足す）。各コンポーネントの `simulate()` に書き足させると、部品が増えた
+        ときに書き忘れる経路ができる —— `/api/section` が `dimensions()` を
+        ルート側で足しているのと同じ理由。
+        """
+        return []
+
     def assembly_placement(self, params: dict) -> dict | None:
         """組み合わせたときの置き場所。**土台部品のモデル座標**で返す。
 
@@ -180,9 +197,12 @@ class Component(ABC):
              "curves":  {name: [[z, y], …]},
              "handles": [{key, label, axis, z, y, value, min, max, span,
                           unit, step, active}, …],
-             "warnings": [str, …],
              "title": str}
             対応しないコンポーネントは None（UI は断面タブを出さない）。
+
+        `warnings` と `dimensions` は**ルート側が足す**（`GET /api/section`）ので
+        ここでは返さない。どちらも `warnings()` / `dimensions()` の 1 か所が
+        出所で、断面を持つ部品が増えたときに書き写し忘れる経路を作らない。
 
         **CAD ビルドを伴わないこと**が要件。ドラッグ中に毎回叩かれるので、
         形状法則の数値計算だけで組み立てる。

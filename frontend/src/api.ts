@@ -48,6 +48,10 @@ export interface SimCard {
 }
 export interface MouthpieceSimulation {
   kind: "mouthpiece";
+  /** いまのパラメータについての注意。**空なら警告カードを出さない**。
+   *  出所はサーバの `Component.warnings()` 1 か所で、`simulate()` の便に
+   *  乗ってくる（＝スライダ 1 目盛ごとに更新される）。 */
+  warnings?: string[];
   tier1: Tier1; tier2: Tier2; harmonics: Harmonics;
   sensitivity: { table: Record<string, unknown>; suggestions: Record<string, Suggestion> };
   /** 規格・実物との照合。リード/リガチャーの cards と同じ形式 */
@@ -56,6 +60,8 @@ export interface MouthpieceSimulation {
 export interface CardSimulation {
   kind: "reed" | "ligature" | "neck" | "body";
   cards: SimCard[];
+  /** `MouthpieceSimulation.warnings` と同じ。持たない部品では空。 */
+  warnings?: string[];
   /** インピーダンス曲線を出せるか。**UI に部品名を書かない**ため、
    *  「どの部品が音響を持つか」はサーバ（コンポーネント）が宣言する。 */
   has_impedance?: boolean;

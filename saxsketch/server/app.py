@@ -534,6 +534,11 @@ def model_section(request: Request):
     # の 1 か所のまま）。ドラッグ中のクエリ上書きがそのまま効くので、寸法は
     # 形と同じフレームで動く。
     data["dimensions"] = STATE.component.dimensions(values)
+    # 警告も同じ理由でルート側が足す。**ここに置くとドラッグ中も追従する** ——
+    # 上のクエリ上書きがそのまま `values` に効くので、断面側の警告は指を離す前に
+    # 動く（右パネルの警告カードは確定＝`PUT` を待つ）。定義は `warnings()` の
+    # 1 か所のまま。
+    data["warnings"] = STATE.component.warnings(values)
     return data
 
 

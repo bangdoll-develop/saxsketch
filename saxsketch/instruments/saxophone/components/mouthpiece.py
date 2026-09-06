@@ -697,6 +697,16 @@ class MouthpieceComponent(Component):
                 out[s.key] = (lo, hi, s.step)
         return out
 
+    def warnings(self, params: dict) -> list[str]:
+        """形が法則どおり出ていない／形は指定どおりだが吹けない、の注意。
+
+        **出所はここ 1 つ**（`profiles.cavity_warnings`）。以前は `section()` の
+        戻り値に埋まっていて、断面タブ（`/api/section`）を開いた人にしか届か
+        なかった —— 3D タブでスライダを上げると「形が動かない・理由も出ない」
+        になる。いまは `simulate()` の便にも載る（`AppState.simulate`）。
+        """
+        return profiles.cavity_warnings(params)
+
     def section(self, params: dict) -> dict:
         """中央面 x=0 の断面と、バッフル／外形のドラッグハンドル。
 
@@ -713,7 +723,6 @@ class MouthpieceComponent(Component):
             "curves": profiles.section_curves(params),
             "handles": (profiles.baffle_handles(params, self._handle_ranges())
                         + profiles.outer_handles(params, self._handle_ranges())),
-            "warnings": profiles.cavity_warnings(params),
             "baffle_type": params.get("baffle_type", "step"),
             "title": "側面断面（中央面）— 丸ポチをドラッグ",
         }

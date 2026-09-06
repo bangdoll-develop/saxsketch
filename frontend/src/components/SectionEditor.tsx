@@ -302,8 +302,16 @@ export default function SectionEditor({
       </div>
 
       {err && <div className="sec-warn">⚠ 断面の更新に失敗しました: {err}</div>}
-      {data.warnings.map((w, i) => (
-        <div className="sec-warn" key={i}>⚠ {w}</div>
+      {/* 平常時の警告は右パネルの「⚠ 注意」カード 1 か所に寄せてある。ここに
+          残すのは**掴んでいる間だけ** —— `/api/section?key=値` は毎フレーム
+          叩かれるので、離す前の値での注意が出るのはこちらだけ（右カードは
+          確定＝`PUT` を待つ）。見出しを付けるのは、確定前の値で出ている行と
+          右カードの行が食い違って見えるのを断つため。 */}
+      {dragKey !== null && data.warnings.length > 0 && (
+        <div className="sec-warn">⚠ この位置での注意:</div>
+      )}
+      {dragKey !== null && data.warnings.map((w, i) => (
+        <div className="sec-warn" key={i}>・{w}</div>
       ))}
     </div>
   );

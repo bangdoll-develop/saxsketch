@@ -1026,6 +1026,66 @@ def test_api_reports_clamping_to_the_browser(tmp_path):
     assert r.json()["params"]["body_dia"] == pytest.approx(29.1)
 
 
+def test_the_warning_reaches_every_tab_not_just_the_section(alto):
+    """**警告の出る場所がタブに依らないこと。**
+
+    `cavity_warnings` は `Component.section()` の戻り値に埋まっていて、それを
+    読むのは断面タブ（`/api/section`）だけだった —— 3D タブでウィンドウ長を
+    上げると「形が動かない・理由も出ない」になる（2026-09-06 に報告して
+    残した穴）。いまは `simulate()` の便に載るので、どのタブを見ていても
+    右パネルの「⚠ 注意」カードに出る。
+
+    出所は `Component.warnings()` 1 つで、3 経路が同じ 1 本を運ぶ。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+
+    comp, base = alto
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+
+    def window_lines(ws):
+        return [w for w in ws if "ウィンドウ長" in w]
+
+    # **既定でも 1 行出ている**（天井がビーク下の肉厚で頭打ち ——
+    # `docs/print-inspection.md` の既知の状態）ので、「空か否か」ではなく
+    # ウィンドウ長の行で見る。
+    assert window_lines(c.get("/api/project").json()["simulation"]["warnings"]) == []
+
+    # 凍る点（alto 38.67 ＝ `_WINDOW_FREEZE_MM`）より上へ
+    body = c.put("/api/project/params", json={"params": {"window_length": 44.0}}).json()
+    line = window_lines(body["simulation"]["warnings"])
+    assert len(line) == 1, body["simulation"]["warnings"]
+    assert "38.7" in line[0]
+
+    # 開き直しても、断面タブでも、同じ 1 本
+    assert window_lines(c.get("/api/project").json()["simulation"]["warnings"]) == line
+    assert window_lines(c.get("/api/section").json()["warnings"]) == line
+
+    # 断面はクエリ上書きで**指を離す前に**動く（右カードは PUT を待つ）。
+    # ここが断面側に警告を残してある唯一の理由。
+    assert window_lines(c.get("/api/section",
+                              params={"window_length": 30.0}).json()["warnings"]) == []
+
+    # 帯の中へ戻せば消える（＝カードから行が消える）
+    back = c.put("/api/project/params", json={"params": {"window_length": 30.0}}).json()
+    assert window_lines(back["simulation"]["warnings"]) == []
+
+    # 警告を持たない部品では空 —— UI はこれを見てカードごと出さない。
+    # 「どの部品が警告を持つか」を UI に書かないための既定フック。
+    for cid in ("reed", "ligature"):
+        assert c.post("/api/project/new", json={
+            "instrument_id": "saxophone", "template_id": "alto",
+            "component_id": cid}).status_code == 200
+        assert c.get("/api/project").json()["simulation"]["warnings"] == [], cid
+
+    # 出所は 1 つ（代理変数を作らない）
+    p = dict(base, window_length=44.0)
+    assert comp.warnings(p) == profiles.cavity_warnings(p)
+
+
 def test_widening_a_band_does_not_leave_the_analysis_silently_flat():
     """**帯の外へ出たとき、動かない指標は「動かない」と言うこと。**
 
