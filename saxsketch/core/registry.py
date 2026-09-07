@@ -95,6 +95,29 @@ class Component(ABC):
         """
         return None
 
+    def param_bounds(self, params: dict) -> dict:
+        """**相手で動く壁**。`{key: {"lo","hi","lo_by","hi_by"}}`。既定は空 dict。
+
+        `params_error` と同じ形のフック ——コアは楽器を知らないまま、返るのは
+        境界の数字と「動かしている相手の名前」だけ。`ParamSet` がこれで
+        `ParamSpec.hard_*`（テンプレート値で作った**掛け金**）を上書きする。
+
+        要るのは、Phase 4-E B-5 で**壁の 9 本が「数字」ではなく「関係」だと
+        測定で分かった**から。`ParamSpec` は 1 本ずつしか見ない静的な器なので、
+        相手が動くと掛け金は内側にも外側にもずれる ——実際、径 2 本は帯の
+        12 端のうち 6 端に立てず、踵の床で繋がった 2 本は両方を壁へ置くと
+        400 になり、`baffle_plateau` はバッフル型ごとにスライダの 18〜86% が
+        死んでいた。
+
+        入れなければ挙動は現行のまま（**リード・リガチャー・ネック・管体は
+        まだ入れていない**）。片側だけ返してもよい（`lo` だけ / `hi` だけ）。
+
+        `*_by` は**利用者に見せる相手の名前**（「シャンク径」）で、丸めたときに
+        文面へ入る ——「越えられない壁」とだけ言うと、相手を動かせば届くことが
+        伝わらない。
+        """
+        return {}
+
     def migrate_params(self, values: dict) -> tuple[dict, list[str]]:
         """保存済みプロジェクトのパラメータを現行のキーへ移す。既定は恒等。
 
@@ -211,7 +234,7 @@ class Component(ABC):
 
     # --- 採寸ワークフロー（Phase 4-A）。対応コンポーネントだけがオーバーライドする ---
 
-    def survey_targets(self) -> dict:
+    def survey_targets(self, values: dict | None = None) -> dict:
         """採寸で入力できるフィールド。
 
         Returns:

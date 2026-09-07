@@ -410,8 +410,21 @@ def sweep(key: str, sizes=SIZES, do_build: bool = True,
             base.update({k: v for k, v in extra.items() if k in base})
         step = spec.step or (spec.max - spec.min) / 40.0
         grids = _grids(base)
+        # **その組での実効の壁も印字する**（Phase 4-E B-5）。9 本は壁が相手で
+        # 動くので、「帯 14〜28」だけ見ていると、この掃引がどこまで歩ける条件で
+        # 走ったのかが後から読めない ——何を相手に測ったかがログに残らない測定は
+        # 根拠にならない（B-0 で軸について言ったのと同じ）。
+        b5 = comp.param_bounds(base).get(key)
+        wall = ""
+        if b5:
+            lo = b5.get("lo")
+            hi = b5.get("hi")
+            wall = ("  実効の壁 "
+                    + (f"{lo:g}" if lo is not None else "—")
+                    + "〜" + (f"{hi:g}" if hi is not None else "—")
+                    + f"（{'・'.join(dict.fromkeys(x for x in (b5.get('lo_by'), b5.get('hi_by')) if x))}で動く）")
         print(f"== {size} / {key} ==  帯 {spec.min:g}〜{spec.max:g}{spec.unit} "
-              f"既定 {base[key]:g} 刻み {step:g}  [{spec.limit_kind}]"
+              f"既定 {base[key]:g} 刻み {step:g}  [{spec.limit_kind}]{wall}"
               + (f"  拘束: {extra}" if extra else ""), flush=True)
 
         # 段 1〜2 で帯の外を歩く。**帯の端を起点にする** —— 帯の中は現行どおり

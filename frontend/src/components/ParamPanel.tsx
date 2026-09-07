@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import type { ParamSpec, ReferenceInfo } from "../api";
+import type { ParamBound, ParamSpec, ReferenceInfo } from "../api";
 
 interface Props {
   schema: ParamSpec[];
   params: Record<string, unknown>;
+  /** いまの組での**実効の壁**（Phase 4-E B-5）。無い key は掛け金のまま。 */
+  bounds?: Record<string, ParamBound>;
   onChange: (key: string, value: unknown) => void;
   /** hover/focus 中のパラメータを通知（3D影響部位ハイライト用）。null=解除 */
   onHover?: (key: string | null) => void;
@@ -56,6 +58,13 @@ function ReferenceCard({ reference, onPick, onReset }: {
   );
 }
 
+/** 表示用の丸め。**動的な壁は割り切れない**（踵の床は 47.00262…）ので、
+ *  そのまま出すと説明文が読めなくなる。値そのものは丸めない。 */
+function fmt(v: number | null): string {
+  if (v === null) return "—";
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+}
+
 const KIND_LABEL: Record<string, string> = {
   geometry: "幾何の成立条件",
   manufacturing: "製造の制約",
@@ -63,22 +72,48 @@ const KIND_LABEL: Record<string, string> = {
   unclassified: "未分類の壁",
 };
 
-function NumberParam({ spec, value, onChange }: {
-  spec: ParamSpec; value: number; onChange: (v: number) => void;
+function NumberParam({ spec, value, bound, onChange }: {
+  spec: ParamSpec; value: number; bound?: ParamBound;
+  onChange: (v: number) => void;
 }) {
   // 壁（越えられない）と帯（勧めるだけ）。hard_* が無ければ帯がそのまま壁 ＝ 現行。
-  const wallLo = spec.hard_min ?? spec.min;
-  const wallHi = spec.hard_max ?? spec.max;
+  //
+  // **相手で動く壁が来ていればそれが優先**（Phase 4-E B-5）。`hard_*` は
+  // テンプレート値で作った掛け金でしかないので、相手が動くと内側にも外側にも
+  // ずれる ——`shank_dia` を太くすれば `bore_dia` の上限は掛け金より外へ行くし、
+  // `body_dia` の下限は既定の相手のままだと帯の端に届かない。
+  const wallLo = bound?.lo ?? spec.hard_min ?? spec.min;
+  const wallHi = bound?.hi ?? spec.hard_max ?? spec.max;
+  const byLo = bound?.lo != null ? bound.lo_by : "";
+  const byHi = bound?.hi != null ? bound.hi_by : "";
+  // 相手の名前は 2 つ出ることも同じことも同じことがあるので、重複を落として並べる。
+  const partners = [...new Set([byLo, byHi].filter(Boolean))].join("・");
   const widened = wallLo !== spec.min || wallHi !== spec.max;
   const outside = spec.min !== null && spec.max !== null
     && (value < spec.min || value > spec.max);
 
+  // **スライダの端だけは刻みの格子へ内側に丸める。** `<input type=range>` は
+  // value を min からの格子へ吸着させるので、割り切れない壁（踵の床の
+  // 60.36611、ビークの 5.225461481529777…）をそのまま渡すと、**触っただけで
+  // 11.7254614815298 のような値が設計に入る** ——しかも数値欄と食い違う。
+  // 格子の原点は帯の下端（`spec.min`）＝ 壁が動く前と同じ格子。
+  // 数値欄と検証は真の壁のままなので、実測値をそのまま打ち込むことはできる。
+  const snap = (v: number | null, dir: 1 | -1): number | null => {
+    const st = spec.step ?? 0;
+    if (v === null || !st || spec.min === null) return v;
+    const n = (v - spec.min) / st;
+    const k = dir > 0 ? Math.ceil(n - 1e-9) : Math.floor(n + 1e-9);
+    return Math.round((spec.min + k * st) * 1e6) / 1e6;
+  };
+  const barLo = snap(wallLo, +1);
+  const barHi = snap(wallHi, -1);
+
   // 推奨帯をトラックの背景に網掛けで描く。**帯の外へ出られることが目で分かる**
   // ようにするためで、出られない（hard_* が無い）ときは描かない。
   let band: CSSProperties | undefined;
-  if (widened && wallLo !== null && wallHi !== null
-      && spec.min !== null && spec.max !== null && wallHi > wallLo) {
-    const pct = (v: number) => ((v - wallLo) / (wallHi - wallLo)) * 100;
+  if (widened && barLo !== null && barHi !== null
+      && spec.min !== null && spec.max !== null && barHi > barLo) {
+    const pct = (v: number) => ((v - barLo) / (barHi - barLo)) * 100;
     const a = Math.max(0, Math.min(100, pct(spec.min)));
     const b = Math.max(0, Math.min(100, pct(spec.max)));
     band = {
@@ -108,9 +143,9 @@ function NumberParam({ spec, value, onChange }: {
           <span className="unit">{spec.unit}</span>
         </span>
       </div>
-      {wallLo !== null && wallHi !== null && (
+      {barLo !== null && barHi !== null && barHi > barLo && (
         <input
-          type="range" value={value} min={wallLo} max={wallHi}
+          type="range" value={value} min={barLo} max={barHi}
           step={spec.step ?? 0.01} style={band}
           className={band ? "banded" : undefined}
           onChange={(e) => onChange(Number(e.target.value))}
@@ -118,7 +153,12 @@ function NumberParam({ spec, value, onChange }: {
       )}
       {spec.effect && <div className="effect">{spec.effect}</div>}
       <div className="effect limitsrc">
-        {widened
+        {partners
+          // **相手の名前を先に言う。** 「越えられない壁」とだけ書くと、
+          // 相手を動かせば届くことが伝わらない（帯の端に立てない 6 端がそれ）。
+          ? `壁 ${fmt(wallLo)}〜${fmt(wallHi)}${spec.unit}（${partners}で動きます）`
+            + ` ／ 勧める帯 ${spec.min}〜${spec.max}${spec.unit}`
+          : widened
           ? `勧める帯 ${spec.min}〜${spec.max}${spec.unit}（越えられます。壁は `
             + `${wallLo}〜${wallHi}${spec.unit}）`
           : `${KIND_LABEL[spec.limit_kind] ?? spec.limit_kind} ${spec.min}〜`
@@ -130,7 +170,7 @@ function NumberParam({ spec, value, onChange }: {
 }
 
 export default function ParamPanel({
-  schema, params, onChange, onHover, regionKeys,
+  schema, params, bounds, onChange, onHover, regionKeys,
   reference, onPickReference, onResetReference,
 }: Props) {
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
@@ -189,6 +229,7 @@ export default function ParamPanel({
               return (
                 <div className={cls} key={spec.key} title={spec.effect} {...hoverProps}>
                   <NumberParam spec={spec} value={Number(v)}
+                               bound={bounds?.[spec.key]}
                                onChange={(nv) => onChange(spec.key, nv)} />
                 </div>
               );

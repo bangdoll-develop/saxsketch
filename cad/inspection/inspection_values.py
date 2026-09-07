@@ -157,6 +157,23 @@ def verdict(d: float, tight: float, loose: float, key: str) -> str:
     return "一致" if a <= tight else ("軽微" if a <= loose else "外れ")
 
 
+def travel(comp, spec, params: dict) -> tuple[float, float]:
+    """**その組で実際に動かせる範囲**（Phase 4-E B-5）。
+
+    `min`/`max` は「勧める帯」、`hard_*` は**テンプレート値で作った掛け金**、
+    そして関係で決まる 9 本は組ごとに動く ——「可動域」と言いながら帯を読む型は
+    Phase A で 4 か所、B-4b でこのファイルの 1 か所（`beak_height` の下端を
+    4.3〜5.9mm 取りこぼしていた）を直したところで、**壁が増えるたびに増える**。
+    ここを 1 つにして、以後どちらでも読み違えないようにする。
+    """
+    lo, hi = spec.bounds()
+    b = comp.param_bounds(params).get(spec.key)
+    if b:
+        lo = b["lo"] if b.get("lo") is not None else lo
+        hi = b["hi"] if b.get("hi") is not None else hi
+    return lo, hi
+
+
 def bands(spec) -> tuple[float, float]:
     """(一致, 軽微) の帯。**新しいしきい値は作らない** —— `survey_card` と同じ式。"""
     st = spec.step or 0.1
@@ -344,7 +361,8 @@ def main() -> None:
     # `beak_height` に壁が付いたので、`min`/`max` を可動域と呼ぶと下側を
     # 4.3〜5.9mm ぶん取りこぼす（`min`/`max` を可動域の代理として読む型の
     # 再発。Phase A で 4 か所直したのと同じ）。
-    lo, hi = sb.bounds()
+    t_lo, t_hi = travel(comp, sb, p)
+    lo, hi = t_lo, t_hi
     if roof_hit(hi):
         print("  可動域の全域で当たっている")
     elif not roof_hit(lo):
@@ -354,7 +372,7 @@ def main() -> None:
             mid = 0.5 * (lo + hi)
             lo, hi = (mid, hi) if roof_hit(mid) else (lo, mid)
         print(f"  当たり始める beak_height = {hi:.3f} mm"
-              f"（可動域 {sb.bounds()[0]:.1f}〜{sb.bounds()[1]:.1f}"
+              f"（可動域 {t_lo:.1f}〜{t_hi:.1f}"
               f"、勧める帯 {sb.min:.1f}〜{sb.max:.1f}）")
         for tag, bh in (("設計", p["beak_height"]),
                         ("PHROX 実測", MEASURED.get("beak_height", (0.0, 0.0))[1])):
@@ -513,12 +531,16 @@ def main() -> None:
         if s is None or k not in m_ph:
             continue
         n = 24
-        vals = [s.min + (s.max - s.min) * i / n for i in range(n + 1)]
+        # **ここも「可動域」と言いながら帯を読んでいた**（代理変数の 7 例目）。
+        # `bore_length` / `bore_dia` は相手で動く壁を持つので、帯で振ると
+        # 「つまみでは届かない」の判定が実際より狭い範囲で出る。
+        v_lo, v_hi = travel(comp, s, m_ph)
+        vals = [v_lo + (v_hi - v_lo) * i / n for i in range(n + 1)]
         ds = [it_pr - comp.simulate(dict(m_ph, **{k: v}))["tier1"]["in_tune_mm"]
               for v in vals]
         hits = [(vals[i], vals[i + 1]) for i in range(n)
                 if (ds[i] - dl) * (ds[i + 1] - dl) <= 0]
-        head = (f"  {s.label:14} 可動域 {s.min:6.2f}〜{s.max:6.2f}"
+        head = (f"  {s.label:14} 可動域 {v_lo:6.2f}〜{v_hi:6.2f}"
                 f" → Δ {min(ds):+6.2f}〜{max(ds):+6.2f}")
         if not hits:
             print(head + "  **届かない**")

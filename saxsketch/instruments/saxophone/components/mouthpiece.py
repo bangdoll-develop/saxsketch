@@ -725,6 +725,29 @@ class MouthpieceComponent(Component):
         return (profiles.cavity_layout_error(params)
                 or profiles.outer_layout_error(params))
 
+    def param_bounds(self, params: dict) -> dict:
+        """**相手で動く壁**（Phase 4-E B-5）。9 本 ＝ 関係 8 本 ＋ 型で変わる 1 本。
+
+        `params_error` と同じく**判定はここに書かない** ——`profiles` の
+        3 つ（`outer_bounds` / `cavity_bounds` / `baffle_plateau_bounds`）が
+        持ち主で、ここは繋ぐだけ。書くと `*_layout_error` と 2 部になって
+        片方だけ直る（代理変数）。
+
+        刻みだけは**スキーマが持ち主**なので、ここで拾って渡す ——
+        `bore_dia` < `shank_dia` は狭義の不等号で、境界そのものは通らない。
+        """
+        step = {s.key: s.step for s in self.param_specs()}
+        out = dict(profiles.cavity_bounds(params))
+        out.update(profiles.outer_bounds(params, step))
+        out.update(profiles.baffle_plateau_bounds(params))
+        # **上下が逆転した組は返さない。** 逆転は「このパラメータにはもう置ける値が
+        # 無い」ということで（`body_dia` を 2.9 に、`shank_dia` を同時に動かすと
+        # 下限 13.9・上限 2.9 になる）、どちらかの端へ丸めると**嘘の壁**を名乗る
+        # ことになる。掛け金へ落として、本当の理由は `params_error` に言わせる。
+        return {k: b for k, b in out.items()
+                if b.get("lo") is None or b.get("hi") is None
+                or b["lo"] <= b["hi"]}
+
     def simulate(self, params: dict) -> dict:
         with profiles.params_scope(params):
             return self._simulate(params)
@@ -746,7 +769,8 @@ class MouthpieceComponent(Component):
             ob.tuning_position(params, self.size_info),
             headroom_cc=profiles.chamber_headroom_cc(params, cr_max))
         tier2 = ac_brightness.tone_metrics(params)
-        sens = ac_brightness.sensitivity(params, self.param_specs())
+        sens = ac_brightness.sensitivity(params, self.param_specs(),
+                                         self.param_bounds(params))
         harm = ac_harmonics.harmonic_series(tier2)
         return {
             "kind": "mouthpiece",
@@ -873,7 +897,7 @@ class MouthpieceComponent(Component):
             parts.append(f"胴の膨らみ {waist:+.3f}")
         return [("外形（実測形からの変更）", " / ".join(parts))]
 
-    def _handle_ranges(self) -> dict:
+    def _handle_ranges(self, params: dict | None = None) -> dict:
         """外形ハンドルへ渡す {key: (min, max, step)}。
 
         可動域の出所はスキーマ 1 か所にしておく。`profiles` 側にも書くと、
@@ -883,10 +907,20 @@ class MouthpieceComponent(Component):
         壁まで動くので、ハンドルを帯で止めると同じパラメータが 2 つの UI で違う
         ところまでしか動かず、「断面タブでは動かせない値がスライダでは作れる」
         という食い違いになる。上のコメントが警告しているのがまさにこれ。
+
+        **`params` を渡せば相手で動く壁がそちらを上書きする**（Phase 4-E B-5）。
+        渡さないと掛け金で止まるので、スライダ（実効の壁で動く）とハンドルが
+        また別のところで止まる ——上と同じ食い違いが、今度は掛け金と実効の壁の
+        あいだで起きる。
         """
+        bounds = self.param_bounds(params) if params else {}
         out = {}
         for s in self.param_specs():
             lo, hi = s.bounds()
+            b = bounds.get(s.key)
+            if b:
+                lo = b["lo"] if b.get("lo") is not None else lo
+                hi = b["hi"] if b.get("hi") is not None else hi
             if lo is not None and hi is not None:
                 out[s.key] = (lo, hi, s.step)
         return out
@@ -921,8 +955,8 @@ class MouthpieceComponent(Component):
         return {
             "z_range": [0.0, params["overall_length"]],
             "curves": profiles.section_curves(params),
-            "handles": (profiles.baffle_handles(params, self._handle_ranges())
-                        + profiles.outer_handles(params, self._handle_ranges())),
+            "handles": (profiles.baffle_handles(params, self._handle_ranges(params))
+                        + profiles.outer_handles(params, self._handle_ranges(params))),
             "baffle_type": params.get("baffle_type", "step"),
             "title": "側面断面（中央面）— 丸ポチをドラッグ",
         }
@@ -942,19 +976,27 @@ class MouthpieceComponent(Component):
         {"key": "missing_cone_length_mm", "label": "欠損円錐長（頂点まで）", "unit": "mm"},
     ]
 
-    def survey_targets(self) -> dict:
+    def survey_targets(self, values: dict | None = None) -> dict:
         """採寸フォームの入力欄。**範囲は帯ではなく壁**（`ParamSpec.bounds`）。
 
         ここに入るのは実物をノギスで測った値なので、慣習の帯の外にあることが
         ふつうにある。帯で受けると**測った値が別物にすり替わる** ——
         `body_dia` の下限をソプラノ実測が入るまで下げた経緯がまさにそれ。
+
+        **`values` を渡せば相手で動く壁がそちらを上書きする**（B-5）。実物は
+        組で存在しているので、いま設計している組で置ける範囲が受け口の範囲。
         """
         specs = {s.key: s for s in self.param_specs()}
+        bounds = self.param_bounds(values) if values else {}
         params = []
         for k in self._SURVEY_PARAM_KEYS:
             if k not in specs:
                 continue
             lo, hi = specs[k].bounds()
+            b = bounds.get(k)
+            if b:
+                lo = b["lo"] if b.get("lo") is not None else lo
+                hi = b["hi"] if b.get("hi") is not None else hi
             params.append({"key": k, "label": specs[k].label,
                            "unit": specs[k].unit, "min": lo, "max": hi,
                            "step": specs[k].step})

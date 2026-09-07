@@ -1014,17 +1014,33 @@ def test_api_reports_clamping_to_the_browser(tmp_path):
     r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
     assert r.json()["adjustments"] == []
 
-    # 成立しない組で弾かれたときは**丸めの話をしない**（値は保存されていない）。
-    # `body_dia` 下限と `shank_dia` 上限はどちらも各自の帯の中なので丸めは起きず、
-    # 組で `outer_layout_error` に当たる ——「弾いた」と「丸めた」が混ざらないこと。
+    # **相手で動く壁は「弾く」より先に「丸める」**（B-5）。帯の端どうしの
+    # `body_dia` 18.0 / `shank_dia` 28.0 は、以前はここで 400 になっていたが、
+    # いまは互いの壁で丸まって成立する組に落ちる ——両方とも相手の名前つきで
+    # 報告される。**黙って通ってはいない。**
     r = c.put("/api/project/params",
               json={"params": {"body_dia": 18.0, "shank_dia": 28.0}})
+    assert r.status_code == 200, r.text
+    adjs = {a["key"]: a for a in r.json()["adjustments"]}
+    assert set(adjs) == {"body_dia", "shank_dia"}
+    assert all(a["at"] == "relation" and a["partner"] for a in adjs.values())
+    assert "シャンク径" in adjs["body_dia"]["message"]
+    assert "最大径" in adjs["shank_dia"]["message"]
+
+    # 成立しない組で弾かれたときは**丸めの話をしない**（値は保存されていない）。
+    # 径 2 本を壁ちょうど（`hard_min` 4.9）へ置くと丸めは起きず、組で
+    # `outer_layout_error` に当たる ——「弾いた」と「丸めた」が混ざらないこと。
+    # **上下が逆転した組では動的な壁を返さない**ので（`Mouthpiece.param_bounds`）、
+    # ここは掛け金だけが効いて素通りし、本当の理由が 400 で出る。
+    keep = dict(r.json()["params"])
+    r = c.put("/api/project/params",
+              json={"params": {"body_dia": 4.9, "shank_dia": 4.9}})
     assert r.status_code == 400, r.text
-    assert "最大径" in r.json()["detail"]
+    assert "ボア径" in r.json()["detail"]
     # 弾かれたあとサーバ側は前の値のまま（丸めの報告も残っていない）
     r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
     assert r.json()["adjustments"] == []
-    assert r.json()["params"]["body_dia"] == pytest.approx(29.1)
+    assert r.json()["params"]["body_dia"] == pytest.approx(keep["body_dia"])
 
 
 def test_the_warning_reaches_every_tab_not_just_the_section(alto):
@@ -2188,6 +2204,387 @@ def test_the_beak_axis_measures_the_part_not_the_formula():
     assert all(a <= b + 1e-12 for a, b in zip(axes_h["beak_y"], raw_h))
 
 
+# ---------------------------------------------------------------------------
+# Phase 4-E B-5 —— 相手で動く壁
+# ---------------------------------------------------------------------------
+
+#: 動的な壁を持つ 9 本。**8 本は「関係」**（B-3・B-4a・B-4b の測定）で、
+#: `baffle_plateau` だけは型で実効範囲が変わる（B-2）。
+_B5_MOVING = ("bore_dia", "bore_length", "body_dia", "shank_dia", "overall_length",
+              "shank_length", "shoulder_ratio", "beak_height", "baffle_plateau")
+
+#: 壁が本当に相手で動くかを見るための「別の組」。**既定だけで測ると、
+#: テンプレート値で作った掛け金と見分けが付かない。**
+_B5_COMBOS = (
+    {},
+    {"shank_dia": 20.0},
+    {"body_dia": 32.0},
+    {"overall_length": 80.0},
+    {"bore_length": 30.0},
+    {"shoulder_ratio": 0.9},
+    {"shank_length": 25.0},
+    {"baffle_type": "straight"},
+    {"baffle_type": "curve"},
+)
+
+
+def _flip_point(comp, base, key, wall, sign, step):
+    """`wall` から `sign` 方向へ歩いて `params_error` が立つ点を挟む。
+
+    返すのは**通る側の最後の値**。`None` は「16 刻み外まで歩いても立たない」
+    ＝ 壁が甘い（本当の交差点はもっと外）。
+    """
+    far = None
+    for n in (1, 2, 4, 8, 16):
+        if comp.params_error(dict(base, **{key: wall + sign * n * step})) is not None:
+            far = wall + sign * n * step
+            break
+    if far is None:
+        return None
+    lo, hi = wall, far
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if comp.params_error(dict(base, **{key: mid})) is None:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def test_the_moving_walls_land_exactly_where_params_error_flips():
+    """**`param_bounds` と `params_error` が同じ関係を 2 か所で述べている。**
+
+    それ自体は代理変数の型（片方だけ直る）なので、**ここが担保**になる ——
+    返した壁は「そこは通る」かつ「交差点は 1 刻み以内の外」でなければ
+    ならない。数字を散文へ焼かずテストへ落とす（`0718cc1` と同じ寄せ方）。
+
+    ちょうど 1 刻み外に交差点があるのは `bore_dia` の上と `shank_dia` の下
+    ——条件 (1) が**狭義の不等号**（ボア径 < シャンク径）なので、境界そのもの
+    は通らず 1 目盛り内側へ寄せてある。残りは交差点ちょうど。
+
+    **既定だけで測らない。** テンプレート値で作った `hard_*` の掛け金と
+    見分けが付かなくなるので、相手を動かした 9 通りの組で見る。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    checked = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        tmpl = dict(ParamSet(comp.param_specs(),
+                             comp.template.get("mouthpiece", {})).values)
+        for combo in _B5_COMBOS:
+            base = dict(tmpl, **combo)
+            if comp.params_error(base) is not None:
+                continue                       # その組自体が成立しない
+            for key, b in comp.param_bounds(base).items():
+                if key == "baffle_plateau":
+                    continue                   # 黙ったクランプ側。下のテストで見る
+                step = specs[key].step or 0.01
+                for side, sign in (("lo", -1), ("hi", +1)):
+                    wall = b.get(side)
+                    if wall is None:
+                        continue
+                    assert comp.params_error(
+                        dict(base, **{key: wall})) is None, (tid, key, side, wall)
+                    flip = _flip_point(comp, base, key, wall, sign, step)
+                    assert flip is not None, (tid, key, side, wall, "壁が甘い")
+                    assert abs(flip - wall) <= step * 1.0001, (tid, key, side, wall, flip)
+                    checked += 1
+    assert checked > 200, checked
+
+
+def test_a_relation_wall_moves_with_its_partner_instead_of_being_refused():
+    """**帯の端が壁の外へはみ出す 6 端を、相手を動かして取り戻す（B-5）。**
+
+    B-4a の実測: 径 2 本の帯は 3 サイズ共通の絶対レンジ（18〜34 / 14〜28）で、
+    **12 端のうち 6 端が既定の相手では弾かれる**（alto の `body_dia` は帯の
+    32% が死ぬ）。帯の数字が下手なのではなく、**相手で動く壁を静的な帯で
+    表せない**ということ。
+
+    B-5 で `ParamSet` が組から壁を引くようにしたので、
+
+    - 相手を一緒に動かせば**どの端にも立てる**
+    - 相手が届かせてくれないときは黙って丸めず、**相手の名前を言って**丸める
+
+    の 2 つになった。400 で断られるのは「どの値も置けない」組だけ。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    #: 文面に出る相手の名前 → そのパラメータ。**動かす向きは端の側で決まる**
+    #: （下端を塞いでいる相手は細く、上端を塞いでいる相手は太く）。
+    partner_key = {"シャンク径": "shank_dia", "ボア径": "bore_dia",
+                   "最大径": "body_dia"}
+    reg = get_registry().get("saxophone")
+    reached = clamped = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_dia", "shank_dia"):
+            for edge in (specs[key].min, specs[key].max):
+                ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                              bounds_provider=comp.param_bounds)
+                got = ps.apply({key: edge})[key]
+                if got == pytest.approx(edge):
+                    reached += 1
+                    continue
+                clamped += 1
+                adj = next(a for a in ps.adjustments if a["key"] == key)
+                assert adj["at"] == "relation", (tid, key, adj)
+                assert adj["partner"] in partner_key, (tid, key, adj)
+                assert adj["partner"] in adj["message"]
+                # 相手を先に動かせば同じ端に立てる
+                pk = partner_key[adj["partner"]]
+                helper = edge - 0.2 if adj["edge"] == "min" else edge + 0.2
+                ps2 = ParamSet(comp.param_specs(),
+                               comp.template.get("mouthpiece", {}),
+                               bounds_provider=comp.param_bounds)
+                assert ps2.apply({pk: helper})[pk] == pytest.approx(helper), (tid, pk)
+                out = ps2.apply({key: edge})
+                assert out[key] == pytest.approx(edge), (tid, key, edge, out[key])
+                assert comp.params_error(out) is None
+    assert clamped == 6, clamped        # B-4a が数えた 6 端
+    assert reached == 6, reached
+
+
+def test_both_ends_of_the_heel_floor_pair_can_be_placed_at_their_wall():
+    """**踵の床で繋がった 2 本を、両方とも壁へ置いても 400 にならない（B-5）。**
+
+    床は `shank_length` と `shoulder_ratio` の**組**で決まるので、片方ずつの
+    静的な `hard_max` は同時には成り立たない ——B-4a はそれを「掛け金が
+    静的な数字である以上こうなる」と書いて閉じた（ブラウザで踏んだ）。
+
+    動的な壁は**頼まれた組**から引くので、両方を上限へ動かすと互いの壁が
+    内側へ寄り、成立する組に落ちる。**そして黙らない。**
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                      bounds_provider=comp.param_bounds)
+        out = ps.apply({"shank_length": specs["shank_length"].hard_max,
+                        "shoulder_ratio": specs["shoulder_ratio"].hard_max})
+        assert comp.params_error(out) is None, (tid, comp.params_error(out))
+        keys = {a["key"] for a in ps.adjustments}
+        assert keys == {"shank_length", "shoulder_ratio"}, (tid, keys)
+        for a in ps.adjustments:
+            assert a["at"] == "relation" and a["partner"], (tid, a)
+        # 掛け金だけ（＝ B-4a のまま）なら弾かれていた組であること
+        old = dict(out)
+        old["shank_length"] = specs["shank_length"].hard_max
+        old["shoulder_ratio"] = specs["shoulder_ratio"].hard_max
+        assert comp.params_error(old) is not None, tid
+
+
+def test_the_baffle_plateau_slider_now_follows_the_baffle_type():
+    """**スライダの 86% が死んでいたのを型ごとの実効範囲へ（B-2 → B-5）。**
+
+    B-2 は「実効範囲は `_PLATEAU_RANGE` が型ごとに決めるのに、帯は 4 型の
+    **和集合**」と測ったうえで「`ParamSpec` が静的なのでこのスライスには
+    入れていない。**報告しただけでは直っていない**」と書いて閉じた。
+
+    動的な壁で閉じる。数字は写さず同じ 1 テーブルを引くので、
+    `_PLATEAU_RANGE` を書き換えればスライダも断面ハンドルも一緒に動く。
+    **型を切り替えた同じ apply で壁が入れ替わる**（`ParamSet.apply` が
+    型変換だけした組から壁を引くため）。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "baffle_plateau")
+    base = {s.key: s.default for s in comp.param_specs()}
+    for bt in ("step", "rollover", "straight", "curve"):
+        lo, hi = profiles._PLATEAU_RANGE[bt]
+        b = comp.param_bounds(dict(base, baffle_type=bt))["baffle_plateau"]
+        assert (b["lo"], b["hi"]) == (lo, hi), bt
+        ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                      bounds_provider=comp.param_bounds)
+        # 型と値を**同じ apply で**渡しても、新しい型の壁で丸まる
+        out = ps.apply({"baffle_type": bt, "baffle_plateau": spec.max})
+        assert out["baffle_plateau"] == pytest.approx(hi), bt
+        adj = next(a for a in ps.adjustments if a["key"] == "baffle_plateau")
+        assert adj["at"] == "relation" and adj["partner"] == "バッフル型"
+        # 帯の端は straight / curve では実効範囲の 6 倍以上外にある
+        if bt in ("straight", "curve"):
+            assert spec.max > hi * 6.0, bt
+
+
+def test_a_moving_wall_never_clamps_silently():
+    """**この方式そのものが黙ったクランプの 9 例目にならないこと。**
+
+    黙ったクランプは既知 8 例（`window_length` / `seat_offset` /
+    `baffle_plateau` / 踵の床 …）。動的な壁は帯より内側へ止めることがあるので、
+    **報告を落とすと最も見つけにくい種類の 9 例目**になる。壁で止めた回は
+    必ず `at: "relation"` と相手の名前が出る。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    seen = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        for key in _B5_MOVING:
+            for probe in (-1e4, 1e4):
+                ps = ParamSet(comp.param_specs(),
+                              comp.template.get("mouthpiece", {}),
+                              bounds_provider=comp.param_bounds)
+                before = ps.values[key]
+                after = ps.apply({key: probe})[key]
+                assert after != probe
+                if after == before:
+                    continue
+                adj = next(a for a in ps.adjustments if a["key"] == key)
+                assert adj["message"], (tid, key)
+                assert adj["at"] in ("relation", "wall", "band"), adj
+                if adj["at"] == "relation":
+                    assert adj["partner"] and adj["partner"] in adj["message"]
+                    seen += 1
+                # 止まった先は必ず成立する値
+                assert comp.params_error(ps.values) is None, (tid, key, probe)
+    assert seen >= 30, seen
+
+
+def test_components_without_moving_walls_are_unchanged():
+    """**入れていない部品の挙動は 1 ビットも変わらない。**
+
+    `Component.param_bounds` の既定は空 dict なので、リード・リガチャー・
+    ネック・管体は掛け金と帯だけで動く（`limit_kind` も `unclassified` の
+    まま）。**分類も壁も、測ってから入れる。**
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    for cid in ("reed", "ligature", "neck", "body"):
+        comp = reg.make_component(cid, "alto")
+        base = dict(ParamSet(comp.param_specs(), comp.template.get(cid, {})).values)
+        assert comp.param_bounds(base) == {}, cid
+        ps = ParamSet(comp.param_specs(), comp.template.get(cid, {}),
+                      bounds_provider=comp.param_bounds)
+        plain = ParamSet(comp.param_specs(), comp.template.get(cid, {}))
+        assert ps.values == plain.values, cid
+
+
+def test_the_moving_wall_reaches_the_browser_and_moves_there():
+    """**壁が動いたことが画面まで届くこと**（Phase 4-E B-5）。
+
+    サーバが組ごとに壁を引き直しても、フロントへ渡らなければスライダは
+    掛け金で止まったまま ——`shank_dia` を太くしても `bore_dia` はそこから
+    先へ動かせない。`/api/project` と `PUT /api/project/params` は
+    **スキーマではなく `bounds` だけ**を返す（帯は動かないので、動くものだけ）。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+
+    b0 = c.get("/api/project").json()["bounds"]
+    assert set(b0) == set(_B5_MOVING)
+    assert b0["bore_dia"]["hi"] == pytest.approx(23.15)   # 既定のシャンク径 −1 刻み
+    assert b0["bore_dia"]["hi_by"] == "シャンク径"
+
+    # 相手を太くすると、掛け金（23.15）の**外**まで壁が動く
+    r = c.put("/api/project/params", json={"params": {"shank_dia": 26.0}}).json()
+    assert r["bounds"]["bore_dia"]["hi"] == pytest.approx(25.95)
+    spec = next(s for s in c.get("/api/project").json()["schema"]
+                if s["key"] == "bore_dia")
+    assert spec["hard_max"] == pytest.approx(23.15)       # 掛け金は据え置き
+    # そこまで本当に置ける
+    r = c.put("/api/project/params", json={"params": {"bore_dia": 25.0}}).json()
+    assert r["params"]["bore_dia"] == pytest.approx(25.0)
+    assert r["adjustments"] == []
+
+    # 断面（ドラッグ中）も同じ壁で答える —— 指を離した瞬間に値が飛ばないこと
+    s = c.get("/api/section?shank_dia=27").json()
+    assert s["bounds"]["bore_dia"]["hi"] == pytest.approx(26.95)
+
+
+def test_changing_the_baffle_type_brings_its_plateau_along():
+    """**相手を動かした結果、触っていない値が壁の外に残らないこと**（B-5）。
+
+    `baffle_type` を切り替えると `baffle_plateau` の実効範囲そのものが
+    入れ替わる。`profiles.baffle_plateau()` は範囲外を**黙ってクランプして形を
+    作る**ので、値を置き去りにするとスライダ 0.36・形 0.12 になる ——
+    B-2 が測った死に帯が、今度は値の側で再現する。
+
+    連れて行く条件は「`params_error` が黙っていること」だけ。関係で決まる
+    8 本は壁の外へ出ればそちらが理由つきで断るので、ここへ来るのは
+    **誰も文句を言わないまま下流で丸められる値**だけ。
+    """
+    from saxsketch.server.state import STATE
+    STATE.new_project("saxophone", "alto", "mouthpiece")
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(0.36)
+
+    STATE.apply_params({"baffle_type": "straight"})
+    lo, hi = profiles._PLATEAU_RANGE["straight"]
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(hi)
+    adj = [a for a in STATE.adjustments if a["key"] == "baffle_plateau"]
+    assert len(adj) == 1 and adj[0]["at"] == "relation"
+    assert adj[0]["partner"] == "バッフル型"
+
+    # 形と値が一致していること（＝ 下流の黙ったクランプが効いていない）
+    p = dict(STATE.paramset.values)
+    assert profiles.baffle_plateau(p) == pytest.approx(p["baffle_plateau"])
+
+    # 触っていない値でも、壁の中にいるかぎり動かさない
+    STATE.apply_params({"baffle_type": "curve"})
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(hi)
+    assert [a for a in STATE.adjustments if a["key"] == "baffle_plateau"] == []
+
+
+def test_every_consumer_of_the_wall_sees_the_moving_one():
+    """**壁を読む側が掛け金で止まっていないこと**（代理変数の型、7 例目）。
+
+    `min`/`max` を可動域の代理として読む型は Phase A で 4 か所、B-4b で
+    検品スクリプトの 1 か所を直した。**壁が増えるたびに増える**ので、
+    相手で動く壁を入れた B-5 では「掛け金で止まる読み手」が同じ型になる。
+
+    ここで押さえるのは 3 か所 ——断面ハンドル・採寸フォーム・感度表。
+    どれも `params` を渡せば実効の壁を見る（渡さなければ掛け金のまま ＝
+    後方互換）。ゴールシークは**帯のまま**なので対象外 ——頼まれてもいない
+    のに慣習の外へ出さないのが仕様（`test_goalseek_never_drags_...`）。
+    """
+    from saxsketch.acoustics import brightness as br
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    wide = dict(base, shank_dia=26.0)          # `bore_dia` の壁を掛け金の外へ
+    latch = next(s for s in comp.param_specs() if s.key == "bore_dia").hard_max
+    moved = comp.param_bounds(wide)["bore_dia"]["hi"]
+    assert moved > latch                        # 前提: 掛け金より外へ動いている
+
+    # ① 断面ハンドル
+    assert comp._handle_ranges()["bore_dia"][1] == pytest.approx(latch)
+    assert comp._handle_ranges(wide)["bore_dia"][1] == pytest.approx(moved)
+
+    # ② 採寸フォーム（実物をノギスで測った値の受け口）
+    tg = {d["key"]: d for d in comp.survey_targets(wide)["params"]}
+    assert tg["bore_dia"]["max"] == pytest.approx(moved)
+    old = {d["key"]: d for d in comp.survey_targets()["params"]}
+    assert old["bore_dia"]["max"] == pytest.approx(latch)
+
+    # ③ 感度表 —— 1 段の作り方が壁で決まる。上限に張り付いていると向きが
+    #    下へ反転するので、壁が違えば符号ごと変わる。
+    #
+    #    いまの `SENSITIVITY_KEYS` に動く 9 本は 1 つも入っていない（＝ この
+    #    経路はまだ実害が出ていない）。**それでも配線は通しておく** ——
+    #    出ていない実害を理由に配線を落とすと、キーが 1 つ増えた日に
+    #    「掛け金で止まる読み手」が黙って復活する。ここでは壁を渡せば
+    #    そちらが効くことを直接押さえる。
+    key = br.SENSITIVITY_KEYS[0]
+    spec = next(s for s in comp.param_specs() if s.key == key)
+    at_wall = dict(base, **{key: spec.bounds()[1]})
+    assert br.sensitivity(at_wall, comp.param_specs())["table"][key]["step"] < 0
+    roomy = {key: {"lo": None, "hi": spec.bounds()[1] + 10 * (spec.step or 0.1),
+                   "lo_by": "", "hi_by": "テスト"}}
+    assert br.sensitivity(at_wall, comp.param_specs(),
+                          roomy)["table"][key]["step"] > 0
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 
@@ -2222,12 +2619,24 @@ def test_impossible_params_are_not_saved():
     STATE.new_project("saxophone", "soprano", "mouthpiece")
     before = dict(STATE.paramset.values)
     specs = {s.key: s for s in STATE.component.param_specs()}
+    # **相手で動く壁が付いた 2 本ではもう起きない**（B-5）——全長とボア長は
+    # 互いの壁で丸まって成立する組に落ちる。弾く経路が残っているのは、
+    # 動的な壁を持たない拘束のほう。ここはウィンドウの前端（`tip_rail_width`）と
+    # チェンバー→ボアの遷移を両方とも壁ちょうどへ置いた組で、窓の長さが負になる。
     with pytest.raises(ValueError, match="成立しません"):
-        STATE.apply_params({"overall_length": specs["overall_length"].min,
-                            "bore_length": specs["bore_length"].max})
+        STATE.apply_params({"tip_rail_width": specs["tip_rail_width"].hard_max,
+                            "chamber_to_bore_mm": specs["chamber_to_bore_mm"].hard_max})
     assert dict(STATE.paramset.values) == before      # 1 つも動いていない
     assert STATE.project.params == before             # 保存側も動いていない
     STATE.simulate()                                   # まだ描ける
+
+    # 全長とボア長の組は、以前はここで弾かれていた（`f1e79e8` 以来）。
+    # いまは丸めて通るが、**黙ってはいない**（相手の名前つきで 2 件報告）。
+    out = STATE.apply_params({"overall_length": specs["overall_length"].min,
+                              "bore_length": specs["bore_length"].max})
+    assert STATE.component.params_error(out) is None
+    assert {a["key"] for a in STATE.adjustments} == {"overall_length", "bore_length"}
+    assert all(a["at"] == "relation" for a in STATE.adjustments)
 
 
 # ------------------------------------------------------------------ ファイルダイアログ

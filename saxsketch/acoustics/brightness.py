@@ -127,7 +127,7 @@ SENSITIVITY_KEYS = ["tip_opening", "facing_length", "baffle_height", "throat_rat
 METRIC_KEYS = ["brightness", "power", "resistance", "flexibility", "edge"]
 
 
-def sensitivity(p: dict, specs: list) -> dict:
+def sensitivity(p: dict, specs: list, bounds: dict | None = None) -> dict:
     """各パラメータを1ステップ動かしたときの指標変化（数値偏微分）。
 
     Returns: {param_key: {metric: delta, ...}, ...} と、指標ごとの最効率パラメータ提案。
@@ -143,7 +143,16 @@ def sensitivity(p: dict, specs: list) -> dict:
         # **止める先は帯ではなく壁**（`ParamSpec.bounds`）。帯の外の値を選んで
         # いる利用者では、帯で止めると 1 段が「+0.05」ではなく「−0.8」になって
         # 感度の符号ごと壊れる（`tip_opening` は帯 3.2 に対し壁 5.2）。
+        #
+        # **相手で動く壁が来ていればそちらが本当の端**（Phase 4-E B-5）。
+        # `hard_*` はテンプレート値で作った掛け金なので、相手を動かした利用者
+        # では内側にも外側にもずれる ——古い掛け金で 1 段を作ると、成立しない
+        # 値での指標を「感度」として出すことになる。
         lo, hi = spec.bounds()
+        b = (bounds or {}).get(key)
+        if b:
+            lo = b["lo"] if b.get("lo") is not None else lo
+            hi = b["hi"] if b.get("hi") is not None else hi
         q = dict(p)
         q[key] = min(p[key] + step, hi) if hi is not None else p[key] + step
         if q[key] == p[key]:  # 上限に張り付いている場合は下方向

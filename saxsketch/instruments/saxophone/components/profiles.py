@@ -1660,6 +1660,23 @@ def baffle_plateau(p: dict) -> float:
     return min(max(p.get("baffle_plateau", _BAFFLE_FLAT), lo), hi)
 
 
+def baffle_plateau_bounds(p: dict) -> dict:
+    """`baffle_plateau` の**その型での**可動域（Phase 4-E B-5）。
+
+    帯 0.02〜0.75 は 4 型を覆う**和集合**で、どの型のものでもない ——
+    B-2 の実測ではスライダの死んでいる割合が step/rollover で 18%、
+    straight/curve で **86%**。断面タブのハンドルは `_PLATEAU_RANGE` を
+    読むので正しく、**食い違っているのはスライダのほう**だった。
+
+    `_PLATEAU_RANGE` は外さない ——「長い棚を許せばそれはもうストレートでは
+    なくステップ」という**理由が書いてある**掛け金だから。数字を写さずに
+    同じ 1 テーブルを引く。
+    """
+    lo, hi = _PLATEAU_RANGE.get(p.get("baffle_type", "step"), (0.10, 0.70))
+    return {"baffle_plateau": {"lo": lo, "hi": hi,
+                               "lo_by": "バッフル型", "hi_by": "バッフル型"}}
+
+
 def _plateau_warp(sigma: float, a: float) -> float:
     """σ を「棚の長さ a」から実測基準 `_BAFFLE_FLAT` の尺度へ写す区分線形写像。
 
@@ -1945,7 +1962,12 @@ def cavity_layout_error(p: dict) -> str | None:
                 f"ボアの始まり z={zb:.1f}mm が全長 "
                 f"{p['overall_length']:.1f}mm の外にあり、円筒が 1 ビットも"
                 f"削りません。0 より大きい値にしてください。")
-    if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
+    # **ちょうど最低幅は通す。** 1e-9 の遊びが無いと、`cavity_bounds` が
+    # 「ここまでは置けます」と返した全長そのものを入れた瞬間に
+    # `z_we - z0` が 1.9999999999999998 と出て断られる（テナーで実際に踏んだ）。
+    # `outer_layout_error` の踵の床が `raw < floor - 1e-9` としているのと
+    # 同じ寄せ方 ——**言われたとおりの値を入れた直後に断られない**ようにする。
+    if z_we - z0 >= _MIN_WINDOW_SPAN_MM - 1e-9:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
             f"窓が z {z0:.2f}→{z_we:.2f}mm ＝ 長さ {z_we - z0:+.2f}mm しか残らず、"
@@ -1958,6 +1980,38 @@ def cavity_layout_error(p: dict) -> str | None:
             f"窓の後端は {zb:.2f} − チェンバー→ボアの遷移 "
             f"{p.get('chamber_to_bore_mm', _CHAMBER_TO_BORE_DEFAULT_MM):.1f} で"
             f"頭打ちになっています）。")
+
+
+def _window_tail_mm(p: dict) -> float:
+    """ボアの始まりが窓の後ろに残さなければならない長さ [mm]。
+
+    `cavity_layout_error` の最後の条件（窓が `_MIN_WINDOW_SPAN_MM` 残る）を
+    **`bore_start_z` について解いた形**。窓の後端は `zb − chamber_to_bore_mm`
+    で頭打ちなので、条件は `zb − gap − window_start_z >= _MIN_WINDOW_SPAN_MM`
+    ＝ `zb >= window_start_z + gap + _MIN_WINDOW_SPAN_MM` になる。
+
+    既定では 6.2 / 6.2 / 6.4mm（3 サイズ）。B-3 が「壁は長さではなく**始まりの
+    位置**が決めている」と測った量そのもので、B-4a の「全長 ≥ ボア長 + 6.5」は
+    この裏返し。
+    """
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    return window_start_z(p) + gap + _MIN_WINDOW_SPAN_MM
+
+
+def cavity_bounds(p: dict) -> dict:
+    """空洞の並びが決める**相手で動く壁**（Phase 4-E B-5）。
+
+    `cavity_layout_error` と**同じ条件**を境界について解いたもの。数字は
+    持たず `_window_tail_mm` を通して同じ定数を読むが、条件が 2 か所に
+    書かれること自体は代理変数の型なので、**テストが `params_error` を
+    二分して交差点と一致することを 3 サイズで検査する**
+    （`test_the_moving_walls_land_exactly_where_params_error_flips`）。
+    """
+    tail = _window_tail_mm(p)
+    return {
+        "bore_length": {"hi": p["overall_length"] - tail, "hi_by": "全長"},
+        "overall_length": {"lo": p["bore_length"] + tail, "lo_by": "ボア長"},
+    }
 
 
 def shank_warnings(p: dict) -> list[str]:
@@ -2136,6 +2190,50 @@ def outer_layout_error(p: dict) -> str | None:
                     f"「ティップからバイトへ立ち上がる直線ランプ」ではもはや"
                     f"ありません。{flat:.2f}mm 以上にしてください。")
     return None
+
+
+def outer_bounds(p: dict, step: dict | None = None) -> dict:
+    """外形が決める**相手で動く壁**（Phase 4-E B-5）。
+
+    `outer_layout_error` の条件 (1)(2)(3)(6) を、それぞれのパラメータについて
+    解いたもの ——B-3・B-4a・B-4b で「壁は数字ではなく関係だった」と測った
+    8 本のうち、外形側の 6 本がここ（残り 2 本は `cavity_bounds`）。
+
+    `step` は `ParamSpec.step`（`{key: 刻み}`）。**条件 (1) は狭義の不等号**
+    （`bore_dia` < `shank_dia`）なので、境界そのものは通らない ——1 目盛り
+    内側へ寄せる。刻みは**スキーマが持ち主**なのでここには書かず、呼び出し側
+    （`Mouthpiece.param_bounds`）から渡してもらう。
+
+    `body_waist` / `shoulder_fullness` は入れない ——B-4b で測ったとおり
+    **相手がいない**（`r/r_max` に正規化した形の性質で 3 サイズ共通）ので、
+    静的な `hard_*` で正しく表せる。
+
+    条件が `outer_layout_error` と 2 か所に書かれることは代理変数の型なので、
+    **テストが `params_error` を二分して交差点と一致することを 3 サイズで
+    検査する**（`cavity_bounds` と同じ担保）。
+    """
+    step = step or {}
+    r_sh, r_max = shank_radius(p), p["body_dia"] / 2.0
+    return {
+        # (1) ボアはシャンクの中に収まる（狭義）
+        "bore_dia": {"hi": r_sh * 2.0 - (step.get("bore_dia") or 0.05),
+                     "hi_by": "シャンク径"},
+        # (1)(2) シャンク径はボア径と最大径に挟まれる
+        "shank_dia": {"lo": p["bore_dia"] + (step.get("shank_dia") or 0.1),
+                      "lo_by": "ボア径", "hi": r_max * 2.0, "hi_by": "最大径"},
+        # (2) 最大径は本当に最大（等号は通る）
+        "body_dia": {"lo": r_sh * 2.0, "lo_by": "シャンク径"},
+        # (3) 踵の床。**2 本は互いに相手**なので、片方の壁はもう片方の現在値で動く
+        "shank_length": {"hi": shank_length_at_heel_floor(p),
+                         "hi_by": "肩の長さ比と全長"},
+        "shoulder_ratio": {"hi": shoulder_ratio_at_heel_floor(p),
+                           "hi_by": "シャンク長と全長"},
+        # (6) ビーク高さ。上は胴の全高、下は稜線が前下がりになる点
+        "beak_height": {"lo": beak_height_flat(p),
+                        "lo_by": "テーブル角とティップ開き",
+                        "hi": beak_height_at_body_top(p),
+                        "hi_by": "最大径と全長"},
+    }
 
 
 def _station_zs(p: dict) -> list[float]:

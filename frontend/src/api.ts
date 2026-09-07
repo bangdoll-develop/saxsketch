@@ -13,12 +13,24 @@ export interface ParamSpec {
   hard_min: number | null; hard_max: number | null;
 }
 
+/**
+ * **相手で動く壁**（Phase 4-E B-5）。`hard_min`/`hard_max` は「テンプレート値で
+ * 作った掛け金」でしかないので、関係で決まる 9 本はサーバが**いまの組から
+ * 引き直して**返す。入っている側だけが掛け金を上書きする（`null` は掛け金のまま）。
+ * `*_by` は動かしている相手の名前で、スライダの説明文に出す ——「越えられない壁」
+ * とだけ言うと、**相手を動かせば届く**ことが伝わらない。
+ */
+export interface ParamBound {
+  lo: number | null; hi: number | null; lo_by: string; hi_by: string;
+}
+
 /** 帯／壁で丸めた 1 項目。**黙ってクランプしないための経路**（既知 8 例目）。 */
 export interface ParamAdjustment {
   key: string; label: string; unit: string;
   requested: number | string; applied: number | string;
-  /** edge: min|max。at: 帯（band）と壁（wall）のどちらに当たったか */
-  edge: string; at?: string; limit_kind: string; source: string; message: string;
+  /** edge: min|max。at: 帯（band）／壁（wall）／相手で動く壁（relation） */
+  edge: string; at?: string; partner?: string | null;
+  limit_kind: string; source: string; message: string;
 }
 export interface Tier1 {
   total_cc: number; effective_cc: number; target_cc: number;
@@ -76,6 +88,8 @@ export interface ProjectData {
   instrument_id: string; template_id: string; component_id: string;
   component_label: string;
   params: Record<string, unknown>; schema: ParamSpec[]; simulation: Simulation;
+  /** いまの組での**実効の壁**（`ParamBound`）。無い key は掛け金のまま。 */
+  bounds: Record<string, ParamBound>;
   manual_edit: ManualEdit;
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
@@ -303,7 +317,7 @@ export const api = {
   getProject: () => req<ProjectData>("/api/project"),
   putParams: (params: Record<string, unknown>) =>
     req<{ params: Record<string, unknown>; simulation: Simulation; stale: boolean;
-          adjustments: ParamAdjustment[] }>(
+          adjustments: ParamAdjustment[]; bounds: Record<string, ParamBound> }>(
       "/api/project/params", { ...json({ params }), method: "PUT" }),
   putMeta: (b: object) => req("/api/project/meta", { ...json(b), method: "PUT" }),
   save: (path: string) => req<{ ok: boolean; path: string }>("/api/project/save", json({ path })),
