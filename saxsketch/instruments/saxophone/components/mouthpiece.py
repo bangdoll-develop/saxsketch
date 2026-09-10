@@ -24,6 +24,7 @@ from saxsketch.geometry.builders import (
     yz_profile_cut_solid_curved,
 )
 from . import profiles
+from . import reed_seat
 from . import reference_check
 from saxsketch.acoustics import brightness as ac_brightness
 from saxsketch.acoustics import harmonics as ac_harmonics
@@ -396,8 +397,16 @@ def _specs(t: dict) -> list[ParamSpec]:
           # スライダの刻み 0.5 の 1 段手前で止める。上は 30.0 まで 3 サイズとも
           # ソリッド 1 個を確認し、その先は `cavity_layout_error` の担当。
           hlo=0.5, hhi=30.0),
-        f("reed_width", "リード幅", "ウィンドウ", "mm", 10.0, 18.0, 0.1,
-          "使用リード規格の幅。テーブル・窓幅の基準", advanced=True,
+        # **名前が嘘をついていた**（Phase 4-F）。「テーブル・窓幅の基準」と書いて
+        # あったが、この値はマウスピースの面を 1 つも決めていない ——
+        # テーブルの実幅は `table_flat_width`（半径とカット深さ、z で変わる）、
+        # 窓の実開口は `window_open_half_width`（空洞がリード面を切った弦）。
+        # 唯一これで決まっていたリガチャーのタブ幅も、リードの踵幅を見るように
+        # した（`ligature_profiles.requested_tab_half_width`）。いま残るのは
+        # `window_width` の公称値と表示だけ。
+        f("reed_width", "リード幅（規格の呼び）", "ウィンドウ", "mm", 10.0, 18.0, 0.1,
+          "使用リード規格の呼び幅。**形は決めない**（実幅・実開口は別に引く）",
+          advanced=True,
           kind="convention", src="市販リード規格の幅（出典未記録）"),
         # --- 外形 ---
         # **上端は「胴の全高 0.9·body_dia」ではなかった**（Phase B-4b で実測）。
@@ -778,7 +787,11 @@ class MouthpieceComponent(Component):
             "tier2": tier2,
             "sensitivity": sens,
             "harmonics": harm,
-            "cards": [reference_check.mouthpiece_card(params, self.size_info)],
+            # **規格リードが載るか**（Phase 4-F）。相手はそのサイズのテンプレート
+            # ＝規格リード。リードを設計していてもここは規格で見る（リードは規格
+            # から大きく動かさない前提）。設計中のリードとの適合はセットのカード。
+            "cards": [reference_check.mouthpiece_card(params, self.size_info),
+                      reed_seat.seat_card(params, self.template.get("reed", {}))],
         }
 
     def cavity_volume(self, params: dict) -> dict:
@@ -1005,33 +1018,12 @@ class MouthpieceComponent(Component):
 
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:
-        """採寸値 vs 採寸前の設計/基準値。reference_check の判定基盤を再利用。"""
-        specs = {s.key: s for s in self.param_specs()}
-        size_meta = {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS}
-        rows, verdicts = [], []
-        for k, mv in measured_params.items():
-            s = specs.get(k)
-            if s is None or k not in before_params:
-                continue
-            step = s.step or 0.1
-            r, v = reference_check._row(
-                f"{s.label} 実測/設計", float(mv), float(before_params[k]),
-                s.unit, max(0.6 * step, 0.05), max(2.5 * step, 0.2))
-            rows.append(r)
-            verdicts.append(v)
-        for k, mv in measured_size.items():
-            label, unit = size_meta.get(k, (k, "mm"))
-            base = before_size.get(k)
-            if base is None:
-                continue
-            r, v = reference_check._row(
-                f"{label} 実測/従前", float(mv), float(base), unit, 0.2, 0.6)
-            rows.append(r)
-            verdicts.append(v)
-        if not rows:
-            return None
-        return reference_check._finish(
-            "採寸 vs 設計", rows, verdicts,
+        """採寸値 vs 採寸前の設計/基準値。判定は `reference_check.survey_card`。"""
+        return reference_check.survey_card(
+            "採寸 vs 設計",
+            {s.key: s for s in self.param_specs()},
+            {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS},
+            before_params, before_size, measured_params, measured_size,
             "実測をプロジェクトへ反映しました。設計をいじって破綻したら"
             "「採寸時点へ戻す」で復元できます。")
 

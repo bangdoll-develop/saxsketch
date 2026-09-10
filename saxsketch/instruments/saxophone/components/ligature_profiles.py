@@ -255,6 +255,18 @@ def contact_rows(ref_p: dict, lig_p: dict) -> list[float]:
     return [z0 + 0.25 * w, z0 + 0.75 * w]
 
 
+def contact_front_z(ref_p: dict, lig_p: dict) -> float:
+    """リガチャーが**実際にリードへ当たる**いちばん前の z（Phase 4-F）。
+
+    帯の呼び範囲（`seat_range`）の前端とは限らない —— 点接触は帯の 1/4 と 3/4 に
+    2 列で立つので、当たるのは前端より帯幅の 1/4 だけ後ろ。面・線・接触なしは
+    帯の全長で当たるので前端そのもの。**振動部（削り部）を掴んでいないか**は
+    帯の呼び範囲ではなくこちらで見る（`set_check`）。
+    """
+    rows = contact_rows(ref_p, lig_p)
+    return rows[0] if rows else seat_range(ref_p, lig_p)[0]
+
+
 def section_zs(ref_p: dict, lig_p: dict) -> list[float]:
     """内周断面を取る z。点接触のときだけ行の位置を足す（山を z 方向にも丸める）。"""
     z0, z1 = seat_range(ref_p, lig_p)
@@ -451,8 +463,8 @@ def tab_bottom_pts(ref_p: dict, lig_p: dict, reed_p: dict, hw: float, z: float,
             + [(hw, floor)])
 
 
-def _tab_hw(ref_p: dict, lig_p: dict, radius: float, offset: float) -> float:
-    return _clamp_tab_hw(radius, ref_p["reed_width"] / 2.0 + offset)
+def _tab_hw(lig_p: dict, reed_p: dict, radius: float, offset: float) -> float:
+    return _clamp_tab_hw(radius, reed_p["heel_width"] / 2.0 + offset)
 
 
 def inner_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
@@ -464,12 +476,12 @@ def inner_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     平面として出る（近似誤差なし）。
     """
     offset = lig_p["clearance"]
-    hw_mid = flat_half_width(ref_p, lig_p)
+    hw_mid = flat_half_width(ref_p, lig_p, reed_p)
     out = []
     for z in section_zs(ref_p, lig_p):
         zr = ref_z(lig_p, z)
         radius = profiles.outer_radius(ref_p, zr) + offset
-        hw = _tab_hw(ref_p, lig_p, radius, offset)
+        hw = _tab_hw(lig_p, reed_p, radius, offset)
         out.append({"z": z,
                     "pts": _wrap_section(
                         radius, profiles.table_plane_y(ref_p, zr), hw,
@@ -485,7 +497,7 @@ def outer_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     for z in (z0, (z0 + z1) / 2.0, z1):
         zr = ref_z(lig_p, z)
         radius = profiles.outer_radius(ref_p, zr) + offset
-        hw = _tab_hw(ref_p, lig_p, radius, offset)
+        hw = _tab_hw(lig_p, reed_p, radius, offset)
         y = reed_face_y(ref_p, lig_p, reed_p, z) - offset
         out.append({"z": z,
                     "pts": _wrap_section(radius, profiles.table_plane_y(ref_p, zr),
@@ -500,12 +512,12 @@ def bridge_sections(ref_p: dict, lig_p: dict, reed_p: dict) -> list[dict]:
     `_BRIDGE_GAP` 空ける ＝ 片側の耳から張り出して反対側に重なる片持ち。
     """
     offset = lig_p["clearance"]
-    hw_mid = flat_half_width(ref_p, lig_p)
+    hw_mid = flat_half_width(ref_p, lig_p, reed_p)
     out = []
     for z in section_zs(ref_p, lig_p):
         zr = ref_z(lig_p, z)
         radius = profiles.outer_radius(ref_p, zr) + offset
-        hw = min(_tab_hw(ref_p, lig_p, radius, offset), hw_mid)
+        hw = min(_tab_hw(lig_p, reed_p, radius, offset), hw_mid)
         floor = tab_floor_y(ref_p, lig_p, reed_p, z)
         top = ([(-hw, floor)]
                + contact_bottom_pts(ref_p, lig_p, reed_p, hw, z)
@@ -522,19 +534,29 @@ def inner_radius(ref_p: dict, lig_p: dict) -> float:
             + lig_p["clearance"])
 
 
-def requested_tab_half_width(ref_p: dict, lig_p: dict) -> float:
-    """リードを収めるのに必要なタブ半幅（クランプ前）。"""
-    return ref_p["reed_width"] / 2.0 + lig_p["clearance"]
+def requested_tab_half_width(lig_p: dict, reed_p: dict) -> float:
+    """リードを収めるのに必要なタブ半幅（クランプ前）。
+
+    **相手はリードの踵幅**（Phase 4-F）。ここは長らくマウスピースの `reed_width`
+    を読んでいた —— 3 か所（`mouthpiece.dimensions` の注記・`set_check`・
+    `cad/windycity/README.md`）が「`reed_width` はマウスピースの面を 1 つも
+    決めていない」と書いているのに、**タブの幅だけは本当に決めていた**。
+    当たり面（`contact_top_y`）は `reed_params()` のカマボコをなぞるのに、
+    幅だけ別の値を見ていたので、既定 3 サイズとも**タブがリードの踵より
+    片側 0.05mm 狭かった**（踵＝先端＋0.6、`clearance`＝0.25 で相殺されて
+    小さく見えていただけで、踵テーパーか `clearance` を動かせば任意にずれる）。
+    """
+    return reed_p["heel_width"] / 2.0 + lig_p["clearance"]
 
 
-def flat_half_width(ref_p: dict, lig_p: dict) -> float:
+def flat_half_width(ref_p: dict, lig_p: dict, reed_p: dict) -> float:
     """リード接触面（タブ底面）の**実際の**半幅。接触要素の配置の基準。
 
     外形半径に収まらない要求幅は断面生成側で切り詰められる。ここで同じクランプを
     通しておかないと、接触がタブの外に置かれて側壁を突き抜ける。
     """
     return _clamp_tab_hw(inner_radius(ref_p, lig_p),
-                         requested_tab_half_width(ref_p, lig_p))
+                         requested_tab_half_width(lig_p, reed_p))
 
 
 # ---------------------------------------------------------------- ネジ・スリット

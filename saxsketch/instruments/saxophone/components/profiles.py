@@ -29,6 +29,7 @@ ny>1 なら上下どちらの半分も X=±1 で接線が垂直なので、赤�
 """
 from __future__ import annotations
 
+import bisect
 import functools
 import math
 import threading
@@ -1335,6 +1336,63 @@ def table_flat_width(p: dict, z: float) -> float:
     r = outer_radius(p, z)
     d = abs(table_plane_y(p, z))
     return 2.0 * math.sqrt(max(r * r - d * d, 0.0))
+
+
+@_pcached
+def _window_edge_table(p: dict) -> tuple:
+    """空洞ステーションの (z 列, 断面ポリゴン列)。窓の実開口を引く元。
+
+    `cavity_stations` は 35 前後の断面を pchip で組むので、z ごとに呼ぶと
+    `window_open_half_width` が O(n²) になる。`params_scope` の中では 1 回で済む。
+    """
+    sts = cavity_stations(p)
+    return ([s["z"] for s in sts], [section_pts(s) for s in sts])
+
+
+def window_open_half_width(p: dict, z: float) -> float:
+    """リード面での**窓の実開口**の半幅 [mm]。閉じている z は 0。
+
+    `window_width` は `reed_width − 2·side_rail_width` の**公称値**で、ソリッドの
+    上に存在しない（`table_flat_width` の注記と同じ話）。実際の開口は「空洞の断面が
+    リード面 `cut_top_y` を切った弦」で、いままで法則側にこれを引く道が無く、
+    メッシュへ下からレイを打つ検品スクリプト（`cad/windycity/align_reference.py`
+    の `window_outline`）でしか出せなかった。**リードが載るかはこの縁とリードの縁の
+    関係で決まる**ので、法則側に置く（`reed_seat`）。
+
+    断面ポリゴンは `_super_pts` も `_horseshoe_pts` も同じ 72 点を同じ角度で作る。
+    ルールドロフトは対応する点どうしを直線で結ぶので、**ステーション間の断面は
+    点ごとの線形補間そのもの** —— 近似ではない。
+
+    外殻でも切られるので `reed_chord` の半分で頭打ちにする。
+    """
+    zs, ptss = _window_edge_table(p)
+    if z <= zs[0] or z >= zs[-1]:
+        return 0.0
+    i = min(max(bisect.bisect_right(zs, z) - 1, 0), len(zs) - 2)
+    dz = zs[i + 1] - zs[i]
+    t = (z - zs[i]) / dz if dz > 1e-12 else 0.0
+    a, b = ptss[i], ptss[i + 1]
+    y0 = cut_top_y(p, z)
+    n = len(a)
+    # y だけ先に補間し、**跨いだ辺でだけ x を補間する**。全点の (x, y) を作ると
+    # 1 呼び出しが 3 倍かかり、`seat_profile` の 240 点で simulate の予算を食う。
+    ys = [a[k][1] + t * (b[k][1] - a[k][1]) - y0 for k in range(n)]
+    best, hit = 0.0, False
+    for k in range(n):
+        j = k + 1 if k + 1 < n else 0
+        y1, y2 = ys[k], ys[j]
+        if y1 * y2 <= 0.0 and abs(y2 - y1) > 1e-12:
+            hit = True
+            x1 = a[k][0] + t * (b[k][0] - a[k][0])
+            x2 = a[j][0] + t * (b[j][0] - a[j][0])
+            best = max(best, abs(x1 - y1 / (y2 - y1) * (x2 - x1)))
+    if not hit:
+        # 交わらない＝閉じている。断面が丸ごとリード面の**上**なら面は無傷、
+        # 丸ごと**下**ならフェイシングカットが既に落とした領域にあるだけで、
+        # どちらもリード面に穴を開けない（ロフト前端の蚋が後者。
+        # `_LOFT_FRONT_LEAD` の注記）。
+        return 0.0
+    return min(best, reed_chord(p, z) / 2.0)
 
 
 #: ロフト前端を窓の前縁より手前へ置く量 [mm]。前端の蓋がリード面より下

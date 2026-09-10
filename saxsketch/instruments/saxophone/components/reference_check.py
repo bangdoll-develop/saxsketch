@@ -187,10 +187,15 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
                  f"{bore:.2f} / {aim:.2f} mm  {v}"])
     verdicts.append(v)
 
-    r, v = _row("テーブル幅 / 規格リード先端幅", p["reed_width"],
-                size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8)
-    rows.append(r)
-    verdicts.append(v)
+    # 「テーブル幅 / 規格リード先端幅」はここから落とした（Phase 4-F）。
+    # 相手にしていた `reed_width` は**マウスピースの面を 1 つも決めていない**公称値
+    # で（`mouthpiece.dimensions` の注記）、テーブルの実幅は半径とカット深さから
+    # 決まって z で変わる。「規格リードが載るか」は `reed_seat.seat_card` が
+    # 実幅・実開口で見る —— 判定幅 0.3 / 0.8 はそちらへ引き継いだ。
+    rows.append(["リード幅（規格の呼び）",
+                 f"{p['reed_width']:.1f} / "
+                 f"{size_info['reed_std_tip_width_mm']:.1f} mm　"
+                 "判定は「リードが載るか」のカード"])
 
     # 最大径。**超えた側だけ**見る（細い分はリガチャーが締まるので害が無い）。
     # 上限の無いサイズ（＝基準にできる市販機を実測していない）では判定しない。
@@ -280,6 +285,42 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
                    "手元の実物と比べたい場合は採寸して基準に取り込んでください。")
 
 
+def survey_card(title: str, specs: dict, size_meta: dict,
+                before_params: dict, before_size: dict,
+                measured_params: dict, measured_size: dict,
+                note: str) -> dict | None:
+    """採寸値 vs 採寸前の設計/基準値。**判定幅はここ 1 か所**。
+
+    設計パラはスライダの刻みを基準にする（0.6 段まで一致・2.5 段まで軽微）——
+    刻みより細かい差を「乖離」と呼んでも直しようがないため。基準定数
+    （`size_info`）は刻みを持たないので 0.2 / 0.6mm 固定。
+
+    部品ごとに書くと片方だけ厳しくなるので共通にする（`set_check` の
+    モジュール docstring と同じ理由）。
+    """
+    rows, verdicts = [], []
+    for k, mv in measured_params.items():
+        sp = specs.get(k)
+        if sp is None or k not in before_params:
+            continue
+        step = sp.step or 0.1
+        r, v = _row(f"{sp.label} 実測/設計", float(mv), float(before_params[k]),
+                    sp.unit, max(0.6 * step, 0.05), max(2.5 * step, 0.2))
+        rows.append(r)
+        verdicts.append(v)
+    for k, mv in measured_size.items():
+        label, unit = size_meta.get(k, (k, "mm"))
+        base = before_size.get(k)
+        if base is None:
+            continue
+        r, v = _row(f"{label} 実測/従前", float(mv), float(base), unit, 0.2, 0.6)
+        rows.append(r)
+        verdicts.append(v)
+    if not rows:
+        return None
+    return _finish(title, rows, verdicts, note)
+
+
 def reed_card(p: dict, size_info: dict) -> dict:
     """リードの規格照合。"""
     rows, verdicts = [], []
@@ -298,9 +339,27 @@ def reed_card(p: dict, size_info: dict) -> dict:
     rows.append(r)
     verdicts.append(v)
 
+    # 幅のテーパーが直線かどうか。**`reed_profiles.taper_half_width` は先端幅→
+    # 踵幅の線形を仮定していて、1 度も測っていない**（Phase 4-F）。かかり代は
+    # ティップ側で決まるので、ここが曲がっていれば「リードが載るか」の結論ごと
+    # 変わる。判定幅は採寸カードと同じ規則（刻み 0.1mm の 0.6 段 / 2.5 段）。
+    at20 = size_info.get("reed_width_at20_mm")
+    if at20 is None:
+        rows.append(["（参考）先端から 20mm の幅",
+                     "未実測。採寸フォームで入れると、幅のテーパーが直線か"
+                     "どうかをここで確かめられます"])
+    else:
+        from . import reed_profiles as rp
+        r, v = _row("先端から 20mm の幅 実測/モデル", float(at20),
+                    rp.width(p, 20.0), "mm", 0.06, 0.25)
+        rows.append(r)
+        verdicts.append(v)
+
     return _finish("規格リードとの照合", rows, verdicts,
                    "規格から外すと市販リガチャー・マウスピースに合わなくなります。"
-                   "厚みプロファイルは規格が無いため照合対象外。")
+                   "厚みプロファイルは規格が無いため照合対象外。"
+                   "**幅のテーパーはモデルが線形を仮定しています** —— 中間 1 点を"
+                   "測れば確かめられるので、採寸フォームに欄を用意しました。")
 
 
 def _finish(title: str, rows: list, verdicts: list, note: str) -> dict:

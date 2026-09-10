@@ -28,6 +28,7 @@ sys.path.insert(0, str(_REPO))
 from saxsketch.analysis import meshdiff  # noqa: E402
 from saxsketch.export.models import export_model  # noqa: E402
 from saxsketch.instruments.saxophone.components import profiles as P  # noqa: E402
+from saxsketch.instruments.saxophone.components import reed_profiles as RP  # noqa: E402
 from saxsketch.instruments.saxophone.components.mouthpiece import (  # noqa: E402
     MouthpieceComponent)
 from cad.windycity.align_reference import (  # noqa: E402
@@ -446,7 +447,34 @@ def main():
         b_ = float(np.interp(z, zwm, wwm))
         lines.append("| %.0f | %.2f | %.2f | %+.2f |" % (z, a_, b_, b_ - a_))
     lines += ["", "開口 z 範囲: 実物 %.1f–%.1f / モデル %.1f–%.1f"
-              % (sr[0], sr[1], sm[0], sm[1]),
+              % (sr[0], sr[1], sm[0], sm[1]), ""]
+
+    # ---- 窓の縁 vs 規格リードの縁（Phase 4-F）。
+    #      上の表には**リードが 1 度も出てこなかった** —— 窓幅がモデルと実物で
+    #      合っているかしか見ていなかったが、知りたいのは「リードの縁がサイド
+    #      レールに載るか」で、それは窓の縁とリードの縁の差。**実物でも負に出る**
+    #      （ティップ側）ので、しきい値は置かず並べるだけにする。
+    reed_p = json.loads((_REPO / "saxsketch/instruments/saxophone/templates/tenor.json")
+                        .read_text(encoding="utf-8"))["reed"]
+    lines += ["## 窓の縁とリードの縁（かかり代）", "",
+              "リードの半幅 − 窓の半開口。**負ならリードの縁が窓の上に浮く**"
+              "（＝サイドレールに載らない）。相手は規格リード"
+              "（テナー: 先端 %.1f / 踵 %.1f mm、**どちらも未実測の代表値**）。"
+              % (reed_p["tip_width"], reed_p["heel_width"]), "",
+              "| z | 窓（実物） | 窓（モデル） | リード幅 | かかり代（実物） |"
+              " かかり代（モデル） |",
+              "|---|---|---|---|---|---|"]
+    for z in zw[::2]:
+        wr = float(np.interp(z, zwr, wwr))
+        wm = float(np.interp(z, zwm, wwm))
+        rw = RP.width(reed_p, float(z))
+        lines.append("| %.0f | %.2f | %.2f | %.2f | %+.2f | %+.2f |"
+                     % (z, wr, wm, rw, (rw - wr) / 2.0, (rw - wm) / 2.0))
+    lines += ["",
+              "モデル側は法則 `profiles.window_open_half_width` ではなくメッシュの"
+              "レイ走査で測っている（実物と同じ道具で測らないと比較にならない）。"
+              "法則とメッシュの一致は別に押さえてある"
+              "（`test_the_window_opening_is_the_law_not_the_nominal`）。", "",
               "", "## ティップレール（先端曲線に沿う帯の幅）", "",
               "窓の縁から先端輪郭への**垂直距離**。弧の範囲は z = %.2f–%.2f"
               % _tip_arc_z(p),

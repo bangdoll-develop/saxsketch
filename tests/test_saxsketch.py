@@ -3627,9 +3627,22 @@ def test_reed_builds_for_all_templates():
         assert comp.build(p).is_valid
         sim = comp.simulate(p)
         assert sim["kind"] == "reed" and sim["cards"]
-        # 既定同士は適合しているはず（テンプレートの整合性テスト）
+        # 既定同士は適合しているはず（テンプレートの整合性テスト）。
+        #
+        # **テナーだけは合っていない**（Phase 4-F で測って分かった）—— 帯の前端の
+        # 直後 z=61.9 から踵まで 16mm、リードの縁がテーブルの外にある（最大
+        # +0.72mm）。ここに出てくる 2 つの値の出所が違う: マウスピースの
+        # `body_dia` 30.8 は実物 WindyCity の実測で、リードの `heel_width` 15.4 は
+        # **未実測の代表値**（`descriptor` のテナーは全長も先端幅も出所が無い）。
+        # どちらを動かすかは実物のリードを測ってから決める（`docs/reed-seat.md`）。
+        # それまで「合っている」と言い張らずに、食い違いの中身を固定しておく。
         fit = next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
-        assert fit["status"] == "ok", fit["advice"]
+        if tid == "tenor":
+            assert fit["status"] == "warn"
+            assert "縁がテーブルの外" in fit["advice"]
+            assert "0.72mm" in fit["advice"]
+        else:
+            assert fit["status"] == "ok", fit["advice"]
 
 
 def test_reed_sections_uniform_vertex_count():
@@ -4353,7 +4366,7 @@ def test_ligature_contacts_actually_touch_the_reed():
                 rows = lp.contact_rows(m, p)
                 z0, z1 = lp.seat_range(m, p)
                 zc = rows[0] if rows else (z0 + z1) / 2.0
-                hw = lp.flat_half_width(m, p)
+                hw = lp.flat_half_width(m, p, r)
                 floor = lp.tab_floor_y(m, p, r, zc)
                 # 断面の先頭がタブ床の折れ線（残りは上側＝ビーク側の円弧）
                 nb = len(lp.tab_bottom_pts(m, p, r, hw, zc))
@@ -4442,7 +4455,7 @@ def test_ligature_band_width_always_changes_the_shape():
         # 上限いっぱいでもタブは収まり、窓にも掛からない（実測: 前端 29.1/42.3/51.0
         # に対し窓の後端 27.8/35.8/41.9）
         wide = {**base, "band_width": 28.0}
-        assert lp.flat_half_width(m, wide) >= lp.requested_tab_half_width(m, wide)
+        assert lp.flat_half_width(m, wide, r) >= lp.requested_tab_half_width(wide, r)
         assert lp.seat_range(m, wide)[0] > profiles.window_end_z(m), tid
 
 
@@ -4776,7 +4789,8 @@ def test_ligature_tab_matches_plate(alto_ligature):
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     comp, p = alto_ligature
     m = comp.ref_params()
-    assert lp.flat_half_width(m, p) <= lp.requested_tab_half_width(m, p) + 1e-9
+    r = comp.reed_params()
+    assert lp.flat_half_width(m, p, r) <= lp.requested_tab_half_width(p, r) + 1e-9
 
     def fit(mp):
         comp.set_refs({"mouthpiece": {"params": mp}})
@@ -4787,11 +4801,13 @@ def test_ligature_tab_matches_plate(alto_ligature):
         assert fit(m)["status"] == "ok"
         # ボディ径を外形径 < リード幅まで絞るとタブが張り出しきれずリードが入らない
         # → 黙って切り詰めず警告する。タブは円の外へ出られるので、しきい値は
-        # 「テーブル面の弦」ではなく**外形径そのもの**（アルトのリード 13.4mm に対し
-        # 座の外形は 0.974·body_dia なので body_dia < 14.2mm で入らなくなる）。
+        # 「テーブル面の弦」ではなく**外形径そのもの**。**相手はリードの踵幅**
+        # （Phase 4-F。以前はマウスピースの `reed_width` 13.4mm を見ていた）で、
+        # アルトの踵 14.0mm に対し座の外形は 0.974·body_dia なので
+        # body_dia < 14.8mm で入らなくなる。
         narrow = {**m, "body_dia": 13.0}
-        assert lp.flat_half_width(narrow, p) \
-            < lp.requested_tab_half_width(narrow, p)
+        assert lp.flat_half_width(narrow, p, r) \
+            < lp.requested_tab_half_width(p, r)
         card = fit(narrow)
         assert card["status"] == "warn" and "収納幅" in card["advice"]
     finally:
@@ -4867,7 +4883,7 @@ def test_ligature_sections_never_self_intersect():
             z0, z1 = lp.seat_range(m, p)
             zm = (z0 + z1) / 2.0
             r_in = profiles.outer_radius(m, zm) + cl
-            if lp.requested_tab_half_width(m, p) < lp._shelf_half_width(
+            if lp.requested_tab_half_width(p, r) < lp._shelf_half_width(
                     r_in, profiles.table_plane_y(m, zm)):
                 shelf_cases += 1
             check(lp.inner_sections(m, p, r), (tid, bd, cl, rc, rt, "内周"))
@@ -6512,14 +6528,14 @@ def test_set_card_rows_and_source():
     rows = dict(card["rows"])
     assert "このセットのリード" in rows["想定リード"]
     assert "リード全長 / 帯の後端" in rows
-    assert "リード踵幅 / テーブル実幅（帯の中央）" in rows
+    assert "帯までのはみ出し 最大" in rows
     assert card["status"] == "ok"
 
     # 踵をテーブルからはみ出させると乖離が出る（マウスピース側の実幅で判定する）
     c.put("/api/project/params", json={"params": {"heel_width": 18.0}})
     bad = c.get("/api/project").json()["set_card"]
     assert bad["status"] == "bad"
-    assert "乖離" in dict(bad["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
+    assert "乖離" in dict(bad["rows"])["帯までのはみ出し 最大"]
 
     # 単体プロジェクトでは出さない（部品が 1 つでは決まらない）
     c.post("/api/project/new", json={"instrument_id": "saxophone",
@@ -6529,30 +6545,37 @@ def test_set_card_rows_and_source():
     assert STATE.set_card() is None
 
 
-def test_set_card_table_width_not_reed_width():
-    """テーブル幅の判定に `reed_width` を使っていないこと。
+def test_set_card_measures_the_seat_over_the_whole_length():
+    """裏面の密着を**全長で**見ていること、相手が `reed_width` でないこと。
 
     `reed_width` は窓幅の公称値で、マウスピースの面を 1 つも決めていない
-    （`profiles.table_flat_width` の注記）。実幅は z で変わる。
+    （`profiles.table_flat_width` の注記）。実幅は z で変わる ——
+    **帯の中央 1 点で測っていた頃はテナーの 16mm を「軽微」と言っていた**
+    （Phase 4-F）。
     """
-    from saxsketch.instruments.saxophone.components import profiles, set_check
+    from saxsketch.instruments.saxophone.components import set_check, reed_seat
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     reg = get_registry().get("saxophone")
-    lig = reg.make_component("ligature", "alto")
-    m = _template_params("mouthpiece", "alto")
-    p = _template_params("ligature", "alto")
-    reed = _template_params("reed", "alto")
-    lig.set_refs({"mouthpiece": {"params": m}, "reed": {"params": reed}})
-
-    card = set_check.set_card(lig.size_info, {
-        "mouthpiece": {"params": m, "component": reg.make_component("mouthpiece", "alto")},
-        "ligature": {"params": p, "component": lig},
-        "reed": {"params": reed, "component": reg.make_component("reed", "alto")},
-    })
-    z_mid = sum(lp.seat_range(m, p)) / 2.0
-    flat = profiles.table_flat_width(m, z_mid)
-    assert f"{flat:.2f}" in dict(card["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
-    assert abs(flat - m["reed_width"]) > 0.5      # 公称と実幅は別物
+    for tid in SIZES:
+        lig = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        p = _template_params("ligature", tid)
+        reed = _template_params("reed", tid)
+        lig.set_refs({"mouthpiece": {"params": m}, "reed": {"params": reed}})
+        card = set_check.set_card(lig.size_info, {
+            "mouthpiece": {"params": m, "component": reg.make_component("mouthpiece", tid)},
+            "ligature": {"params": p, "component": lig},
+            "reed": {"params": reed, "component": reg.make_component("reed", tid)},
+        })
+        rows = dict(card["rows"])
+        band1 = lp.seat_range(m, p)[1]
+        seat = reed_seat.seat_summary(m, reed, band1)
+        assert f"{seat['table']['mm']:+.2f}" in rows["帯までのはみ出し 最大"]
+        # 公称ではなく実幅・実開口が相手
+        assert f"{m['reed_width']:.1f} /" not in rows["帯までのはみ出し 最大"]
+        # 帯より後ろは参考（判定の語を出さない）
+        tail = rows["（参考）帯より後ろのはみ出し 最大"]
+        assert "一致" not in tail and "乖離" not in tail
 
 
 def test_reed_assembly_placement_lies_on_table():
@@ -8469,3 +8492,222 @@ def test_how_many_holes_fit_in_two_hands():
         # カードにも出る
         rows = dict(tuple(r) for r in comp._reach_card(base)["rows"])
         assert f"{fit} 本" in rows[f"{bpf.HAND_SPAN_MM:.0f}mm に収まる本数"], tid
+
+
+# ---------------------------------------------------------------------------
+# Phase 4-F —— リードが載るか（面で測る）
+# ---------------------------------------------------------------------------
+
+#: 既定値で測った 3 区間の最悪点 [mm]。**ソプラノ・アルトのはみ出しは全部
+#: 「帯より後ろ」に落ち、テナーだけ締める区間に残る** —— 同じ +2.5mm でも
+#: 意味が逆になるので、量だけ見ても判定できないことの回帰ピン。
+_F_SEAT = {
+    #          窓のかかり代 min   窓終端〜帯後端 はみ出し max   帯後端〜踵（参考）
+    "soprano": (-0.19,            -0.13,                        +3.00),
+    "alto":    (-0.84,            -0.34,                        +0.39),
+    "tenor":   (-0.64,            +0.72,                        None),
+}
+
+
+def _seat(size):
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    m = _template_params("mouthpiece", size)
+    r = _template_params("reed", size)
+    l = _template_params("ligature", size)
+    return m, r, rs.seat_summary(m, r, lp.seat_range(m, l)[1])
+
+
+def test_the_window_opening_is_the_law_not_the_nominal():
+    """**窓の実開口を法則側で引けること**（Phase 4-F）。
+
+    いままで法則側にあったのは `window_width = reed_width − 2·side_rail_width`
+    の**公称値だけ**で、実際の開口はメッシュへ下からレイを打つ検品スクリプト
+    （`cad/windycity/align_reference.window_outline`）でしか出せなかった。
+    リードが載るかはこの縁とリードの縁の関係で決まるので、法則側に置く。
+
+    公称と実開口は 2mm 以上食い違う ——「`reed_width` はソリッドの上に存在しない」
+    （`profiles.table_flat_width` の注記）が、窓の側でも数字で出る。
+    """
+    for size in SIZES:
+        m = _template_params("mouthpiece", size)
+        with profiles.params_scope(m):
+            # 開き始め・閉じ終わりが既存の z の法則と一致する（別々に述べていない）
+            lo, hi = 0.0, profiles.window_open_z(m) + 2.0
+            for _ in range(60):
+                mid = (lo + hi) / 2.0
+                lo, hi = (lo, mid) if profiles.window_open_half_width(m, mid) > 0 else (mid, hi)
+            assert hi == pytest.approx(profiles.window_open_z(m), abs=0.05)
+            a, b = profiles.window_end_z(m) - 3.0, profiles.window_end_z(m) + 3.0
+            for _ in range(60):
+                mid = (a + b) / 2.0
+                a, b = (mid, b) if profiles.window_open_half_width(m, mid) > 0 else (a, mid)
+            assert a == pytest.approx(profiles.window_end_z(m), abs=0.05)
+
+            # 閉じている所は 0（ロフト前端の蓋がリード面より下に沈む区間を含む）
+            assert profiles.window_open_half_width(m, 0.3) == 0.0
+            assert profiles.window_open_half_width(m, profiles.window_end_z(m) + 2.0) == 0.0
+
+            # 公称は形ではない
+            widest = max(2.0 * profiles.window_open_half_width(m, z)
+                         for z in [profiles.window_end_z(m) * i / 60.0 for i in range(61)])
+            assert widest > profiles.window_width(m) + 2.0
+            # 外殻でも切られる（弦をはみ出さない）
+            for z in (1.0, 5.0, 20.0):
+                assert (profiles.window_open_half_width(m, z)
+                        <= profiles.reed_chord(m, z) / 2.0 + 1e-9)
+
+
+def test_the_reed_seat_is_measured_over_the_whole_length_not_at_one_point():
+    """**「載る」は 1 点では決まらないこと**（Phase 4-F）。
+
+    `set_check` は帯の中央 1 点で幅を比べていた。その 1 点はテナーで
+    「軽微」を返すが、実際は帯の前端の直後から踵まで **16mm ぜんぶ**
+    リードの縁がテーブルの外にある。
+    """
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    for size in SIZES:
+        m, r, s = _seat(size)
+        want_w, want_t, want_tail = _F_SEAT[size]
+        assert s["window"]["mm"] == pytest.approx(want_w, abs=0.05)
+        assert s["table"]["mm"] == pytest.approx(want_t, abs=0.05)
+        if want_tail is None:
+            assert s["tail"] is None          # リードが帯の後端より短い
+        else:
+            assert s["tail"]["mm"] == pytest.approx(want_tail, abs=0.05)
+
+    # テナー: 帯の中央 1 点は最悪点より 0.5mm 以上甘い（＝ 1 点では見えない）
+    m, r, s = _seat("tenor")
+    band0, band1 = profiles.ligature_seat_range(m)
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    z_mid = (band0 + band1) / 2.0
+    at_mid = (rp.width(r, z_mid) - profiles.table_flat_width(m, z_mid)) / 2.0
+    assert at_mid < s["table"]["mm"] - 0.25
+    # そして最悪点は帯の中にある（＝「後ろだから無害」では済まない）
+    assert band0 <= s["table"]["z"] <= band1
+
+    # 窓より前（ティップレール）は判定に入れない。入れると先端の面取りで
+    # 胴が細るぶん、3 サイズとも +0.9mm 以上の偽のはみ出しが出る。
+    prof = rs.seat_profile(m, r)
+    nose = [d for d in prof if d["band"] == rs.NOSE]
+    assert nose and max(d["over"] for d in nose) > 0.9
+    assert max(d["z"] for d in nose) < min(d["z"] for d in prof
+                                           if d["band"] == rs.WINDOW)
+
+
+def test_the_harmless_overhang_is_the_one_behind_the_band():
+    """**害の有無を決めているのは量ではなく区間**（Phase 4-F）。
+
+    後方へはみ出しても締めないので害が無い。同じリード・同じマウスピースでも、
+    リガチャーの座が前へ寄れば同じはみ出しが「締める区間で浮く」に変わる。
+    区間の切り方は `reed_seat` の 1 か所だけが持っている。
+    """
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    m = _template_params("mouthpiece", "tenor")
+    r = _template_params("reed", "tenor")
+
+    late = rs.seat_summary(m, r, seat_end=79.0)      # 座が踵まで伸びている
+    early = rs.seat_summary(m, r, seat_end=61.0)     # 座が前寄り
+    assert late["table"]["mm"] > 0.5 and late["tail"] is None
+    assert early["tail"] is not None
+    assert early["tail"]["mm"] == pytest.approx(late["table"]["mm"], abs=1e-9)
+    assert early["table"]["mm"] < 0.0                # 締める区間は浮いていない
+
+
+def test_the_ligature_tab_is_cut_for_the_reed_not_for_a_nominal():
+    """**タブ幅がリードの踵を見ること**（Phase 4-F）。
+
+    当たり面（`contact_top_y`）はリードのカマボコをなぞるのに、幅だけ
+    マウスピースの `reed_width` を見ていた。3 か所が「`reed_width` は面を 1 つも
+    決めていない」と書いているのに、**タブの幅だけは本当に決めていた**。
+    既定では片側 0.05mm 足りないだけだったが（踵＝先端＋0.6、`clearance`＝0.25 で
+    ほぼ相殺）、**踵テーパーを動かすと任意にずれる**のがこの型の怖い所。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        lig = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        lig.set_refs({"mouthpiece": {"params": m}})
+        p = {s.key: s.default for s in lig.param_specs()}
+        r = lig.reed_params()
+        # 収まる: 踵の半幅 ＋ はめあい隙間ちょうど
+        assert lp.requested_tab_half_width(p, r) == pytest.approx(
+            r["heel_width"] / 2.0 + p["clearance"])
+        assert lp.flat_half_width(m, p, r) >= r["heel_width"] / 2.0
+
+        # **リードを太くすればタブも太る。** 旧実装はマウスピースの公称値だけを
+        # 見ていたので、ここが動かなかった。
+        wide = dict(r, heel_width=r["heel_width"] + 2.0)
+        assert (lp.flat_half_width(m, p, wide)
+                > lp.flat_half_width(m, p, r) + 0.9), tid
+        # 断面の実体も動く（報告だけが動いて形が同じ、にならないこと）。
+        # 断面の最大 |x| は帯の外周（円）なので、そこを見ても差が出ない ——
+        # 動いたのはタブの床の幅。
+        floor_hw = lambda rp_: max(  # noqa: E731
+            abs(x) for sec in lp.inner_sections(m, p, rp_)
+            for x, y in sec["pts"]
+            if y < profiles.table_plane_y(m, lp.ref_z(p, sec["z"])))
+        assert floor_hw(wide) > floor_hw(r) + 0.9, tid
+
+
+def test_the_reed_can_finally_be_surveyed():
+    """**リードの採寸フォームに欄が出ること**（Phase 4-F）。
+
+    `survey_targets` が未実装だったので、リードを選ぶと入力欄が 1 つも無かった
+    （`registry.Component` の既定は空 dict）。サーバもフロントも部品を選ばない
+    造りなので、部品側の 2 メソッドだけでワークフローが通る。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+    assert c.post("/api/set/member/add", json={"component_id": "reed"}).status_code == 200
+
+    st = c.get("/api/survey").json()
+    keys = [f["key"] for f in st["targets"]["params"]]
+    assert {"tip_width", "heel_width", "heel_edge_thickness", "vamp_length"} <= set(keys)
+    # 比率と choice は測れないので出さない
+    assert "spine_ratio" not in keys and "file_cut" not in keys
+    # 範囲は帯ではなく壁（実測は慣習の外に出る）
+    spec = {s.key: s for s in STATE.component.param_specs()}["reed_length"]
+    row = next(f for f in st["targets"]["params"] if f["key"] == "reed_length")
+    assert (row["min"], row["max"]) == spec.bounds()
+
+    before = STATE.paramset.values["heel_width"]
+    r = c.post("/api/survey/commit", json={
+        "measured": {"heel_width": before + 0.4}, "measured_size": {}, "note": "3 本"})
+    assert r.status_code == 200
+    card = r.json()["survey"]["card"]
+    assert card is not None and "踵幅 実測/設計" in dict(card["rows"])
+    assert STATE.paramset.values["heel_width"] == pytest.approx(before + 0.4)
+    assert c.post("/api/survey/revert").status_code == 200
+
+
+def test_measuring_the_taper_can_falsify_the_straight_line():
+    """**幅のテーパーが直線かを測れること**（Phase 4-F）。
+
+    `reed_profiles.taper_half_width` は先端幅→踵幅の線形を仮定していて 1 度も
+    測っていない。かかり代はティップ側で決まるので、ここが曲がっていれば
+    「リードが載るか」の結論ごと変わる。中間 1 点で決まる。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("reed", "alto")
+    p = _template_params("reed", "alto")
+
+    plain = reference_check.reed_card(p, comp.size_info)
+    assert "未実測" in dict(plain["rows"])["（参考）先端から 20mm の幅"]
+
+    # 線形どおりなら一致、外れれば乖離（＝この欄が仮定を反証できる）
+    model = rp.width(p, 20.0)
+    ok = reference_check.reed_card(p, {**comp.size_info,
+                                       "reed_width_at20_mm": model})
+    assert ok["status"] == "ok"
+    bent = reference_check.reed_card(p, {**comp.size_info,
+                                         "reed_width_at20_mm": model + 0.5})
+    assert bent["status"] == "bad"

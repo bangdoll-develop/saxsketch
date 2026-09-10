@@ -366,7 +366,7 @@ class LigatureComponent(Component):
         z0, z1 = lp.seat_range(m, p)
         rows_z = lp.contact_rows(m, p)
         zc = rows_z[0] if rows_z else (z0 + z1) / 2.0
-        hw = lp.flat_half_width(m, p)
+        hw = lp.flat_half_width(m, p, r)
         kind = lp.contact_kind(p)
         n = lp.contact_n(p)
         out = [["リードへの当たり方",
@@ -387,7 +387,7 @@ class LigatureComponent(Component):
             ["（平らな面なら）", f"{min(flat):.2f}〜{max(flat):.2f} mm"],
             ["リード踵幅 / タブ幅",
              f"{r['heel_width']:.1f} / "
-             f"{lp.requested_tab_half_width(m, p) * 2.0:.1f} mm"],
+             f"{lp.requested_tab_half_width(p, r) * 2.0:.1f} mm"],
         ]
         return out
 
@@ -398,6 +398,7 @@ class LigatureComponent(Component):
             return {"title": "マウスピース適合", "big": None, "status": "warn",
                     "rows": [], "advice": "参照マウスピースが未設定です。"}
         from . import profiles
+        r = self.reed_params()
         z0, z1 = lp.seat_range(m, p)
         seat0, seat1 = profiles.ligature_seat_range(m)
         elastic = str(p.get("closure")) == "elastic"
@@ -409,18 +410,18 @@ class LigatureComponent(Component):
             ["座位置・最大径から前へ（要求/実効）",
              f"{p['seat_setback']:.1f} / {lp.effective_seat_setback(m, p):.2f} mm"],
             ["リード収納幅（要求/実際)",
-             f"{lp.requested_tab_half_width(m, p) * 2.0:.1f} / "
-             f"{lp.flat_half_width(m, p) * 2.0:.1f} mm"],
+             f"{lp.requested_tab_half_width(p, r) * 2.0:.1f} / "
+             f"{lp.flat_half_width(m, p, r) * 2.0:.1f} mm"],
         ] + self._contact_rows(m, p)
 
         def card(status, advice):
             return {"title": "マウスピース適合", "big": None, "status": status,
                     "rows": rows, "advice": advice}
 
-        if lp.flat_half_width(m, p) < lp.requested_tab_half_width(m, p) - 0.01:
+        if lp.flat_half_width(m, p, r) < lp.requested_tab_half_width(p, r) - 0.01:
             return card("warn",
                         f"マウスピースの外形径に対してリードが幅広く、収納幅が "
-                        f"{lp.flat_half_width(m, p) * 2.0:.1f}mm に切り詰め"
+                        f"{lp.flat_half_width(m, p, r) * 2.0:.1f}mm に切り詰め"
                         f"られています。リードが入りません。タブは外形の外へ"
                         f"張り出せますが、外形径そのものは超えられません。"
                         f"ボディ径の大きいマウスピースを参照するか、はめあい"

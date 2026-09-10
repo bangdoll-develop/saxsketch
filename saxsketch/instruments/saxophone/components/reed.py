@@ -14,6 +14,7 @@ from saxsketch.geometry.builders import loft_sections
 
 from . import profiles
 from . import reed_profiles as rp
+from . import reed_seat
 from . import reference_check
 
 # 踵がリガチャー座の後端に届いているかの許容差 [mm]。**規格照合カードと同じ 1 個の値**
@@ -136,8 +137,14 @@ class ReedComponent(Component):
         m = self.ref_params()
         if not m:
             return []
+        seat0, seat1 = profiles.ligature_seat_range(m)
         return [
-            ("テーブル幅（リード幅）", f"{m['reed_width']:.1f} mm"),
+            # **`reed_width` を「テーブル幅」と呼ばない**（Phase 4-F）。あれは窓幅の
+            # 公称値で、マウスピースの面を 1 つも決めていない。テーブルは平面カット
+            # なので実幅は半径とカット深さから決まり、z で変わる。
+            ("テーブル実幅（帯の中央）",
+             f"{profiles.table_flat_width(m, (seat0 + seat1) / 2.0):.2f} mm"),
+            ("リード幅（規格の呼び）", f"{m['reed_width']:.1f} mm"),
             # 指定値ではなく**実際に開く長さ**。`window_length` はボアの始まりで
             # 頭打ちになることがある（`profiles.window_length_effective`）。
             # リードが合わせる相手は形であって、スライダの値ではない。
@@ -181,6 +188,61 @@ class ReedComponent(Component):
         hw = min(p["tip_width"], m["reed_width"]) / 2.0
         return (rp.front_edge_z(p, hw),
                 profiles.tip_contour_z(m, hw) - profiles.tip_contour_z(m, 0.0))
+
+    # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-F）
+
+    #: ノギスで測れる設計パラだけ。比率（`spine_ratio` / `side_rail_thin`）と
+    #: choice は測れないので入れない。`tip_corner_r` は半径ゲージが要るので外した。
+    _SURVEY_PARAM_KEYS = [
+        "reed_length", "tip_width", "heel_width", "tip_thickness",
+        "heel_thickness", "heel_edge_thickness", "vamp_length",
+        "tip_curve_depth",
+    ]
+    #: 採寸できる基準定数。**`reed_width_at20_mm` は新しい欄**（Phase 4-F）——
+    #: `reed_profiles.taper_half_width` は先端幅→踵幅の**線形**を仮定していて、
+    #: 1 度も測っていない。「`beak_height = 0.9·body_dia`」が実測で外れた
+    #: （比は一定ですらなかった）のと同じ形の仮定なので、中間 1 点を測れば決まる。
+    #: かかり代はティップ側で決まるので、テーパーが曲がっていれば結論ごと変わる。
+    _SURVEY_SIZE_FIELDS = [
+        {"key": "reed_std_length_mm", "label": "規格の全長", "unit": "mm"},
+        {"key": "reed_std_tip_width_mm", "label": "規格の先端幅", "unit": "mm"},
+        {"key": "reed_width_at20_mm", "label": "先端から 20mm の幅", "unit": "mm"},
+    ]
+
+    def survey_targets(self, values: dict | None = None) -> dict:
+        """採寸フォームの入力欄。**範囲は帯ではなく壁**（`ParamSpec.bounds`）。
+
+        ここに入るのは実物のリードをノギスで測った値なので、慣習の帯の外に
+        あることがふつうにある（ソプラノの実測 2 本は 59.1 と 62.0）。
+
+        リードはこれまで `survey_targets` を実装していなかったので、採寸パネルに
+        入力欄が 1 つも出なかった（`registry.Component` の既定は空）。サーバも
+        フロントも部品を選ばないので、ここを埋めるだけでワークフローが通る。
+        """
+        specs = {s.key: s for s in self.param_specs()}
+        params = []
+        for k in self._SURVEY_PARAM_KEYS:
+            if k not in specs:
+                continue
+            lo, hi = specs[k].bounds()
+            params.append({"key": k, "label": specs[k].label,
+                           "unit": specs[k].unit, "min": lo, "max": hi,
+                           "step": specs[k].step})
+        return {"params": params, "size": [dict(f) for f in self._SURVEY_SIZE_FIELDS]}
+
+    def survey_card(self, before_params: dict, before_size: dict,
+                    measured_params: dict, measured_size: dict) -> dict | None:
+        """採寸値 vs 採寸前。判定は `reference_check.survey_card`（1 か所）。"""
+        return reference_check.survey_card(
+            "採寸 vs 設計（リード）",
+            {s.key: s for s in self.param_specs()},
+            {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS},
+            before_params, before_size, measured_params, measured_size,
+            "実測をプロジェクトへ反映しました。**1 本だけ入れないこと** ——"
+            "銘柄・カット・材質で寸法は動くので（ソプラノは樹脂が 2.9mm 長く、"
+            "アルトはケーンが 0.9mm 長い）、同じサイズを複数本まとめて測って"
+            "から入れてください。設計をいじって破綻したら「採寸時点へ戻す」で"
+            "復元できます。")
 
     # ------------------------------------------------------------ 形状生成
 
@@ -279,15 +341,25 @@ class ReedComponent(Component):
         """参照マウスピースとの適合。ここが Phase 3 の「自動整合」の可視化。"""
         m = self.ref_params()
         p = params
-        rows = [["リード先端幅", f"{p['tip_width']:.1f} mm"]]
+        rows = [["リード先端幅 / 踵幅",
+                 f"{p['tip_width']:.1f} / {p['heel_width']:.1f} mm"]]
         status, advice = "ok", "マウスピースのテーブル・レールに整合しています。"
         if not m:
             return {"title": "マウスピース適合", "big": None, "status": "warn",
                     "rows": rows, "advice": "参照マウスピースが未設定です。"}
 
-        dw = p["tip_width"] - m["reed_width"]
-        rows.append(["マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"])
-        rows.append(["幅の差", f"{dw:+.2f} mm"])
+        # **裏面が密着するかは全長で見る**（Phase 4-F）。ここは長らく
+        # `tip_width − reed_width` の 1 本だけで、相手はマウスピースの面を
+        # 1 つも決めていない公称値だった。区間の切り方と判定は `reed_seat`。
+        seat = reed_seat.seat_summary(m, p)
+        sw, st = seat["window"], seat["table"]
+        rows.append(["（参考）窓へのかかり代 最小",
+                     "窓が開いていません" if sw is None else
+                     f"{sw['mm']:+.2f} mm（z={sw['z']:.1f}）"])
+        rows.append(["帯までのはみ出し 最大",
+                     "区間がありません" if st is None else
+                     f"{st['mm']:+.2f} mm（z={st['z']:.1f}）"])
+        over = 0.0 if st is None else max(st["mm"], 0.0)
         zv = rp.vamp_start_z(p)
         win = profiles.window_length_effective(m)
         rows.append(["ヴァンプ長 / ウィンドウ長", f"{zv:.1f} / {win:.1f} mm"])
@@ -305,11 +377,13 @@ class ReedComponent(Component):
                      f"{reed_corner:.2f} / {mp_corner:.2f} mm"
                      f"（丸み {p['tip_corner_r']:.1f} ぶん {reed_corner - mp_corner:+.2f}）"])
 
-        if abs(dw) > 0.3:
+        if over > reed_seat.OVER_TOL:
             status = "warn"
-            advice = (f"幅が {abs(dw):.2f}mm {'広い' if dw > 0 else '狭い'}です。"
-                      f"{'サイドレールからはみ出します。' if dw > 0 else '脇から息が漏れます。'}"
-                      f"先端幅を {m['reed_width']:.1f}mm に合わせてください。")
+            advice = (f"リガチャーが締める区間（z={st['z']:.1f}）で縁がテーブルの外へ "
+                      f"{over:.2f}mm 出ています。押しても密着しないので、そこは"
+                      f"漏れます。踵幅を詰めるか、マウスピースのボディ径を"
+                      f"大きくしてください。**後ろへはみ出すぶんは害がありません** "
+                      f"——締めない区間なので参考値です。")
         elif zv < win * 0.75:
             status = "warn"
             advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
