@@ -1292,7 +1292,10 @@ class AppState:
             return empty
         targets = self.component.survey_targets(dict(self.paramset.values))
         for f in targets["params"]:
-            f["current"] = self.paramset.values.get(f["key"])
+            # パラメータでない欄（`Component.survey_params` で変換する量）は
+            # 部品が自分で現在値を入れてくる。
+            if "current" not in f:
+                f["current"] = self.paramset.values.get(f["key"])
         for f in targets["size"]:
             f["current"] = self.component.size_info.get(f["key"])
         s = self.project.survey or {}
@@ -1333,7 +1336,8 @@ class AppState:
         before_size = dict(self.component.size_info)
 
         # 系統A: 設計パラ（ParamSet でクランプ・型変換される）
-        m_params = self._clean_measures(measured, param_keys)
+        m_params = self.component.survey_params(
+            self._clean_measures(measured, param_keys), dict(self.paramset.values))
         if m_params:
             self.apply_params(m_params)
         applied_params = {k: self.paramset.values[k] for k in m_params}

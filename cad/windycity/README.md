@@ -591,6 +591,11 @@ PYTHONPATH=. python cad/windycity/sweep_limits.py tip_chamfer --axis outer_r
   | alto | −13.6 | −7.3 | −4.8 |
   | tenor | −0.4 | −2.1 | −2.1 |
 
+  **2026-09-21 追記（アルトの `reed_width` 13.4 → 16.4、実測）**: リード部品が無いとき
+  流路幅はマウスピースの `reed_width` から取るので、アルトの f0 が
+  137.15 / 137.58 / 137.79 → 137.70 / 137.73 / 137.85 Hz（+6.9 / +1.9 / +0.8 セント）
+  動いた。3 つとも第1共鳴のまま。上の表は 13.4 の頃の値（`docs/reed-seat.md`）。
+
   **9 通り中 8 通りが第1共鳴。soprano の loose だけ 67.8Hz ＝ f1 の 0.327 倍**
   （207.47/3 = 69.2 に近い）で周期 3 倍化に落ちる。γ を揃えても残るので
   `_coarsen` の話ではなく、リード共振（soprano loose は f_reed 2070Hz ＝ f1 の

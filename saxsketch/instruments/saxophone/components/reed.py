@@ -43,10 +43,10 @@ def _reach_text(value: float | None, limit: tuple[float, float] | None,
 
 def _specs(t: dict) -> list[ParamSpec]:
     """テンプレート値 t を初期値としてスキーマを構築。"""
-    def f(key, label, cat, unit, lo, hi, step, effect, advanced=False):
+    def f(key, label, cat, unit, lo, hi, step, effect, advanced=False, **kw):
         return ParamSpec(key=key, label=label, category=cat, type="float", unit=unit,
                          default=t[key], min=lo, max=hi, step=step, effect=effect,
-                         advanced=advanced)
+                         advanced=advanced, **kw)
 
     return [
         # --- 寸法 ---
@@ -65,13 +65,16 @@ def _specs(t: dict) -> list[ParamSpec]:
           "（たわみ寄与は先端 1/4 で 6% 前後）。印刷の下限もここに当たる"),
         f("heel_thickness", "踵厚", "プロファイル", "mm", 1.8, 3.6, 0.05,
           "バーク（未削部）の厚み。規格寸法。テーブル密着に効く", advanced=True),
-        # 上限 1.6 は `heel_thickness` の下限 1.8 より小さい。これで
-        # 中央厚 − 側端厚 ≥ 0.2 が構造的に保証され、`cane_radius` が発散する
-        # 組み合わせをそもそも作れない（`params_error` を足さずに済む）。
-        f("heel_edge_thickness", "踵の側端厚", "プロファイル", "mm", 0.3, 1.6, 0.05,
+        # **壁は数字ではなく関係**（`param_bounds`）: 中央厚 − 側端厚 ≥
+        # `rp.MIN_CROWN_MM`。以前は上限 1.6 を `heel_thickness` の下限 1.8 より
+        # 小さく置いて**2 本の直値で**これを代理していたが、実物のアルト #1 の
+        # 1.65（2026-09-21）を締め出した。帯の上限は実測 5 本（1.5〜1.65）の最大。
+        f("heel_edge_thickness", "踵の側端厚", "プロファイル", "mm", 0.3, 1.65, 0.05,
           "元のケーン管の円弧を決める（断面がカマボコになる）。中央厚との差が"
-          "大きいほど深い円弧。未実測（実物の踵端面を 1 点測れば決まる）",
-          advanced=True),
+          "大きいほど深い円弧。実物のアルト 5 本で 1.5〜1.65",
+          advanced=True,
+          source="帯の上限は実物のアルト 5 本の最大（2026-09-21）。壁は踵厚 − 0.2",
+          hard_max=3.6 - rp.MIN_CROWN_MM),
         f("vamp_length", "ヴァンプ長", "プロファイル", "mm",
           reed_model.VAMP_LENGTH_RANGE[0], reed_model.VAMP_LENGTH_RANGE[1], 0.5,
           "削り始めの位置。長いほど柔軟で低音寄り、短いと抵抗が増す。"
@@ -131,6 +134,26 @@ class ReedComponent(Component):
     def params_error(self, params: dict) -> str | None:
         return rp.cane_layout_error(params)
 
+    def param_bounds(self, params: dict) -> dict:
+        """**相手で動く壁**: 踵の中央厚と側端厚の 1 本（Phase 4-F 実測）。
+
+        どちらを動かしても `cane_radius` の分母 `中央厚 − 側端厚` が
+        `rp.MIN_CROWN_MM` を割らないようにする。以前はこの関係を 2 本の直値
+        （側端厚 ≤ 1.6・中央厚 ≥ 1.8）に分けて持っていたので、実物の 1.65 が
+        入らなかった。中央厚の側は**静的な下限 1.8 より緩めない**（あちらの
+        出所は別で、ここで広げる理由が無い）。
+        """
+        spec = {s.key: s for s in self.param_specs()}
+        crown = rp.MIN_CROWN_MM
+        out = {"heel_edge_thickness": {"hi": params["heel_thickness"] - crown,
+                                       "hi_by": spec["heel_thickness"].label}}
+        lo_h = spec["heel_thickness"].bounds()[0]
+        need = params["heel_edge_thickness"] + crown
+        if need > lo_h:
+            out["heel_thickness"] = {"lo": need,
+                                     "lo_by": spec["heel_edge_thickness"].label}
+        return out
+
     # ------------------------------------------------------------ 参照
 
     def ref_dimensions(self) -> list[tuple[str, str]]:
@@ -151,18 +174,70 @@ class ReedComponent(Component):
             ("ウィンドウ長", f"{profiles.window_length_effective(m):.1f} mm"),
             ("フェイシング長", f"{m['facing_length']:.1f} mm"),
             ("ティップ開き", f"{m['tip_opening']:.2f} mm"),
-            # 前縁を合わせたい人がそのまま読める値。合わせるかどうかは設計者の判断
-            # なので、ここでリードのパラメータを書き換えたりはしない。
-            ("ティップ輪郭の落ち込み", f"{self._ref_contour_depth(m):.2f} mm"),
+            # **先端カーブにそのまま写す値ではない**（Phase 4-F 実測）。輪郭は
+            # 角の近くで急に落ちる（alto で x=7.4→8.2 の 0.8mm で 1.9mm）ので、
+            # 実物の幅 16.4 の角で読むと前縁の円弧とは別物になる。合わせたいときは
+            # リードの適合カードの「輪郭に最も合う値」を読む。
+            (f"ティップ輪郭の落ち込み（x=±{m['reed_width'] / 2.0:.1f}）",
+             f"{self._ref_contour_depth(m):.2f} mm"),
         ]
 
     @staticmethod
-    def _ref_contour_depth(m: dict) -> float:
-        """参照マウスピースのティップ輪郭が中央から角までに落ち込む量 [mm]。"""
-        return (profiles.tip_contour_z(m, m["reed_width"] / 2.0)
-                - profiles.tip_contour_z(m, 0.0))
+    def _ref_contour_depth(m: dict, hw: float | None = None) -> float:
+        """参照マウスピースのティップ輪郭が中央から x=±hw までに落ち込む量 [mm]。
 
-    def _tip_contour_gap(self, p: dict, m: dict, samples: int = 40) -> float:
+        既定の hw は規格リードの角（`reed_width / 2`）。
+        """
+        hw = m["reed_width"] / 2.0 if hw is None else hw
+        return profiles.tip_contour_z(m, hw) - profiles.tip_contour_z(m, 0.0)
+
+    @staticmethod
+    def _corner_half_width(p: dict, m: dict) -> float:
+        """前縁を比べる幅の端 ＝ **リードが実際に達する半幅**と規格の角の小さいほう。
+
+        以前は `min(tip_width, reed_width)/2`。`tip_width` は z=0 へ延ばした
+        テーパーの値で、**先端が広いリードでは輪郭がそこまで届かない**
+        （実物アルト #1: 先端幅 16.4 に対し全幅の点で 16.30）。届かない幅で
+        `front_edge_z` を引くと「角の位置 = リード全長」が返っていた。
+        """
+        return min(rp.nose_half_width(p), p["tip_width"] / 2.0, m["reed_width"] / 2.0)
+
+    def _best_curve_depth(self, p: dict, m: dict) -> tuple[float, float]:
+        """(`_tip_contour_gap` をいちばん小さくする先端カーブ, そのときのずれ)。
+
+        **スライダの刻みで探す** —— 勧める値は UI で置ける値でなければならない
+        （`reed_model` の推奨値と同じ理由）。以前はマウスピースの輪郭が規格の角で
+        落ち込む量をそのまま勧めていたが、輪郭は円弧ではない（中央が平らで角の
+        近くで急に落ちる）ので、実物の幅 16.4 ではその値が 3.57 と出て、ずれを
+        かえって広げる向きを勧めていた。
+        """
+        sp = {s.key: s for s in self.param_specs()}["tip_curve_depth"]
+        lo, hi = sp.bounds()
+        n = int(round((hi - lo) / sp.step))
+        # **輪郭は表にして補間する。** `tip_contour_z` は 1 点 0.4ms の二分法で、
+        # 刻みごとに 41 点ずつ引くと `simulate` が 110 → 590ms になった（実測）。
+        # 比べる幅の端は深さで動くが、`tip_width/2` と規格の角を越えない。
+        # 61 点（0.14mm 刻み）の線形補間で、ずれの読みは 0.01mm 以内。
+        x_end = min(p["tip_width"], m["reed_width"]) / 2.0
+        xs = [x_end * i / 60.0 for i in range(61)]
+        z0 = profiles.tip_contour_z(m, 0.0)
+        zs = [profiles.tip_contour_z(m, x) - z0 for x in xs]
+
+        def depth(x: float) -> float:
+            j = min(int(x / x_end * 60.0), 59) if x_end > 0.0 else 0
+            t = (x - xs[j]) / (xs[j + 1] - xs[j])
+            return zs[j] + t * (zs[j + 1] - zs[j])
+
+        best = None
+        for i in range(n + 1):
+            d = round(lo + i * sp.step, 6)
+            g = self._tip_contour_gap({**p, "tip_curve_depth": d}, m, depth=depth)
+            if best is None or abs(g) < abs(best[1]):
+                best = (d, g)
+        return best
+
+    def _tip_contour_gap(self, p: dict, m: dict, samples: int = 40,
+                         depth=None) -> float:
         """リード前縁と参照マウスピースのティップ輪郭の最大ずれ [mm]（符号付き）。
 
         正ならリードが後退（ティップレールが露出）、負なら前へ張り出す。
@@ -171,38 +246,50 @@ class ReedComponent(Component):
         **角の丸みが効く区間は除く**（x > `_nose` の接点）。そこはリードが
         意図的に逃げている所で、0.46〜0.59mm の後退は形状の仕様であって
         「輪郭が合っていない」ではない。逃げの量は別の行が出す。
+
+        `depth` は輪郭の落ち込み x → mm を差し替える口（`_best_curve_depth` が
+        表の補間を渡す）。無ければ `tip_contour_z` をそのまま引く。
         """
-        hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        hw = self._corner_half_width(p, m)
         x_max = min(rp.arc_end_x(p), hw)
-        z0 = profiles.tip_contour_z(m, 0.0)
+        if depth is None:
+            z0 = profiles.tip_contour_z(m, 0.0)
+
+            def depth(x: float) -> float:
+                return profiles.tip_contour_z(m, x) - z0
         worst = 0.0
         for i in range(samples + 1):
             x = x_max * i / samples
-            gap = rp.front_edge_z(p, x) - (profiles.tip_contour_z(m, x) - z0)
+            gap = rp.front_edge_z(p, x) - depth(x)
             if abs(gap) > abs(worst):
                 worst = gap
         return worst
 
     def _corner_relief(self, p: dict, m: dict) -> tuple[float, float]:
         """(リードが全幅へ達する z, 参照MP のティップ輪郭が角で落ち込む量) [mm]。"""
-        hw = min(p["tip_width"], m["reed_width"]) / 2.0
-        return (rp.front_edge_z(p, hw),
-                profiles.tip_contour_z(m, hw) - profiles.tip_contour_z(m, 0.0))
+        hw = self._corner_half_width(p, m)
+        return (rp.front_edge_z(p, hw), self._ref_contour_depth(m, hw))
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-F）
 
     #: ノギスで測れる設計パラだけ。比率（`spine_ratio` / `side_rail_thin`）と
     #: choice は測れないので入れない。`tip_corner_r` は半径ゲージが要るので外した。
+    #: **`tip_curve_depth` は入れない** —— 直定規で測れるのは「側面がまっすぐに
+    #: なる所」（`rp.tip_full_width_z`）で、パラメータそのもの（丸みを無視した
+    #: 見かけの角）ではない。欄は `SURVEY_TIP_KEY` で受けて逆算する。
     _SURVEY_PARAM_KEYS = [
         "reed_length", "tip_width", "heel_width", "tip_thickness",
         "heel_thickness", "heel_edge_thickness", "vamp_length",
-        "tip_curve_depth",
     ]
-    #: 採寸できる基準定数。**`reed_width_at20_mm` は新しい欄**（Phase 4-F）——
-    #: `reed_profiles.taper_half_width` は先端幅→踵幅の**線形**を仮定していて、
-    #: 1 度も測っていない。「`beak_height = 0.9·body_dia`」が実測で外れた
-    #: （比は一定ですらなかった）のと同じ形の仮定なので、中間 1 点を測れば決まる。
-    #: かかり代はティップ側で決まるので、テーパーが曲がっていれば結論ごと変わる。
+    #: 先端カーブの欄（パラメータではない仮想キー）。2026-09-21 のアルト採寸で
+    #: 実測者が「側面がまっすぐになる所」まで測ったと確認した。以前はこの値を
+    #: `tip_curve_depth` へそのまま入れる欄だったので、#1 の 2.7 がモデル値では
+    #: 約 2.26 になるところを 0.4mm 深く取り込むところだった。
+    SURVEY_TIP_KEY = "tip_full_width_z"
+    #: 採寸できる基準定数。`reed_width_at20_mm` は幅のテーパーが直線かを反証する
+    #: 欄（Phase 4-F）。**アルトで測った**（2026-09-21）: 直線はほぼ成立して
+    #: 残差 +0.12／+0.08（外へわずかに膨らむ側）、**外れていたのは向き**で、
+    #: 旧既定は踵が 0.6 広く、実物は先端が 1.8〜2.2 広い。
     _SURVEY_SIZE_FIELDS = [
         {"key": "reed_std_length_mm", "label": "規格の全長", "unit": "mm"},
         {"key": "reed_std_tip_width_mm", "label": "規格の先端幅", "unit": "mm"},
@@ -228,7 +315,32 @@ class ReedComponent(Component):
             params.append({"key": k, "label": specs[k].label,
                            "unit": specs[k].unit, "min": lo, "max": hi,
                            "step": specs[k].step})
+        if "tip_curve_depth" in specs:
+            # 範囲は `tip_curve_depth` の壁を全幅の位置へ写したもの（他の欄に
+            # 合わせてテンプレート値の組で引く）。
+            base = dict(self.template["reed"], **(values or {}))
+            lo, hi = specs["tip_curve_depth"].bounds()
+            params.append({
+                "key": self.SURVEY_TIP_KEY,
+                "label": "先端カーブ（側面がまっすぐになる所まで）", "unit": "mm",
+                "min": round(rp.tip_full_width_z({**base, "tip_curve_depth": lo}), 2),
+                "max": round(rp.tip_full_width_z({**base, "tip_curve_depth": hi}), 2),
+                "step": specs["tip_curve_depth"].step,
+                "current": round(rp.tip_full_width_z(base), 2)})
         return {"params": params, "size": [dict(f) for f in self._SURVEY_SIZE_FIELDS]}
+
+    def survey_params(self, measured: dict, values: dict) -> dict:
+        """先端カーブの欄を `tip_curve_depth` へ逆算する（ほかは素通し）。
+
+        逆算は**同じ採寸で入った幅・長さを先に載せた組**で行う —— 全幅の位置は
+        先端幅と角の丸みでも動くので、古い幅で解くと別のリードの深さになる。
+        """
+        out = dict(measured)
+        z_full = out.pop(self.SURVEY_TIP_KEY, None)
+        if z_full is not None:
+            out["tip_curve_depth"] = rp.curve_depth_for_full_width_z(
+                {**values, **out}, float(z_full))
+        return out
 
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:
@@ -240,9 +352,10 @@ class ReedComponent(Component):
             before_params, before_size, measured_params, measured_size,
             "実測をプロジェクトへ反映しました。**1 本だけ入れないこと** ——"
             "銘柄・カット・材質で寸法は動くので（ソプラノは樹脂が 2.9mm 長く、"
-            "アルトはケーンが 0.9mm 長い）、同じサイズを複数本まとめて測って"
-            "から入れてください。設計をいじって破綻したら「採寸時点へ戻す」で"
-            "復元できます。")
+            "アルトは樹脂どうしで 2.6mm 違う）、同じサイズを複数本まとめて測って"
+            "から入れてください。先端カーブは「側面がまっすぐになる所」まで"
+            "測った値を入れれば、見かけの角（パラメータ）へ逆算して取り込みます。"
+            "設計をいじって破綻したら「採寸時点へ戻す」で復元できます。")
 
     # ------------------------------------------------------------ 形状生成
 
@@ -353,9 +466,8 @@ class ReedComponent(Component):
         # 1 つも決めていない公称値だった。区間の切り方と判定は `reed_seat`。
         seat = reed_seat.seat_summary(m, p)
         sw, st = seat["window"], seat["table"]
-        rows.append(["（参考）窓へのかかり代 最小",
-                     "窓が開いていません" if sw is None else
-                     f"{sw['mm']:+.2f} mm（z={sw['z']:.1f}）"])
+        cover = reed_seat.cover_row(sw, self.size_info)
+        rows.append(cover["row"])
         rows.append(["帯までのはみ出し 最大",
                      "区間がありません" if st is None else
                      f"{st['mm']:+.2f} mm（z={st['z']:.1f}）"])
@@ -367,9 +479,10 @@ class ReedComponent(Component):
         rows.append(["踵位置 / リガチャー座",
                      f"{p['reed_length']:.1f} / {seat0:.1f}〜{seat1:.1f} mm"])
         gap = self._tip_contour_gap(p, m)
-        rows.append(["先端カーブ / MPのティップ輪郭",
-                     f"{p['tip_curve_depth']:.2f} / "
-                     f"{self._ref_contour_depth(m):.2f} mm（最大ずれ {gap:+.2f}）"])
+        best_d, best_gap = self._best_curve_depth(p, m)
+        rows.append(["先端カーブ / MPの輪郭に最も合う値",
+                     f"{p['tip_curve_depth']:.2f} / {best_d:.2f} mm"
+                     f"（最大ずれ {gap:+.2f}、合わせると {best_gap:+.2f}）"])
         # 角は丸みの半径ぶん後ろへ逃げる。意図した造形なので判定には入れないが、
         # ティップレールがどれだけ露出するかは設計者が読める所に出しておく。
         reed_corner, mp_corner = self._corner_relief(p, m)
@@ -377,7 +490,12 @@ class ReedComponent(Component):
                      f"{reed_corner:.2f} / {mp_corner:.2f} mm"
                      f"（丸み {p['tip_corner_r']:.1f} ぶん {reed_corner - mp_corner:+.2f}）"])
 
-        if over > reed_seat.OVER_TOL:
+        if cover["verdict"] in ("軽微", "乖離"):
+            status = "warn"
+            advice = (f"窓の区間（z={sw['z']:.1f}）でリードの縁がサイドレールに載らず、"
+                      f"窓の上に {-sw['mm']:.2f}mm 浮いています。脇から漏れます。"
+                      f"先端幅を広げるか、マウスピースの窓を狭めてください。")
+        elif over > reed_seat.OVER_TOL:
             status = "warn"
             advice = (f"リガチャーが締める区間（z={st['z']:.1f}）で縁がテーブルの外へ "
                       f"{over:.2f}mm 出ています。押しても密着しないので、そこは"
@@ -395,12 +513,16 @@ class ReedComponent(Component):
                       f"全長を伸ばしてください。")
         elif abs(gap) > TIP_CONTOUR_TOL:
             status = "warn"
+            fix = (f"先端カーブを {best_d:.1f}mm にすると最大ずれが {abs(best_gap):.2f}mm "
+                   f"まで縮みます。" if abs(best_gap) <= TIP_CONTOUR_TOL else
+                   f"円弧の前縁ではこの輪郭に {TIP_CONTOUR_TOL}mm 以内まで寄せられません"
+                   f"（いちばん近いのは {best_d:.1f}mm で {abs(best_gap):.2f}mm）。")
             advice = (
                 f"前縁がマウスピースのティップ輪郭から最大 {abs(gap):.2f}mm "
                 f"{'後退しています（レールが露出）' if gap > 0 else '前へ張り出します'}。"
-                f"先端カーブを {self._ref_contour_depth(m):.1f}mm 前後にすると揃います。"
-                f"ただし市販のリードは規格品でマウスピース個体に合わせて作られていない"
-                f"ので、揃えるかどうかは設計の判断です。")
+                + fix +
+                "ただし市販のリードは規格品でマウスピース個体に合わせて作られていない"
+                "ので、揃えるかどうかは設計の判断です。")
         return {"title": "マウスピース適合", "big": None, "status": status,
                 "rows": rows, "advice": advice}
 
@@ -618,9 +740,12 @@ class ReedComponent(Component):
         dims.append(("硬さ相当（推定）", props["strength_label"]))
         dims.append(("リード共振 f_reed（推定）", f"{props['f_reed_hz']:.0f} Hz"))
         if m:
-            dims.append(("参照マウスピース テーブル幅", f"{m['reed_width']:.1f} mm"))
-            dims.append(("参照マウスピース ティップ輪郭の落ち込み",
-                         f"{self._ref_contour_depth(m):.2f} mm"))
+            # `reed_width` を「テーブル幅」と呼ばない（`ref_dimensions` の注記）。
+            dims.append(("参照マウスピース リード幅（規格の呼び）",
+                         f"{m['reed_width']:.1f} mm"))
+            dims.append(("先端カーブ / 参照マウスピースの輪郭に最も合う値",
+                         f"{p['tip_curve_depth']:.2f} / "
+                         f"{self._best_curve_depth(p, m)[0]:.2f} mm"))
         return {"dimensions": dims,
                 "sections": [{"title": "厚みプロファイル",
                               "svg": self._section_svg(p)},

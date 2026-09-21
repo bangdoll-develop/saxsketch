@@ -18,10 +18,17 @@
   4. リードを載せて光にかざす                            → 節 C
 
 **節 B が本体。** 同じ z で窓幅とリード幅を並べれば、かかり代 `(リード幅 − 窓幅)/2`
-が実物で決まる。モデルは 3 サイズとも**ティップ側で負**（縁が窓の上に浮く）と
-言っていて、実物テナーのスキャンでも同じ向きに出る —— モデルの粗さか実物の性質か
-がまだ分けられないので、しきい値を置いていない。**符号が z のどこで変わるか**が
-測って最初に分かること。
+が実物で決まる。
+
+**アルトは測って決着した**（2026-09-21、値は `inspection_values.py` の
+`REED_SURVEY_ALTO` ほか）: 2 MP × 2 リード × 4 z の 16 組すべて +0.40〜+1.33、
+光の試験も 10 組すべて ○。モデルが負を出していたのは規格リード先端幅の借り物
+（13.4、実物 15.85〜16.4）のせいで、「実物テナーでも負」は実物の窓 × 同じ借り物の
+比較だった。ソプラノ・テナーはまだ借り物のままなので、用紙はそのまま使える。
+
+**先端カーブは「側面がまっすぐになる所」まで測る**（実測者に確認した定義）。
+欄名は採寸フォームと同じ仮想キー `tip_full_width_z` で、設計値も同じ量で刷る ——
+パラメータ `tip_curve_depth`（丸みを無視した見かけの角）はノギスで当てられない。
 
 実行（OCCT が要るので WSL2。出力は Windows 正本へ直接書く）:
 
@@ -53,6 +60,7 @@ from saxsketch.core.registry import get_registry                 # noqa: E402
 from saxsketch.instruments.saxophone.components import profiles  # noqa: E402
 from saxsketch.instruments.saxophone.components import reed_profiles as rp  # noqa: E402
 from saxsketch.instruments.saxophone.components import reed_seat  # noqa: E402
+from saxsketch.instruments.saxophone.components import reference_check  # noqa: E402
 
 SIZES = ("soprano", "alto", "tenor")
 
@@ -72,15 +80,22 @@ HOWTO = {
     "heel_thickness": "踵の端面の中央（バークの上）",
     "heel_edge_thickness": "踵の端面の<b>側の端</b>。リガチャーの当たり面",
     "vamp_length": "先端〜バークの段差（指で触れば分かる）",
-    "tip_curve_depth": "角に直定規を渡し、中央との隙間",
+    "tip_full_width_z": "角の丸みが終わって<b>側面がまっすぐになる所</b>に直定規を"
+                        "渡し、中央との隙間（丸みを無視した見かけの角ではない）",
 }
 
 #: 未実測の欄。**空欄と「未測」が違う**のと同じ理由で、これも書いておく ——
 #: 出所は `saxsketch/instruments/saxophone/templates/*.json` の `reed_note`。
+#: `MEASURED_SIZES` のサイズでは実測に置き換え済みなので出さない。
 UNMEASURED = {
     "heel_edge_thickness": "未実測（テンプレートの `reed_note`）",
-    "tip_curve_depth": "未実測（参照マウスピースの輪郭から逆算した値）",
-    "tip_thickness": "未実測（印刷側の強度下限から置いた値）",
+    "tip_full_width_z": "未実測（参照マウスピースの輪郭から逆算した値）",
+}
+#: 上の欄を実物で測ってテンプレートへ入れたサイズ。
+MEASURED_SIZES = {"alto": "2026-09-21 に 5 本"}
+#: 設計値が**そもそも実物のリードの値ではない**欄（サイズに依らない）。
+PRINT_SIDE = {
+    "tip_thickness": "設計値は印刷側の強度下限から置いた値（アルトの実物は 0.2〜0.3）",
 }
 
 
@@ -255,11 +270,18 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
     if t:
         claim.append(f'帯までのはみ出し 最大 {t["mm"]:+.2f} mm（z={t["z"]:.1f}）')
     claim.append("帯より後ろ " + (f'{tl["mm"]:+.2f} mm' if tl else "区間なし"))
+    # **判定か参考かはサイズで分かれる**（`reed_seat.cover_row` と同じ分岐）。
+    if reference_check.reed_tip_width_is_measured(si):
+        why = ('このサイズは規格リードの先端幅を実測済みなので<b>判定</b>している'
+               f'（{MEASURED_SIZES.get(size, "実測")}）。実物のアルトは 2 MP × 2 リード × 4 z が'
+               'すべて正だった —— 測り直すなら、<b>別の銘柄で符号が変わらないか</b>を見る。')
+    else:
+        why = ('このサイズは<b>規格リードの先端幅が未実測</b>（出所の記録なし）なので参考値。'
+               'アルトでは同じ出所の値が 2.5〜3.0mm 狭く、負のかかり代はその借り物のせい'
+               'だった —— <b>このシートはそれを実物で決めるためのもの。</b>')
     o.append('<p class="claim"><b>モデルの言い分</b>　' + "　／　".join(claim)
              + '。かかり代が負＝<b>リードの縁がサイドレールに載らず窓の上に浮く</b>'
-               '（脇から漏れる）。実物テナーのスキャンでも同じ向きに出るので、'
-               'いまは判定せず参考値 —— <b>このシートはそれを実物で決めるためのもの。</b>'
-               '</p>')
+               '（脇から漏れる）。' + why + '</p>')
 
     # ---- 0 個体の同定
     o.append('<h2>0　個体の同定　<span>先に埋める。<b>1 本だけ測って入れない</b>'
@@ -293,14 +315,20 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
              + '</tr>')
     for p in targets["params"]:
         k = p["key"]
-        sp = specs[k]
+        # 先端カーブの欄はパラメータではない（測れる量＝全幅に達する位置）。
+        # 設計値もその量で刷り、帯は元のパラメータの刻みから引く。
+        tip = k == comp.SURVEY_TIP_KEY
+        sp = specs["tip_curve_depth" if tip else k]
         ok, minor = bands(sp)
         note = HOWTO.get(k, "")
-        if k in UNMEASURED:
+        if k in PRINT_SIDE:
+            note += f'<br><span class="k">{PRINT_SIDE[k]}</span>'
+        elif k in UNMEASURED and size not in MEASURED_SIZES:
             note += f'<br><span class="k">{UNMEASURED[k]}</span>'
+        design = rp.tip_full_width_z(r) if tip else r[k]
         o.append(f'<tr><th>{esc(p["label"])}<br><span class="k">{k}</span></th>'
                  f'<td class="note">{note}</td>'
-                 f'<td class="num">{r[k]:.2f}</td>'
+                 f'<td class="num">{design:.2f}</td>'
                  f'<td class="num">±{ok:.2f} / ±{minor:.2f}</td>'
                  + cells(reeds) + '</tr>')
     o.append('</table>')
@@ -309,8 +337,13 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
              + (f'（域 {si["reed_length_range_mm"][0]:.1f}〜'
                 f'{si["reed_length_range_mm"][1]:.1f}）'
                 if si.get("reed_length_range_mm") else "（域なし）")
-             + f' ／ 規格の先端幅 <b>{si["reed_std_tip_width_mm"]:.1f} mm</b><br>'
-             + f'出所: {esc(short(si.get("reed_std_length_source", "(記載なし)")))}</p>')
+             + f' ／ 規格の先端幅 <b>{si["reed_std_tip_width_mm"]:.1f} mm</b>'
+             + (f'（域 {si["reed_tip_width_range_mm"][0]:.2f}〜'
+                f'{si["reed_tip_width_range_mm"][1]:.2f}）'
+                if si.get("reed_tip_width_range_mm") else "（域なし）") + '<br>'
+             + f'全長の出所: {esc(short(si.get("reed_std_length_source", "(記載なし)")))}<br>'
+             + f'先端幅の出所: {esc(short(si.get("reed_std_tip_width_source", "(記載なし)")))}'
+             + '</p>')
     o.append(FOOT_MEASURE)
     o.append('</section>')
 
@@ -345,11 +378,10 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
     o.append('</table>')
     o.append('<p class="note">★ <b>z=20 の行は「先端から 20mm の幅」そのもの</b>'
              '（基準定数 <span class="k">reed_width_at20_mm</span>）。'
-             'リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定していて'
-             '1 度も測っていない —— 「ビーク高さ = 0.9 × ボディ径」が実測で外れたのと'
-             '同じ形の仮定で、曲がっていれば<b>かかり代の結論ごと変わる</b>'
-             '（かかり代はティップ側で決まるので）。'
-             '先端幅（節 A）と合わせて 2 点あれば直線かどうかが言える。</p>')
+             'リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定している。'
+             'アルトの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが'
+             ' 2mm 前後広かった</b>（旧既定は踵のほうを広く置いていた）。'
+             '先端幅・踵幅（節 A）と合わせれば、手元のリードでも直線かどうかが言える。</p>')
 
     # ---- C 光にかざす
     o.append('<h2>C　リードを載せて光にかざす　<span>'
@@ -366,7 +398,7 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
     o.append('<p class="note"><b>○</b> = リードの縁がサイドレールの上に載っている'
              '（光が漏れない）／<b>×</b> = 縁が窓の上に浮いている（脇に光の筋）／'
              '<b>△</b> = 判別できない。<b>見るのはティップ寄り</b>'
-             + (f'（モデルが負と言っているのは z≈{w["z"]:.0f}mm）' if w else "")
+             + (f'（モデルのかかり代が最小になるのは z≈{w["z"]:.0f}mm）' if w else "")
              + '。左右で違えば、それも書く（テーブルの平面度の話になる）。</p>')
 
     # 2 枚目は 130mm ほど余る。**予想していなかったことを書く場所**に使う ——

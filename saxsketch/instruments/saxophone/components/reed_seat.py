@@ -22,6 +22,14 @@ z の全域で、リードの縁が**レール帯 `[open_half, face_half]` の�
 **しきい値を 1 つも持たない。** ゼロは自然に決まる（縁がレール帯の中か外か）ので
 発明が要らず、判定の段（一致/軽微/乖離）はカード側が持つ。
 
+**窓のかかり代は実測で判定へ上げた**（2026-09-21、アルト）。それまで参考に
+留めていた理由は「実物テナーでも負に出る」だったが、あれは**実物の窓 × 未実測の
+規格リード幅**の比較だった。アルトで両方を測ると 2 MP × 2 リード × 4 z の 16 組が
+すべて +0.40〜+1.33、リードを載せて光にかざす試験も 10 組すべて「縁がレールの上」。
+負を出していたのはリード幅の借り物（13.4、出所なし。実測 15.85〜16.4）のほう。
+ただし**判定するのはリードの先端幅が実測されたサイズだけ**（`cover_row`）——
+ソプラノとテナーの規格リード幅は同じ出所の借り物のまま。
+
 座標系はマウスピースと同じ（z=0 がティップ）。リードは組んだとき先端を
 ティップレールへ合わせるので、そのまま比べてよい —— 厳密にはティップ輪郭の
 落ち込みぶん（0.1mm 級）ずれるが、ここで見ているのは 0.1〜数 mm の量
@@ -138,6 +146,38 @@ OVER_TOL = 0.3
 OVER_TOL_MINOR = 0.8
 
 
+def cover_row(window: dict | None, size_info: dict) -> dict:
+    """窓へのかかり代の行と判定。**判定はここ 1 か所**（3 枚のカードが読む）。
+
+    幅は**はみ出しと同じ 0.3 / 0.8**（新しい数字を作らない。見ているのは同じ
+    「リードの縁がどこに来るか」で、向きが逆なだけ）。足りない側だけ見る ——
+    縁がレールの外側へ出るぶんは窓の区間では漏れない。
+
+    **判定するのは規格リードの先端幅が実測されたサイズだけ**
+    （`reference_check.reed_tip_width_is_measured`）。未実測のサイズでは規格
+    リードの幅が借り物で、その借り物がアルトで 2.5〜3.0mm 狭かった。
+    `reference_check` がリード全長の未実測サイズで判定しないのと同じ形。
+
+    Returns: {"row": [label, text], "verdict": "一致"|"軽微"|"乖離"|None}
+    """
+    from .reference_check import _verdict, reed_tip_width_is_measured
+
+    if window is None:
+        return {"row": ["（参考）窓へのかかり代 最小", "窓が開いていません"],
+                "verdict": None}
+    mm = window["mm"]
+    text = f"{mm:+.2f} mm（z={window['z']:.1f}）"
+    if not reed_tip_width_is_measured(size_info):
+        return {"row": ["（参考）窓へのかかり代 最小",
+                        text + ("　縁が窓の上に浮いています" if mm < 0 else "")
+                        + "　このサイズは規格リード幅が未実測のため判定しない"],
+                "verdict": None}
+    v = _verdict(max(-mm, 0.0), OVER_TOL, OVER_TOL_MINOR)
+    return {"row": ["窓へのかかり代 最小",
+                    text + ("　縁が窓の上に浮いています" if mm < 0 else "") + f"  {v}"],
+            "verdict": v}
+
+
 def _seat_finish(title: str, rows: list, verdicts: list, note: str) -> dict:
     """`reference_check._finish` と同じ形。**見出しの文だけ違う。**
 
@@ -145,25 +185,22 @@ def _seat_finish(title: str, rows: list, verdicts: list, note: str) -> dict:
     2 つの部品の当たりなので、そのまま借りると判定の意味がすり替わる。
     """
     if "乖離" in verdicts:
-        status, big = "bad", "帯の区間で縁がテーブルの外です"
+        status, big = "bad", "縁がレールから外れる区間があります"
     elif "軽微" in verdicts:
-        status, big = "warn", "帯の区間で縁がわずかにテーブルの外です"
+        status, big = "warn", "縁がわずかにレールから外れる区間があります"
     else:
         status, big = "ok", "帯までは全幅が載っています"
     return {"title": title, "big": big, "status": status,
             "rows": rows, "advice": note}
 
 
-def seat_card(m: dict, r: dict, seat_end: float | None = None,
+def seat_card(m: dict, r: dict, size_info: dict, seat_end: float | None = None,
               reed_label: str = "同サイズのテンプレート") -> dict:
     """「リードが載るか」の①（裏面が密着するか）。
 
-    **判定するのは「窓の終端〜帯の後端」のはみ出しだけ。** 残り 2 つは参考:
-
-    - **窓のかかり代**は実物でも負に出る（実物テナーのスキャンで z=5.1 の窓 16.00mm
-      に対し規格リード 14.84mm ＝ −1.16mm）。モデルの粗さではなく**まだ誰も
-      測っていない量**なので、しきい値を先に置かない（`docs/reed-seat.md`）。
-    - **帯より後ろのはみ出し**は締めないので害が無い。
+    **判定するのは 2 つ**: 窓へのかかり代（規格リードの先端幅が実測されたサイズ
+    だけ。`cover_row`）と、「窓の終端〜帯の後端」のはみ出し。
+    **帯より後ろのはみ出し**は締めないので害が無く、参考。
 
     ②振動部が妨害されないか・③リガチャーで固定できるかは、リガチャーが要るので
     `set_check` にある。
@@ -177,11 +214,10 @@ def seat_card(m: dict, r: dict, seat_end: float | None = None,
             ["帯の後端（区間の境目）", f"{s['seat_end']:.1f} mm"]]
     verdicts = []
 
-    w = s["window"]
-    rows.append(["（参考）窓へのかかり代 最小",
-                 "窓が開いていません" if w is None else
-                 f"{w['mm']:+.2f} mm（z={w['z']:.1f}）"
-                 + ("　縁が窓の上に浮いています" if w["mm"] < 0 else "")])
+    cover = cover_row(s["window"], size_info)
+    rows.append(cover["row"])
+    if cover["verdict"]:
+        verdicts.append(cover["verdict"])
 
     t = s["table"]
     if t is None:
@@ -203,12 +239,12 @@ def seat_card(m: dict, r: dict, seat_end: float | None = None,
 
     return _seat_finish(
         "リードが載るか（裏面の密着）", rows, verdicts,
-        "**判定しているのは「窓の終端〜帯の後端」だけ**です —— そこはリガチャーが"
-        "締める区間なので、縁がテーブルの外にあると押しても密着しません。"
+        "**窓へのかかり代**は縁が窓の上に浮くと脇から漏れるので判定します"
+        "（実物のアルト 2 本 × リード 2 本で +0.40〜+1.33mm、光にかざして 10 組とも"
+        "縁がレールの上）。ただし規格リードの先端幅が未実測のサイズでは参考です。"
+        "**「窓の終端〜帯の後端」**はリガチャーが締める区間なので、縁がテーブルの"
+        "外にあると押しても密着しません。"
         "**帯より後ろへはみ出すのは害がありません**（締めないので参考値）。"
-        "**窓へのかかり代も参考**です: 縁が窓の上に浮くと脇から漏れますが、"
-        "実物のマウスピースを測っても同じ向きに出るため（実測テナーで −1.16mm）、"
-        "しきい値を置くだけの根拠がまだありません。"
         "比べる相手はそのサイズの**規格リード**です —— リードを設計していても"
         "ここは規格で見ます（リードは規格から大きく動かさない前提）。"
         "設計中のリードとの適合はセットのカードにあります。")

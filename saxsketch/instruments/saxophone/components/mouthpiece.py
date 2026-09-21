@@ -407,7 +407,8 @@ def _specs(t: dict) -> list[ParamSpec]:
         f("reed_width", "リード幅（規格の呼び）", "ウィンドウ", "mm", 10.0, 18.0, 0.1,
           "使用リード規格の呼び幅。**形は決めない**（実幅・実開口は別に引く）",
           advanced=True,
-          kind="convention", src="市販リード規格の幅（出典未記録）"),
+          kind="convention", src="市販リード規格の幅。アルトは実物 5 本の実測"
+          "（2026-09-21、代表値はケーンの #1）。ソプラノ・テナーは出典未記録"),
         # --- 外形 ---
         # **上端は「胴の全高 0.9·body_dia」ではなかった**（Phase B-4b で実測）。
         # 稜線が胴の外へ出るのは**バイトポイントでの**胴の全高で、
@@ -791,7 +792,8 @@ class MouthpieceComponent(Component):
             # ＝規格リード。リードを設計していてもここは規格で見る（リードは規格
             # から大きく動かさない前提）。設計中のリードとの適合はセットのカード。
             "cards": [reference_check.mouthpiece_card(params, self.size_info),
-                      reed_seat.seat_card(params, self.template.get("reed", {}))],
+                      reed_seat.seat_card(params, self.template.get("reed", {}),
+                                          self.size_info)],
         }
 
     def cavity_volume(self, params: dict) -> dict:
@@ -832,8 +834,8 @@ class MouthpieceComponent(Component):
 
         **`reed_width` は寸法線にしない。** テーブルは平面カットなので実幅は
         半径とカット深さから決まり z で変わる（座中央で 13.98/15.14/14.66mm）。
-        `reed_width` が決めているのは窓幅の公称値とリガチャーのタブ幅だけで、
-        マウスピースの面を 1 つも決めていない。代わりに実幅を出す。
+        `reed_width` が決めているのは窓幅の公称値だけで（タブ幅はリードの踵幅を
+        見るようにした、Phase 4-F）、マウスピースの面を 1 つも決めていない。代わりに実幅を出す。
         """
         p = params
         sp = {s.key: s for s in self.param_specs()}

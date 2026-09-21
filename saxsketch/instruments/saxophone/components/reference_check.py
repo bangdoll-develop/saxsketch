@@ -16,16 +16,17 @@
 **リード全長は 1 点ではない。** 実測してある 2 サイズがどちらも域になる:
 
     soprano  バンドーレン 3番（ケーン）59.1 / レジェール アメリカンカット（樹脂）62.0
-    alto     D'Addario Select Jazz（ケーン）71.1 / レジェール Studio Cut（樹脂）70.2
+    alto     ケーン 3 本 71.1〜71.2 / レジェール Studio（樹脂）70.2 / FIBRACELL（樹脂）72.8
+             （2026-09-21 に 5 本。D'Addario とレジェールは 08-15 の値を再現した）
 
 以前ここにあった「リガチャー座の後端 ＝ 規格リード全長」という等値照合は、許容差
 `SEAT_REACH_TOL` 1.5mm の倍ぶれる量を 1 点と比べていたので、どのしきい値を選んでも
 成立しない。判定は**向きのある拘束**だけで出し、等値は参考値として数字だけ並べる。
 
-**理由は散らばりの大きさではなく、予測できないこと。** アルトの差は 0.9mm で
-ソプラノの 2.9mm より小さいが、**向きが逆**（ソプラノは樹脂が長く、アルトはケーンが
-長い）。材質やカットから全長を推せないので、実測が無いサイズでは域の幅すら
-見積もれない。だから「未実測なら判定しない」であって「未実測なら広めの公差」ではない。
+**理由は散らばりの大きさではなく、予測できないこと。** アルトは 2 本の頃 0.9mm で
+「ケーンが長い」と読めたが、5 本にすると**樹脂が両端**に来た（レジェール 70.2 と
+FIBRACELL 72.8、差 2.6mm。ソプラノの 2.9mm と同じ桁）。材質やカットから全長を
+推せないので、実測が無いサイズでは域の幅すら見積もれない。だから「未実測なら判定しない」であって「未実測なら広めの公差」ではない。
 
 **採らなかったもの**: マウスピースの全長・ボディ径・チェンバー寸法。どのメーカーも
 公表しておらず（ティップ開きとフェイシング長しか出さない）、こちらで「実物値」を
@@ -81,6 +82,29 @@ def reed_length_is_measured(size_info: dict) -> bool:
     位置が動くなら結論も動く。判定を出すかどうかの分岐に使う。
     """
     return bool(size_info.get("reed_length_range_mm"))
+
+
+def reed_tip_width_range(size_info: dict) -> tuple[float, float]:
+    """このサイズで実際に使われるリード先端幅の域 [mm]。形は `reed_length_range` と同じ。
+
+    `reed_tip_width_range_mm` を持つのは実物を測ったサイズだけ（いまはアルト、
+    2026-09-21 に 5 本）。無ければ `reed_std_tip_width_mm` の 1 点。
+    """
+    rng = size_info.get("reed_tip_width_range_mm")
+    if rng:
+        return float(rng[0]), float(rng[1])
+    std = float(size_info["reed_std_tip_width_mm"])
+    return std, std
+
+
+def reed_tip_width_is_measured(size_info: dict) -> bool:
+    """このサイズのリード先端幅が実測されているか。**窓のかかり代の判定の分岐。**
+
+    未実測の値は同じ出所（記録なし）で、アルトでは 13.4 に対し実物 15.85〜16.4 ——
+    2.5〜3.0mm 狭かった。その借り物を相手に「縁が窓の上に浮く」と言っていたのが
+    Phase 4-F のかかり代の負の正体だった。
+    """
+    return bool(size_info.get("reed_tip_width_range_mm"))
 
 
 def _span_text(lo: float, hi: float) -> str:
@@ -192,9 +216,9 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
     # で（`mouthpiece.dimensions` の注記）、テーブルの実幅は半径とカット深さから
     # 決まって z で変わる。「規格リードが載るか」は `reed_seat.seat_card` が
     # 実幅・実開口で見る —— 判定幅 0.3 / 0.8 はそちらへ引き継いだ。
-    rows.append(["リード幅（規格の呼び）",
+    rows.append(["リード幅（規格の呼び / 規格リード）",
                  f"{p['reed_width']:.1f} / "
-                 f"{size_info['reed_std_tip_width_mm']:.1f} mm　"
+                 f"{_span_text(*reed_tip_width_range(size_info))} mm　"
                  "判定は「リードが載るか」のカード"])
 
     # 最大径。**超えた側だけ**見る（細い分はリガチャーが締まるので害が無い）。
@@ -269,7 +293,8 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
                    "リード全長は銘柄・カット・材質で動くので 1 点ではなく域で"
                    "見ています（descriptor の reed_length_range_mm）。**長短の向きは"
                    "材質から決まりません** —— ソプラノは樹脂が 2.9mm 長く、アルトは"
-                   "ケーンが 0.9mm 長い。実測が 1 本も無いサイズ（いまはテナー）では、"
+                   "樹脂どうしで 2.6mm 違い（レジェール 70.2／FIBRACELL 72.8）、ケーン 3 本は"
+                   "その間の 71.1〜71.2。実測が 1 本も無いサイズ（いまはテナー）では、"
                    "テーブル終端との比較は判定せず参考値として並べます。"
                    "ソプラノのテーブル終端はモデル 60.0mm に対し実物が 60.2mm（実測、"
                    "2026-08-13）で、ここで出る「軽微」はモデルの粗さではなく"
@@ -334,15 +359,20 @@ def reed_card(p: dict, size_info: dict) -> dict:
     rows.append(["全長 / 規格域", f"{length:.1f} / {_span_text(lo, hi)} mm  {v}"])
     verdicts.append(v)
 
-    r, v = _row("先端幅 / 規格", p["tip_width"],
-                size_info["reed_std_tip_width_mm"], "mm", 0.3, 0.8)
-    rows.append(r)
+    # 先端幅も**域で**見る（全長と同じ。アルトの実物 5 本で 15.85〜16.4）。
+    # 未実測のサイズは 1 点に潰れるので従来どおりの 1 点比較になる。
+    lo, hi = reed_tip_width_range(size_info)
+    tw = p["tip_width"]
+    over = 0.0 if lo <= tw <= hi else (tw - hi if tw > hi else tw - lo)
+    v = _verdict(over, 0.3, 0.8)
+    rows.append(["先端幅 / 規格域", f"{tw:.1f} / {_span_text(lo, hi)} mm  {v}"])
     verdicts.append(v)
 
-    # 幅のテーパーが直線かどうか。**`reed_profiles.taper_half_width` は先端幅→
-    # 踵幅の線形を仮定していて、1 度も測っていない**（Phase 4-F）。かかり代は
-    # ティップ側で決まるので、ここが曲がっていれば「リードが載るか」の結論ごと
-    # 変わる。判定幅は採寸カードと同じ規則（刻み 0.1mm の 0.6 段 / 2.5 段）。
+    # 幅のテーパーが直線かどうか。`reed_profiles.taper_half_width` は先端幅→
+    # 踵幅の線形を仮定している。**アルトで測った**（2026-09-21）: 直線は
+    # ほぼ成立し（残差 +0.12／+0.08、外へわずかに膨らむ側）、外れていたのは
+    # **向き**だった（旧既定は踵が 0.6 広い、実物は先端が 1.8〜2.2 広い）。
+    # 判定幅は採寸カードと同じ規則（刻み 0.1mm の 0.6 段 / 2.5 段）。
     at20 = size_info.get("reed_width_at20_mm")
     if at20 is None:
         rows.append(["（参考）先端から 20mm の幅",
@@ -358,8 +388,9 @@ def reed_card(p: dict, size_info: dict) -> dict:
     return _finish("規格リードとの照合", rows, verdicts,
                    "規格から外すと市販リガチャー・マウスピースに合わなくなります。"
                    "厚みプロファイルは規格が無いため照合対象外。"
-                   "**幅のテーパーはモデルが線形を仮定しています** —— 中間 1 点を"
-                   "測れば確かめられるので、採寸フォームに欄を用意しました。")
+                   "**幅のテーパーはモデルが線形を仮定しています** —— 実物のアルトでは"
+                   "ほぼ直線で、先端のほうが 2mm 前後広い（踵へ狭まる）ことが分かって"
+                   "います。先端から 20mm の幅を測れば、手元のリードでも確かめられます。")
 
 
 def _finish(title: str, rows: list, verdicts: list, note: str) -> dict:

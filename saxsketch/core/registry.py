@@ -244,6 +244,15 @@ class Component(ABC):
         """
         return {"params": [], "size": []}
 
+    def survey_params(self, measured: dict, values: dict) -> dict:
+        """採寸欄の値 → 設計パラ。既定は素通し。
+
+        **測れる量とパラメータが同じとは限らない**ので部品に変換の口を持たせる
+        （リードの先端カーブ: 直定規が測るのは「側面がまっすぐになる所」で、
+        パラメータは丸みを無視した見かけの角）。`values` は採寸前の現在値。
+        """
+        return measured
+
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:
         """採寸 vs 設計 の照合カード（SimCard 形）。対象なしなら None。"""
