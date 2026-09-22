@@ -2468,9 +2468,10 @@ def test_components_without_moving_walls_are_unchanged():
     管体は掛け金と帯だけで動く（`limit_kind` も `unclassified` のまま）。
     **分類も壁も、測ってから入れる。**
 
-    **リードは 1 本だけ入った**（2026-09-21、Phase 4-F 実測）: 踵の側端厚 ≤
-    中央厚 − 0.2。実物のアルト #1 の 1.65 が旧来の直値の上限 1.6 を越えたので、
-    直値が代理していた関係のほうを持たせた。テンプレート値は動かない。
+    **リードは 2 本入った**（Phase 4-F）: 踵の側端厚 ≤ 中央厚 − 0.2（2026-09-21。
+    実物のアルト #1 の 1.65 が旧来の直値の上限 1.6 を越えたので、直値が代理して
+    いた関係のほうを持たせた）と、先端カーブ ≤ 前縁の円弧が側面に届く深さ
+    （2026-09-23。既定の組では半円で、相手の壁は出ない）。テンプレート値は動かない。
     """
     from saxsketch.core.schema import ParamSet
 
@@ -2480,7 +2481,7 @@ def test_components_without_moving_walls_are_unchanged():
         base = dict(ParamSet(comp.param_specs(), comp.template.get(cid, {})).values)
         if cid == "reed":
             assert set(comp.param_bounds(base)) <= {"heel_edge_thickness",
-                                                    "heel_thickness"}
+                                                    "heel_thickness", "tip_curve_depth"}
         else:
             assert comp.param_bounds(base) == {}, cid
         ps = ParamSet(comp.param_specs(), comp.template.get(cid, {}),
@@ -3888,6 +3889,102 @@ def test_reed_outline_is_one_smooth_curve():
             jump = max((slopes[i] - slopes[i - 1] for i in range(1, len(slopes))),
                        default=0.0)
             assert jump <= max(taper, 0.0) + 1e-3, (tid, d, jump)
+
+
+def _reed_sweeper():
+    """`cad/reed/sweep_reed.py` を読み込む（`_sweeper` と同じく直読み）。"""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "cad" / "reed" / "sweep_reed.py"
+    spec = importlib.util.spec_from_file_location("sweep_reed_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_reed_nose_is_tangent_up_to_its_wall():
+    """前縁アーク・角のフィレット・側面が、**壁の内側ならどの組でも**接して繋がること。
+
+    以前の `_nose_geometry` は不動点の再代入を 5 回で打ち切っていた。踵が先端より
+    大きく広い組（テーパーの傾きが片側 0.058〜0.082）では収束せず、残差
+    2.6e-5〜5.0e-4mm がアークとフィレットの継ぎ目に段を作っていた。掃引は、
+    当時の壁 2.8 の内側で 5 通りを「輪郭の傾きが跳ぶ」（+0.11〜+1.73）と報告したが、
+    形の破綻ではなかった（2026-09-23）。
+
+    接していることは**定義で**確かめる:
+    - フィレット中心 (a_f − r, z_f) はアーク中心 (0, R) から R − r の距離にある
+    - a_f は側面テーパーそのもの
+    - 継ぎ目は 0 ≤ z_t ≤ z_f の順に並び、フィレット中心は r ≤ z_f ≤ R（アークの前半）
+
+    壁の 1 刻み外では `nose_error` が断り、しかも踵が広がる組では接していない。
+    **壁は形が壊れる所にあり、発明した数字ではない。**
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    walls = []
+    for tw, hw, r, L in _reed_sweeper().outline_grid():
+        p = dict(tip_width=tw, heel_width=hw, tip_corner_r=r, reed_length=L)
+        wall = rp.nose_depth_limit(p)
+        walls.append(wall)
+        for d in [0.1 * i for i in range(1, int(wall / 0.1 + 1e-9) + 1)] + [wall]:
+            q = dict(p, tip_curve_depth=d)
+            R, z_t, z_f, _x_t, a_f = rp._nose(q)
+            gap = math.hypot(a_f - r, z_f - R) - (R - r)
+            assert abs(gap) < 1e-9, (tw, hw, r, L, d, gap)
+            assert a_f == pytest.approx(rp.taper_half_width(q, z_f), abs=1e-12)
+            assert 0.0 <= z_t <= z_f and r - 1e-9 <= z_f <= R + 1e-9, (tw, hw, r, L, d)
+            assert rp.nose_error(q) is None, (tw, hw, r, L, d)
+        out = dict(p, tip_curve_depth=wall + 0.1)
+        assert rp.nose_error(out) is not None, (tw, hw, r, L)
+        if wall < tw / 2.0:        # 踵が広がる組: 前縁アークが側面に届かない
+            R, _z_t, z_f, _x_t, a_f = rp._nose(out)
+            assert math.hypot(a_f - r, z_f - R) - (R - r) > 1e-6, (tw, hw, r, L)
+    # **帯の上限はどの組でも壁の内側**。最小になるのは先端 9.0 × 踵 18.0 × 全長 55 ×
+    # 丸み 2.0 の組。帯（勧める値）の端に立てない組は無い。
+    band = {s.key: s for s in get_registry().get("saxophone")
+            .make_component("reed", "alto").param_specs()}["tip_curve_depth"].max
+    assert min(walls) == pytest.approx(2.976, abs=5e-4)
+    assert min(walls) > band
+
+
+def test_reed_outline_stays_smooth_where_the_iteration_stalled():
+    """壁 2.8 の内側で「輪郭の傾きが跳ぶ」と出ていた 5 組を、連続した窓で見る。
+
+    どれも先端 9.0 × 踵 ≥ 15.4。反復の打ち切りで z_t に 1.1e-5〜1.7e-4mm の段が
+    残り、跳びは +0.11〜+1.73 だった。上限は `test_reed_outline_is_one_smooth_curve`
+    と同じで、側面テーパーの傾き。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    h = 1e-4
+    for tw, hw, r, L, d in ((9.0, 15.4, 1.2, 55.0, 2.8), (9.0, 18.0, 0.7, 70.0, 2.7),
+                            (9.0, 18.0, 1.2, 55.0, 2.5), (9.0, 18.0, 1.2, 55.0, 2.7),
+                            (9.0, 18.0, 1.2, 55.0, 2.8)):
+        p = dict(tip_width=tw, heel_width=hw, tip_corner_r=r, reed_length=L,
+                 tip_curve_depth=d)
+        taper = (hw - tw) / (2.0 * L)
+        zs = [0.02 + i * h for i in range(int((rp.tip_full_width_z(p) + 0.5) / h))]
+        slopes = [(rp.half_width(p, z + h) - rp.half_width(p, z)) / h for z in zs]
+        jump = max(slopes[i] - slopes[i - 1] for i in range(1, len(slopes)))
+        assert jump <= taper + 1e-3, (tw, hw, r, L, d, jump)
+
+
+def test_the_reed_sweeper_sees_a_step_between_its_samples():
+    """**掃引の輪郭検査が、サンプルとサンプルの間の段を見ること**（4-F）。
+
+    以前は幅 1e-4 の窓を 1e-3 おきに置いていたので、窓の外にある段は見えなかった
+    —— 前縁アークが側面に届かない 546 通りのうち、捕まえたのは 52 通りだけ。
+    段の位置は組ごとに違うので、壁のすぐ外の組を全部回す。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    sw = _reed_sweeper()
+    seen = total = 0
+    for tw, hw, r, L in sw.outline_grid():
+        if hw <= tw:
+            continue                    # 狭まる組の壁は半円（その先は別の壊れ方）
+        p = dict(tip_width=tw, heel_width=hw, tip_corner_r=r, reed_length=L)
+        wall = rp.nose_depth_limit(p)
+        assert sw._outline_defect(dict(p, tip_curve_depth=wall)) is None, (tw, hw, r, L)
+        total += 1
+        seen += sw._outline_defect(dict(p, tip_curve_depth=wall + 0.1)) is not None
+    assert seen == total, (seen, total)
 
 
 def test_reed_front_edge_matches_the_solid_outline():
@@ -8970,19 +9067,23 @@ def test_every_measured_reed_fits_inside_the_tip_curve_wall():
     （アルト 2・ソプラノ 4）を締め出していた。ソプラノの採寸で「側面が
     まっすぐになる所」3.0 を入れると 2.72 に逆算され、壁で黙って 2.5 に
     丸まるところだった。
+
+    2026-09-23 に壁は関係（前縁の円弧が側面に届く深さ）になり、2.8 は帯として
+    残った。**実物は帯にも入る**ことを両方で見る。
     """
     from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     comp = get_registry().get("saxophone").make_component("reed", "soprano")
     p = _template_params("reed", "soprano")
-    lo, hi = {s.key: s for s in comp.param_specs()}["tip_curve_depth"].bounds()
+    sp = {s.key: s for s in comp.param_specs()}["tip_curve_depth"]
     # ソプラノ 5 本（先端幅・踵幅・全長ごと）の「側面がまっすぐになる所」
     for tw, hw, L, z in ((14.1, 13.1, 61.95, 3.0), (14.0, 12.6, 59.1, 3.0),
                          (14.15, 12.8, 59.8, 2.9), (13.9, 12.55, 59.0, 2.9),
                          (14.15, 13.1, 58.3, 2.8)):
-        d = rp.curve_depth_for_full_width_z(
-            dict(p, tip_width=tw, heel_width=hw, reed_length=L), z)
-        assert lo <= d <= hi, (tw, z, d)
+        q = dict(p, tip_width=tw, heel_width=hw, reed_length=L)
+        d = rp.curve_depth_for_full_width_z(q, z)
+        wall = comp.param_bounds(dict(q, tip_curve_depth=d))["tip_curve_depth"]["hi"]
+        assert sp.min <= d <= sp.max and d <= wall, (tw, z, d, wall)
     # 採寸フォーム → 逆算 → 取り込みで丸まらない
     got = comp.survey_params({comp.SURVEY_TIP_KEY: 3.0}, p)
     ps = ParamSet(comp.param_specs(), dict(p, **got), bounds_provider=comp.param_bounds)
@@ -9080,6 +9181,128 @@ def test_the_heel_edge_wall_is_a_relation_not_a_number():
     # 逆向き: 側端厚を上げてある組では中央厚が下がらない
     ps.apply({"heel_thickness": 1.8})
     assert ps.values["heel_thickness"] >= ps.values["heel_edge_thickness"] + 0.2 - 1e-9
+
+
+#: 先端カーブの壁を、相手を動かして立てる組（4-F、2026-09-23）。
+#: 丸みが効くのは 2 つめ、先端幅・踵幅・全長が効くのは 3 つめ（壁の 0.004 内側）。
+_NOSE_COMBOS = (
+    {},
+    {"tip_width": 9.0, "heel_width": 18.0, "reed_length": 55.0, "tip_corner_r": 1.2,
+     "tip_curve_depth": 2.978},
+    {"tip_width": 10.0, "heel_width": 16.0, "reed_length": 60.0, "tip_corner_r": 1.0,
+     "tip_curve_depth": 3.628},
+    {"tip_width": 10.5, "heel_width": 18.0, "reed_length": 55.0, "tip_curve_depth": 3.5},
+)
+
+
+def test_the_nose_wall_lands_exactly_where_params_error_flips():
+    """**先端カーブの壁（`param_bounds`）は `params_error` の交差点に立つ。**
+
+    マウスピースの `test_the_moving_walls_land_exactly_where_params_error_flips` と
+    同じ担保で、同じ関係を 2 か所で述べる代理変数の型を押さえる。壁は
+    `rp.nose_bounds` が、断るのは `rp.nose_error` が持っている。
+
+    既定の組だけで見ると先端カーブの上限（半円）しか出ないので、相手を動かした
+    組でも見る。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    keys = {"tip_curve_depth", "tip_width", "heel_width", "reed_length", "tip_corner_r"}
+    reg = get_registry().get("saxophone")
+    seen = set()
+    for tid in SIZES:
+        comp = reg.make_component("reed", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        tmpl = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+        for combo in _NOSE_COMBOS:
+            base = dict(tmpl, **combo)
+            assert comp.params_error(base) is None, (tid, combo)
+            for key, b in comp.param_bounds(base).items():
+                if key not in keys:
+                    continue
+                step = specs[key].step
+                for side, sign in (("lo", -1), ("hi", +1)):
+                    wall = b.get(side)
+                    if wall is None:
+                        continue
+                    assert comp.params_error(
+                        dict(base, **{key: wall})) is None, (tid, key, side, wall)
+                    flip = _flip_point(comp, base, key, wall, sign, step)
+                    assert flip is not None, (tid, key, side, wall, "壁が甘い")
+                    assert abs(flip - wall) <= step * 1.0001, (tid, key, side, wall, flip)
+                    seen.add((key, side))
+    assert seen == {("tip_curve_depth", "hi"), ("tip_width", "lo"), ("heel_width", "hi"),
+                    ("reed_length", "lo"), ("tip_corner_r", "hi")}, seen
+
+
+def test_the_tip_curve_wall_is_a_relation_not_a_number():
+    """**先端カーブの壁は「前縁の円弧が側面に届く深さ」という関係**（4-F）。
+
+    帯 2.8 は実物 10 本が入る「勧める値」で、壁ではない。壁は踵が広がらなければ
+    半円（先端幅の半分）、広がる組では浅くなり、止めたときは相手の名前を言う。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    tpl = comp.template["reed"]
+    ps = ParamSet(comp.param_specs(), tpl, bounds_provider=comp.param_bounds)
+    assert ps.adjustments == []
+
+    # 帯の外でも壁の内側なら丸めない
+    ps.apply({"tip_curve_depth": 3.5})
+    assert ps.adjustments == [] and ps.values["tip_curve_depth"] == 3.5
+    # 狭まるリードの壁は半円
+    ps.apply({"tip_curve_depth": 9.0})
+    assert ps.values["tip_curve_depth"] == pytest.approx(tpl["tip_width"] / 2.0)
+    assert "先端幅" in ps.adjustments[-1]["message"], ps.adjustments
+
+    # 踵が大きく広がる組では浅くなり、相手の名前を言う。**相手と同じ apply で
+    # 頼むと両方が内側へ寄る**（壁は頼まれた組から引く ―― 踵の床と同じ）ので、
+    # 相手を先に置く。
+    ps.apply({"tip_curve_depth": tpl["tip_curve_depth"]})
+    ps.apply({"tip_width": 9.0, "heel_width": 18.0, "reed_length": 55.0})
+    assert ps.adjustments == []
+    ps.apply({"tip_curve_depth": 5.0})
+    assert ps.values["tip_curve_depth"] == pytest.approx(rp.nose_depth_limit(ps.values))
+    assert ps.values["tip_curve_depth"] < 3.0
+    msg = next(a["message"] for a in ps.adjustments if a["key"] == "tip_curve_depth")
+    assert "踵幅" in msg, msg
+    assert comp.params_error(ps.values) is None
+
+    # 逆向き: 深いカーブを置いてある組では、踵幅が先端カーブの名前で止まる
+    ps.apply({"tip_width": 10.0, "heel_width": 16.0, "reed_length": 60.0,
+              "tip_corner_r": 1.0, "tip_curve_depth": 3.628})
+    assert ps.adjustments == []
+    ps.apply({"heel_width": 18.0})
+    assert ps.values["heel_width"] < 16.1
+    assert "先端カーブ" in ps.adjustments[-1]["message"], ps.adjustments
+    assert comp.params_error(ps.values) is None
+
+
+def test_the_tip_curve_wall_reaches_the_browser():
+    """先端カーブの壁が `bounds` で画面まで届き、相手を動かすとそこで動くこと。
+
+    スキーマの掛け金は半円（9.0）のままで、スライダの端を決めるのは `bounds`。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "reed"}).status_code == 200
+    proj = c.get("/api/project").json()
+    assert proj["bounds"]["tip_curve_depth"] == {"hi": pytest.approx(8.2),
+                                                 "hi_by": "先端幅"}
+    spec = next(s for s in proj["schema"] if s["key"] == "tip_curve_depth")
+    assert (spec["max"], spec["hard_max"]) == (pytest.approx(2.8), pytest.approx(9.0))
+
+    r = c.put("/api/project/params", json={"params": {
+        "tip_width": 9.0, "heel_width": 18.0, "reed_length": 55.0}}).json()
+    assert r["adjustments"] == []
+    assert r["bounds"]["tip_curve_depth"]["hi"] == pytest.approx(2.982, abs=5e-4)
+    r = c.put("/api/project/params", json={"params": {"tip_curve_depth": 3.5}}).json()
+    assert r["params"]["tip_curve_depth"] == pytest.approx(2.982, abs=5e-4)
+    assert "踵幅" in r["adjustments"][0]["message"], r["adjustments"]
 
 
 def test_the_tip_curve_is_surveyed_where_the_side_turns_straight():

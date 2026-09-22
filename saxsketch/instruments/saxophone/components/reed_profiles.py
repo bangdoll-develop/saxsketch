@@ -48,6 +48,16 @@ def taper_half_width(p: dict, z: float) -> float:
     return (p["tip_width"] + (p["heel_width"] - p["tip_width"]) * t) / 2.0
 
 
+def _nose_discriminant(radius: float, r: float, b: float, s: float) -> float:
+    """フィレット中心の 2 次方程式の判別式（÷4）。負なら前縁アークが側面に届かない。
+
+    (1 + s²)z² + 2(sb − R)z + b² + 2Rr − r² = 0 の (sb − R)² − (1 + s²)(b² + 2Rr − r²)
+    を整理したもの。`_nose_geometry` と `nose_depth_limit` が同じ式を使う。
+    """
+    return ((radius - r) ** 2 - b * b - 2.0 * s * b * radius
+            - s * s * r * (2.0 * radius - r))
+
+
 @functools.lru_cache(maxsize=64)
 def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: float):
     """先端の平面視輪郭を決める (R, z_t, z_f, x_t, a_f)。純スカラなので lru_cache。
@@ -59,21 +69,32 @@ def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: floa
         側面テーパー          z ≥ z_f
 
     フィレットは前縁アークと側面の両方に内接する円。中心は側面から r だけ内側
-    （x = a − r）なので、アーク中心との距離が R − r になる z が閉形式で出る。
-    テーパーは片側 0.02mm/mm 以下しか傾いていないので（旧既定 +0.004〜0.005 /
-    実測アルト −0.015）、a の再代入で数回で収束する。
+    （x = a(z_f) − r。側面は z_f で局所的に垂直とみなす）なので、中心は
+    「アーク中心 (0, R) から R − r の円」と「直線 x = b + s·z」（b = 先端半幅 − r、
+    s = テーパーの片側の傾き）の交点 ＝ 2 次方程式の**小さいほうの根**:
+
+        (b + s·z)² + (z − R)² = (R − r)²
+
+    **以前は a の再代入を 5 回で打ち切っていて、深いカーブで収束していなかった。**
+    「テーパーは片側 0.02mm/mm 以下」はテンプレートの傾き（旧既定 +0.004〜0.005 /
+    実測アルト −0.015）で確かめた仮定で、壁が許す傾きは 9/110 = 0.082 まである。
+    収縮率 |s|(a − r)/(R − z_f) は折れて見えた組で 0.135〜0.238 に達し、残差
+    2.6e-5〜5.0e-4mm が**アークとフィレットの継ぎ目 z_t に段**を作っていた ——
+    掃引の「輪郭の傾きが跳ぶ」（先端 9.0 × 踵 ≥ 15.4 の 5 通り、+0.11〜+1.73）は
+    全部これで、幾何の破綻ではなかった（2026-09-23 実測。閉形式にすると
+    成立する 15,582 通りで 1 通りも折れない。テンプレートは 3 サイズとも ≤ 7e-11mm
+    しか動かない）。根は「積 ÷ 大きいほうの根」で取る —— カーブが浅いと R が
+    大きく、差の形では桁が落ちる。s = 0 なら旧式と同じ式。
 
     **`tip_curve_depth = 0` で現行式に戻る**: R が無くなって z_t = 0 / z_f = r と
     なり、輪郭は「z=0 の直線 → 半径 r のフィレット → 側面」＝ 4-C.2 以前の形。
 
-    sqrt の中が負になるのは R ≤ a_f のときだけで、パラメータの可動域では起きない
-    （R − 先端半幅 = (hw − d)²/(2d) ≥ 0.52 ―― 先端幅 9.0・カーブの上限 2.8 ――
-    に対し、踵へ広がる側のテーパーの伸びは ≤ 0.37）。**テーパーは向きを仮定しない**
-    —— 実物は**先端のほうが広かった**（踵＝先端 −1.8〜2.2 のアルト 5 本、−1.0〜1.4 の
-    ソプラノ 5 本、2026-09-21 / 22 実測）。狭まる側は a_f < 先端半幅なので、この条件は
-    かえって楽になる。**ただし sqrt が負にならないことは輪郭が滑らかなことを意味しない**
-    —— 先端 9.0 × 踵 ≥ 15.4 の組ではカーブ 2.5〜2.8 で輪郭の傾きが跳ぶ（走査で 5 通り、
-    うち 1 通りは旧来の上限 2.5 でも）。
+    **根が無い（判別式 < 0）＝前縁アークが側面に届かない**のが本当の幾何の壁で、
+    `nose_depth_limit` が深さに解き、`nose_error` が断る。起きるのは踵が先端より
+    広い組だけ（**テーパーは向きを仮定しない** —— 実物は先端のほうが広かった。
+    アルト 5 本・ソプラノ 5 本、2026-09-21 / 22 実測。狭まる側は半円まで届く）。
+    判別式を 0 で下から押さえるのは、壁の外を覗く呼び出し（二分法の端など）で
+    落ちないためだけで、**そこで返る値は形ではない**。
     """
     def a_at(z: float) -> float:
         t = min(max(z / length, 0.0), 1.0)
@@ -84,10 +105,14 @@ def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: floa
         return 0.0, 0.0, r, a_f - r, a_f
     hw = tip_w / 2.0
     radius = (hw * hw + d * d) / (2.0 * d)
-    a = a_at(d)
-    for _ in range(5):    # a と z_f の不動点。5 回で両端の段が 1e-12mm 未満に落ちる
-        z_f = radius - math.sqrt(max((radius - r) ** 2 - (a - r) ** 2, 0.0))
-        a = a_at(z_f)
+    s = (heel_w - tip_w) / (2.0 * length)
+    b = hw - r
+    disc = _nose_discriminant(radius, r, b, s)
+    # 壁の内側で z_f ≤ 9.0（半円 ＝ 先端幅の上限の半分）。全長の下限 55 よりずっと
+    # 手前なので、a(z) はここでは直線のまま。
+    z_f = (b * b + 2.0 * radius * r - r * r) / ((radius - s * b)
+                                                 + math.sqrt(max(disc, 0.0)))
+    a = a_at(z_f)
     # アークとの接点は中心間を結ぶ線上、アーク中心から距離 R の所。
     z_t = radius - radius * (radius - z_f) / (radius - r)
     x_t = radius * (a - r) / (radius - r)
@@ -97,6 +122,106 @@ def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: floa
 def _nose(p: dict):
     return _nose_geometry(tip_curve_depth(p), p.get("tip_corner_r", 0.8),
                           p["tip_width"], p["heel_width"], p["reed_length"])
+
+
+def nose_depth_limit(p: dict) -> float:
+    """前縁アークが側面へ届く最も深い `tip_curve_depth` [mm] ＝ 先端カーブの壁。
+
+    `_nose_discriminant` ≥ 0 を R について解くと R ≥ R* = c + √(c² − (1 + s²)r² + b²)
+    （c = r(1 + s²) + s·b）。R = (hw² + d²)/(2d) は d ≤ hw で d について減るので、
+    深さでは d ≤ hw² / (R* + √(R*² − hw²))。R* ≤ hw なら半円（d = hw）まで届く ——
+    **踵が先端より広くない組は常にこちら**で、実物 10 本は全部そう（2026-09-21 / 22）。
+    それより深い前縁は半円を越えて閉じない。
+
+    壁が動くのは踵が広がる組だけ: 先端幅で増え、踵幅で減り、全長で増え、丸みで
+    わずかに減る（丸み 0.3 → 2.0 で 0.01mm）。**帯の上限 2.8 はどの組でも内側**
+    （最小 2.976 ＝ 先端 9.0 × 踵 18.0 × 全長 55 × 丸み 2.0、2026-09-23）。
+    以前に試した「半幅 − 丸み」は、踵が大きく広がる組では壁より外（先端 9.0 ×
+    踵 18.0 × 丸み 1.2 で 3.3 に対し 2.98）、ほかでは半円より手前で止めていた。
+    """
+    r = p.get("tip_corner_r", 0.8)
+    hw = p["tip_width"] / 2.0
+    s = (p["heel_width"] - p["tip_width"]) / (2.0 * p["reed_length"])
+    b = hw - r
+    c = r * (1.0 + s * s) + s * b
+    r_star = c + math.sqrt(max(c * c - (1.0 + s * s) * r * r + b * b, 0.0))
+    if r_star <= hw:
+        return hw
+    return hw * hw / (r_star + math.sqrt(r_star * r_star - hw * hw))
+
+
+def nose_error(p: dict) -> str | None:
+    """先端カーブが `nose_depth_limit` より深い組を説明つきで弾く。
+
+    壁ちょうどは通す（1e-9 の遊びは `profiles.cavity_layout_error` と同じ ——
+    相手の壁は二分法で解くので、返した端で計算し直すと最後の桁で断りうる）。
+    """
+    d = tip_curve_depth(p)
+    if d <= 0.0:
+        return None
+    limit = nose_depth_limit(p)
+    if d <= limit + 1e-9:
+        return None
+    if p["heel_width"] > p["tip_width"]:
+        why = "踵へ広がる側面に前縁の円弧が届きません"
+        how = "先端カーブを浅くするか、踵幅を狭く・先端幅を広く・全長を長くしてください"
+    else:
+        why = "前縁の円弧が半円を越えて閉じません"
+        how = "先端カーブを浅くするか、先端幅を広くしてください"
+    return (f"先端カーブ {d:.2f} mm では{why}: 先端幅 {p['tip_width']:.1f}・"
+            f"踵幅 {p['heel_width']:.1f}・全長 {p['reed_length']:.1f} では "
+            f"{limit:.2f} mm まで。{how}。")
+
+
+#: 先端カーブの壁を動かす相手と、壁が立つ側（`nose_depth_limit` の単調性の向き）。
+_NOSE_PARTNERS = (("tip_width", "lo"), ("heel_width", "hi"),
+                  ("reed_length", "lo"), ("tip_corner_r", "hi"))
+
+
+def nose_bounds(p: dict, static: dict) -> dict:
+    """先端カーブの**相手で動く壁**（`reed.ReedComponent.param_bounds` が繋ぐ）。
+
+    `static` は相手の `ParamSpec.bounds()`（`{key: (lo, hi)}`）。値は**スキーマが
+    持ち主**なのでここには書かない（`profiles.outer_bounds` の刻みと同じ）。
+
+    - `tip_curve_depth` の上限 ＝ `nose_depth_limit`
+    - 相手（先端幅の下限・踵幅の上限・全長の下限・丸みの上限）は、**静的な端では
+      届かないときだけ**返す（踵厚の前例と同じ）。帯の中のカーブ（≤ 2.8）では
+      どの相手も静的な端まで届くので、既定では出ない。
+    - **相手の壁は相手自身の値に依らない。** `ParamSet.apply` は頼まれた組から
+      壁を引くので、踵幅 18 を頼まれた組で「いまの踵幅から」解くと、成立しない
+      組から解くことになる。静的な緩い側の端から解き、そこでも届かなければ
+      返さない（どの値へ丸めても嘘の壁 —— 理由は `nose_error` に言わせる）。
+
+    `nose_depth_limit` はどの相手についても単調なので二分法で解く
+    （`curve_depth_for_full_width_z` と同じ手）。判定は `nose_error` と同じ
+    「d ≤ 壁 + 1e-9」なので、返す端は `params_error` の交差点そのもの。
+    """
+    widening = p["heel_width"] > p["tip_width"]
+    out = {"tip_curve_depth": {
+        "hi": nose_depth_limit(p),
+        "hi_by": "先端幅・踵幅・リード全長・先端角の丸み" if widening else "先端幅"}}
+    d = tip_curve_depth(p)
+    if d <= 0.0:
+        return out
+
+    def holds(key: str, v: float) -> bool:
+        return nose_depth_limit({**p, key: v}) + 1e-9 >= d
+
+    for key, side in _NOSE_PARTNERS:
+        lo, hi = static.get(key, (None, None))
+        end, loose = (lo, hi) if side == "lo" else (hi, lo)
+        if end is None or loose is None or holds(key, end) or not holds(key, loose):
+            continue
+        good, bad = loose, end
+        for _ in range(60):
+            mid = (good + bad) / 2.0
+            if holds(key, mid):
+                good = mid
+            else:
+                bad = mid
+        out[key] = {side: good, f"{side}_by": "先端カーブ"}
+    return out
 
 
 def tip_full_width_z(p: dict) -> float:
@@ -117,11 +242,13 @@ def curve_depth_for_full_width_z(p: dict, z_full: float) -> float:
 
     `tip_full_width_z` は `tip_curve_depth` について単調増加なので二分法で解く
     （`profiles.table_cut_end_z` と同じ手）。丸みだけで届く所（深さ 0 でも
-    `tip_corner_r` ぶんは後ろにある）より手前なら 0 を返す。上端は先端半幅 ——
-    それより深い前縁は半円を越えて閉じない。届かなければ上端を返し、範囲の
-    外であることは呼び出し側（`ParamSet` の丸めの報告）に言わせる。
+    `tip_corner_r` ぶんは後ろにある）より手前なら 0 を返す。上端は先端カーブの壁
+    `nose_depth_limit`（踵が広がらなければ先端半幅）—— **その先では単調ではない**
+    （前縁アークが側面に届かず、`_nose_geometry` が返すのは形ではない値）。
+    届かなければ上端を返し、範囲の外であることは呼び出し側（`ParamSet` の丸めの
+    報告）に言わせる。
     """
-    lo, hi = 0.0, p["tip_width"] / 2.0
+    lo, hi = 0.0, nose_depth_limit(p)
     if tip_full_width_z({**p, "tip_curve_depth": lo}) >= z_full:
         return lo
     if tip_full_width_z({**p, "tip_curve_depth": hi}) <= z_full:
