@@ -20,11 +20,16 @@
 **節 B が本体。** 同じ z で窓幅とリード幅を並べれば、かかり代 `(リード幅 − 窓幅)/2`
 が実物で決まる。
 
-**アルトは測って決着した**（2026-09-21、値は `inspection_values.py` の
-`REED_SURVEY_ALTO` ほか）: 2 MP × 2 リード × 4 z の 16 組すべて +0.40〜+1.33、
-光の試験も 10 組すべて ○。モデルが負を出していたのは規格リード先端幅の借り物
-（13.4、実物 15.85〜16.4）のせいで、「実物テナーでも負」は実物の窓 × 同じ借り物の
-比較だった。ソプラノ・テナーはまだ借り物のままなので、用紙はそのまま使える。
+**アルトとソプラノは測って決着した**（2026-09-21 / 22、値は `inspection_values.py`
+の `REED_SURVEY` ほか）: 2 MP × 2 リードの全組が正（アルト 16 組 +0.40〜+1.33、
+ソプラノ 12 組 +0.90〜+2.12）、光の試験も 20 組すべて ○。モデルが負を出していたのは
+規格リード先端幅の借り物（アルト 13.4 / ソプラノ 12.9、出所なし）のせいで、ソプラノ
+では**窓の法則も基準個体より 1.3mm 広かった**（`side_rail_width` を直した）。
+テナーはまだ借り物のままなので、用紙はそのまま使える。
+
+**3 枚目（マウスピースの外形）は窓を直したサイズだけ**（`MP_SHAPE_SIZES`）。
+窓幅だけでは「レールが太い」と「空洞が狭い」を分けられないので、リード面の外幅を
+同じ z で測って分ける。z=1〜3 の外幅は MP のティップ輪郭そのもの。
 
 **先端カーブは「側面がまっすぐになる所」まで測る**（実測者に確認した定義）。
 欄名は採寸フォームと同じ仮想キー `tip_full_width_z` で、設計値も同じ量で刷る ——
@@ -92,11 +97,27 @@ UNMEASURED = {
     "tip_full_width_z": "未実測（参照マウスピースの輪郭から逆算した値）",
 }
 #: 上の欄を実物で測ってテンプレートへ入れたサイズ。
-MEASURED_SIZES = {"alto": "2026-09-21 に 5 本"}
+MEASURED_SIZES = {"alto": "2026-09-21 に 5 本", "soprano": "2026-09-22 に 5 本"}
 #: 設計値が**そもそも実物のリードの値ではない**欄（サイズに依らない）。
 PRINT_SIDE = {
-    "tip_thickness": "設計値は印刷側の強度下限から置いた値（アルトの実物は 0.2〜0.3）",
+    "tip_thickness": "設計値は印刷側の強度下限から置いた値（実物はアルト・ソプラノとも 0.2〜0.3）",
 }
+
+#: 3 枚目（マウスピースの外形）を刷るサイズと、その理由。**窓の法則を実物の窓幅へ
+#: 合わせたサイズ**で、合わせたつまみ（`side_rail_width`）が「レールの実幅」なのか
+#: 「空洞の寄せ」なのかは窓幅だけでは分からない。
+MP_SHAPE_SIZES = {
+    "soprano": ('窓がテンプレートの基準（刻印 4）より一様に 1.3mm 広かったので、'
+                '<span class="k">side_rail_width</span> を 0.89 → 1.55 にして合わせた'
+                '（2026-09-22）。<b>窓幅だけでは「レールが太い」と「空洞が狭い」を'
+                '分けられない</b> —— リード面の外幅を同じ z で測れば、レールの実幅 ＝'
+                '（外幅 − 窓幅）/ 2 が決まる。最大径 25.0 もボア比で縮めた未実測値'),
+}
+#: 外幅を測る z [mm]。z=1〜3 は**ティップの輪郭そのもの**（外幅の半分がその z で
+#: 前縁が来る x）で、リード前縁との比較（いまは参考）を判定へ戻す鍵。
+FACE_Z = (1.0, 2.0, 3.0, 5.0, 10.0, 20.0)
+#: 窓幅を足す z。モデルのかかり代が最小になる区間（z≈2〜3）が節 B の z=5 より手前。
+WINDOW_Z_EXTRA = (2.0, 3.0)
 
 
 def git_rev(out_path: str) -> str:
@@ -273,11 +294,11 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
     # **判定か参考かはサイズで分かれる**（`reed_seat.cover_row` と同じ分岐）。
     if reference_check.reed_tip_width_is_measured(si):
         why = ('このサイズは規格リードの先端幅を実測済みなので<b>判定</b>している'
-               f'（{MEASURED_SIZES.get(size, "実測")}）。実物のアルトは 2 MP × 2 リード × 4 z が'
-               'すべて正だった —— 測り直すなら、<b>別の銘柄で符号が変わらないか</b>を見る。')
+               f'（{MEASURED_SIZES.get(size, "実測")}）。実物は 2 MP × 2 リードの全組が正だった'
+               '（アルト・ソプラノ）—— 測り直すなら、<b>別の銘柄で符号が変わらないか</b>を見る。')
     else:
         why = ('このサイズは<b>規格リードの先端幅が未実測</b>（出所の記録なし）なので参考値。'
-               'アルトでは同じ出所の値が 2.5〜3.0mm 狭く、負のかかり代はその借り物のせい'
+               '同じ出所の値はアルト・ソプラノで 1〜3mm 狭く、負のかかり代はその借り物のせい'
                'だった —— <b>このシートはそれを実物で決めるためのもの。</b>')
     o.append('<p class="claim"><b>モデルの言い分</b>　' + "　／　".join(claim)
              + '。かかり代が負＝<b>リードの縁がサイドレールに載らず窓の上に浮く</b>'
@@ -379,8 +400,8 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
     o.append('<p class="note">★ <b>z=20 の行は「先端から 20mm の幅」そのもの</b>'
              '（基準定数 <span class="k">reed_width_at20_mm</span>）。'
              'リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定している。'
-             'アルトの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが'
-             ' 2mm 前後広かった</b>（旧既定は踵のほうを広く置いていた）。'
+             'アルト・ソプラノの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが'
+             ' 1〜2mm 広かった</b>（旧既定は踵のほうを広く置いていた）。'
              '先端幅・踵幅（節 A）と合わせれば、手元のリードでも直線かどうかが言える。</p>')
 
     # ---- C 光にかざす
@@ -408,6 +429,73 @@ def page(size: str, label: str, m: dict, r: dict, src: str,
              '（片減り・反り・リガチャーの当たり・吹いた感じ）</span></h2>')
     o.append('<div class="memo">' + '<div></div>' * 6 + '</div>')
 
+    o.append(FOOT_COMPARE)
+    o.append('</section>')
+    if size in MP_SHAPE_SIZES:
+        o.append(mp_shape_page(size, label, m, src, mps, rev, w))
+    return "\n".join(o)
+
+
+def mp_shape_page(size: str, label: str, m: dict, src: str, mps: int, rev: str,
+                  w: dict | None) -> str:
+    """3 枚目: マウスピースの外形。**窓を実物へ合わせたつまみの意味を決める。**"""
+    o = [head(label, src, rev, "③ マウスピースの外形（窓を直した根拠の確かめ）")]
+    o.append('<p class="claim"><b>なぜ測るか</b>　' + MP_SHAPE_SIZES[size]
+             + (f'。モデルのかかり代が最小になるのは z={w["z"]:.1f}（節 B の実測より手前）'
+                if w else '') + '。</p>')
+    o.append('<h2>E　リード面の外幅と窓幅　<span><b>外幅は外側ジョウをリードが載る面に'
+             '沿わせて</b>、その z で面の端から端。窓幅は内側ジョウ（z=5 以降は節 B）'
+             '</span></h2>')
+    o.append('<table class="tall"><colgroup><col style="width:11mm">'
+             '<col style="width:17mm"><col style="width:17mm"><col style="width:17mm">'
+             + '<col>' * (2 * mps) + '</colgroup>')
+    o.append('<tr><th rowspan="2" class="num">z<br>[mm]</th>'
+             '<th colspan="3">モデルの予測</th>'
+             f'<th colspan="{mps}">実測 外幅（外側ジョウ）</th>'
+             f'<th colspan="{mps}">実測 窓幅（内側ジョウ）</th></tr>'
+             '<tr><th class="num">外幅</th><th class="num">窓幅</th>'
+             '<th class="num">レール/片側</th>'
+             + "".join(f'<th class="num">MP#{i}</th>' for i in range(1, mps + 1)) * 2
+             + '</tr>')
+    with profiles.params_scope(m):
+        for z in FACE_Z:
+            face = profiles.reed_chord(m, z)
+            ow = 2.0 * profiles.window_open_half_width(m, z)
+            win = (cells(mps) if z in WINDOW_Z_EXTRA else
+                   f'<td class="num" colspan="{mps}">節 B</td>' if z >= 5.0 else
+                   f'<td class="num" colspan="{mps}">—</td>')
+            o.append(f'<tr><th class="num fill">{z:.0f}</th>'
+                     f'<td class="num">{face:.2f}</td><td class="num">{ow:.2f}</td>'
+                     f'<td class="num">{(face - ow) / 2.0:.2f}</td>'
+                     + cells(mps) + win + '</tr>')
+    o.append('</table>')
+    o.append('<p class="note"><b>z=1〜3 の外幅はティップの輪郭そのもの</b>'
+             '（外幅の半分の x で前縁がその z に来る）。z=1 は丸みの上なので'
+             '深さバーで z を出してから印を付ける。</p>')
+
+    o.append('<h2>F　1 点ずつ　<span>どちらも硬いランドマークから</span></h2>')
+    o.append('<table class="tall"><colgroup><col style="width:36mm"><col>'
+             '<col style="width:17mm">' + '<col style="width:22mm">' * mps + '</colgroup>')
+    o.append('<tr><th>量</th><th>どこを測るか</th><th class="num">モデル</th>'
+             + "".join(f'<th class="num">MP#{i}</th>' for i in range(1, mps + 1)) + '</tr>')
+    rows = [
+        ('最大径<br><span class="k">body_dia</span>',
+         "<b>テーブルと平行に</b>挟む（テーブル面から反対側へ当てると小さく出る）",
+         m["body_dia"]),
+        ("ティップ端 → 窓の後縁",
+         'ティップ端に深さバー（<span class="k">docs/print-inspection.md</span>'
+         ' §5.2 と同じ手順）',
+         profiles.window_end_z(m)),
+    ]
+    for name, how, val in rows:
+        o.append(f'<tr><th class="fill">{name}</th><td class="note">{how}</td>'
+                 f'<td class="num">{val:.2f}</td>' + cells(mps) + '</tr>')
+    o.append('</table>')
+    o.append('<p class="note">最大径と窓の後縁は<b>このサイズでは未実測</b>'
+             '（最大径はテナーをボア比で縮めた値、窓の長さはテナーを軸比で縮めた値）。'
+             'アルトでは同じ 2 量の実測で、比で引く考え方そのものが壊れた。</p>')
+    o.append('<h2>G　そのほか気づいたこと</h2>')
+    o.append('<div class="memo">' + '<div></div>' * 4 + '</div>')
     o.append(FOOT_COMPARE)
     o.append('</section>')
     return "\n".join(o)

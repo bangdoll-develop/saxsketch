@@ -58,15 +58,18 @@ SWEEP_KEYS = ["tip_curve_depth", "heel_edge_thickness", "side_rail_thin",
 
 def _cases(comp, base: dict) -> list[tuple[str, dict]]:
     specs = {s.key: s for s in comp.param_specs()}
+    # 「深いカーブ」は帯の上限（2026-09-22 に実物 10 本の逆算の最大 2.72 が入る
+    # よう 2.5 → 2.8）。数字を書くと上限を動かしたとき組がそこへ付いてこない。
+    deep = specs["tip_curve_depth"].max
     out: list[tuple[str, dict]] = [
         ("既定", dict(base)),
         ("ファイルド", dict(base, file_cut="filed")),
         # 円弧が最も深い × 前縁が最も後ろ。上面の折れと細片が同時に効く組
         ("深い円弧×深いカーブ", dict(base, heel_edge_thickness=0.3,
-                                     tip_curve_depth=2.5)),
+                                     tip_curve_depth=deep)),
         ("前縁直線（旧形状）", dict(base, tip_curve_depth=0.0)),
         ("薄い側端×深いカーブ", dict(base, side_rail_thin=0.20,
-                                     tip_curve_depth=2.5, file_cut="filed")),
+                                     tip_curve_depth=deep, file_cut="filed")),
         # ファイルド × 深い円弧 × 先端幅 > 踵幅。**1 パラメータの端値では届かない**
         # 領域で、表皮を落とす面がテーブル面より下へ潜る組（4-C.2c で発見）。
         ("ファイルド×深い円弧×先端広", dict(base, heel_edge_thickness=0.3,

@@ -22,6 +22,8 @@ from . import reference_check
 SEAT_REACH_TOL = reference_check.SEAT_REACH_TOL
 
 #: 前縁とマウスピースのティップ輪郭のずれをどこから警告するか [mm]。
+#: **MP の輪郭を実測したサイズだけ**（`reference_check.mp_tip_contour_is_measured`、
+#: いまは無い）。
 #: **円弧では輪郭に 0.1mm より近づけない**（実物の輪郭は真円ではなく、既定同士でも
 #: 0.094〜0.118 残る）ので、その残差を警告にしない値にする。他のカードと同じ 0.3。
 TIP_CONTOUR_TOL = 0.3
@@ -68,12 +70,14 @@ def _specs(t: dict) -> list[ParamSpec]:
         # **壁は数字ではなく関係**（`param_bounds`）: 中央厚 − 側端厚 ≥
         # `rp.MIN_CROWN_MM`。以前は上限 1.6 を `heel_thickness` の下限 1.8 より
         # 小さく置いて**2 本の直値で**これを代理していたが、実物のアルト #1 の
-        # 1.65（2026-09-21）を締め出した。帯の上限は実測 5 本（1.5〜1.65）の最大。
+        # 1.65（2026-09-21）を締め出した。帯の上限は実測 10 本の最大
+        # （アルト 1.5〜1.65 / ソプラノ 1.0〜1.45）。
         f("heel_edge_thickness", "踵の側端厚", "プロファイル", "mm", 0.3, 1.65, 0.05,
           "元のケーン管の円弧を決める（断面がカマボコになる）。中央厚との差が"
-          "大きいほど深い円弧。実物のアルト 5 本で 1.5〜1.65",
+          "大きいほど深い円弧。実物はアルト 5 本で 1.5〜1.65、ソプラノ 5 本で 1.0〜1.45",
           advanced=True,
-          source="帯の上限は実物のアルト 5 本の最大（2026-09-21）。壁は踵厚 − 0.2",
+          source="帯の上限は実物 10 本の最大（アルト 2026-09-21 / ソプラノ 09-22）。"
+                 "壁は踵厚 − 0.2",
           hard_max=3.6 - rp.MIN_CROWN_MM),
         f("vamp_length", "ヴァンプ長", "プロファイル", "mm",
           reed_model.VAMP_LENGTH_RANGE[0], reed_model.VAMP_LENGTH_RANGE[1], 0.5,
@@ -93,9 +97,19 @@ def _specs(t: dict) -> list[ParamSpec]:
           "側端厚 ÷ 中央厚。小さいほど柔軟で鳴りやすいが耐久が落ちる"),
         f("tip_corner_r", "先端角の丸み", "レール", "mm", 0.3, 2.0, 0.1,
           "平面視の先端角。マウスピースのティップレール形状に合わせる", advanced=True),
-        f("tip_curve_depth", "先端カーブ", "レール", "mm", 0.0, 2.5, 0.1,
+        # 上限 2.5 には出所が無く、実物 10 本の逆算 1.91〜2.72 のうち 6 本
+        # （アルト 2・ソプラノ 4）を締め出していた（2026-09-22）。**実測の最大が
+        # 入るぶんだけ**広げて 2.8。**関係「半幅 − 丸み」にはしなかった** ——
+        # 先端幅・踵幅・丸み・全長を振り、その際（0 / 0.1 / 1.0 手前）を 1440
+        # 通り見ると 45 通り前縁の輪郭が折れた（踵が先端より大きく広い組と、
+        # 先端が大きく広い組の深い所）。0.1 刻みで全域を見ると 2.8 以下で折れる
+        # のは先端 9.0 × 踵 ≥ 15.4 の 5 通りで、うち 1 通り（踵 18.0・丸み 1.2・
+        # 全長 55）は旧来の 2.5 でも折れていた。
+        f("tip_curve_depth", "先端カーブ", "レール", "mm", 0.0, 2.8, 0.1,
           "前縁の落ち込み。角が中央よりどれだけ後ろに来るか。0 にすると前縁が"
-          "直線になり、マウスピースのティップレールから角が 1.3〜1.6mm 前へ出る"),
+          "直線になり、角がティップレールより前へ出る。実物（逆算）はアルト 5 本で"
+          " 1.91〜2.61、ソプラノ 5 本で 2.48〜2.72",
+          source="上限は実物 10 本の逆算の最大 2.72 を入れるぶん（2026-09-21 / 22）"),
         # --- カット ---
         ParamSpec(key="file_cut", label="カット種別", category="カット",
                   type="choice", default=t["file_cut"],
@@ -142,6 +156,9 @@ class ReedComponent(Component):
         （側端厚 ≤ 1.6・中央厚 ≥ 1.8）に分けて持っていたので、実物の 1.65 が
         入らなかった。中央厚の側は**静的な下限 1.8 より緩めない**（あちらの
         出所は別で、ここで広げる理由が無い）。
+
+        先端カーブは関係にしなかった（`_specs` の注記。「半幅 − 丸み」は
+        走査で 45 通り輪郭が折れた）。
         """
         spec = {s.key: s for s in self.param_specs()}
         crown = rp.MIN_CROWN_MM
@@ -287,9 +304,10 @@ class ReedComponent(Component):
     #: 約 2.26 になるところを 0.4mm 深く取り込むところだった。
     SURVEY_TIP_KEY = "tip_full_width_z"
     #: 採寸できる基準定数。`reed_width_at20_mm` は幅のテーパーが直線かを反証する
-    #: 欄（Phase 4-F）。**アルトで測った**（2026-09-21）: 直線はほぼ成立して
-    #: 残差 +0.12／+0.08（外へわずかに膨らむ側）、**外れていたのは向き**で、
-    #: 旧既定は踵が 0.6 広く、実物は先端が 1.8〜2.2 広い。
+    #: 欄（Phase 4-F）。**アルトとソプラノで測った**（2026-09-21 / 22）: 直線は
+    #: ほぼ成立して残差 +0.07〜+0.12（外へわずかに膨らむ側）、**外れていたのは
+    #: 向き**で、旧既定は踵が 0.6 広く、実物は先端がアルトで 1.8〜2.2・
+    #: ソプラノで 1.0〜1.4 広い。
     _SURVEY_SIZE_FIELDS = [
         {"key": "reed_std_length_mm", "label": "規格の全長", "unit": "mm"},
         {"key": "reed_std_tip_width_mm", "label": "規格の先端幅", "unit": "mm"},
@@ -351,8 +369,8 @@ class ReedComponent(Component):
             {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS},
             before_params, before_size, measured_params, measured_size,
             "実測をプロジェクトへ反映しました。**1 本だけ入れないこと** ——"
-            "銘柄・カット・材質で寸法は動くので（ソプラノは樹脂が 2.9mm 長く、"
-            "アルトは樹脂どうしで 2.6mm 違う）、同じサイズを複数本まとめて測って"
+            "銘柄・カットで寸法は動くので（全長はソプラノ・アルトとも樹脂が"
+            "両端に来て 3.65 / 2.6mm 違う）、同じサイズを複数本まとめて測って"
             "から入れてください。先端カーブは「側面がまっすぐになる所」まで"
             "測った値を入れれば、見かけの角（パラメータ）へ逆算して取り込みます。"
             "設計をいじって破綻したら「採寸時点へ戻す」で復元できます。")
@@ -480,9 +498,14 @@ class ReedComponent(Component):
                      f"{p['reed_length']:.1f} / {seat0:.1f}〜{seat1:.1f} mm"])
         gap = self._tip_contour_gap(p, m)
         best_d, best_gap = self._best_curve_depth(p, m)
+        # **MP 側の輪郭が未実測のサイズでは判定しない**（数字は出す）。ソプラノで
+        # 実物と食い違った（`reference_check.mp_tip_contour_is_measured`）。
+        contour_judged = reference_check.mp_tip_contour_is_measured(self.size_info)
         rows.append(["先端カーブ / MPの輪郭に最も合う値",
                      f"{p['tip_curve_depth']:.2f} / {best_d:.2f} mm"
-                     f"（最大ずれ {gap:+.2f}、合わせると {best_gap:+.2f}）"])
+                     f"（最大ずれ {gap:+.2f}、合わせると {best_gap:+.2f}）"
+                     + ("" if contour_judged else
+                        "　参考: MP の輪郭が未実測のため判定しない")])
         # 角は丸みの半径ぶん後ろへ逃げる。意図した造形なので判定には入れないが、
         # ティップレールがどれだけ露出するかは設計者が読める所に出しておく。
         reed_corner, mp_corner = self._corner_relief(p, m)
@@ -511,7 +534,7 @@ class ReedComponent(Component):
             advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
                       f"リガチャーがリードの無い位置を締めることになり、固定できません。"
                       f"全長を伸ばしてください。")
-        elif abs(gap) > TIP_CONTOUR_TOL:
+        elif contour_judged and abs(gap) > TIP_CONTOUR_TOL:
             status = "warn"
             fix = (f"先端カーブを {best_d:.1f}mm にすると最大ずれが {abs(best_gap):.2f}mm "
                    f"まで縮みます。" if abs(best_gap) <= TIP_CONTOUR_TOL else

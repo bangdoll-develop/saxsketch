@@ -87,8 +87,8 @@ def reed_length_is_measured(size_info: dict) -> bool:
 def reed_tip_width_range(size_info: dict) -> tuple[float, float]:
     """このサイズで実際に使われるリード先端幅の域 [mm]。形は `reed_length_range` と同じ。
 
-    `reed_tip_width_range_mm` を持つのは実物を測ったサイズだけ（いまはアルト、
-    2026-09-21 に 5 本）。無ければ `reed_std_tip_width_mm` の 1 点。
+    `reed_tip_width_range_mm` を持つのは実物を測ったサイズだけ（いまはアルト・
+    ソプラノ、2026-09-21 / 22 に各 5 本）。無ければ `reed_std_tip_width_mm` の 1 点。
     """
     rng = size_info.get("reed_tip_width_range_mm")
     if rng:
@@ -100,11 +100,26 @@ def reed_tip_width_range(size_info: dict) -> tuple[float, float]:
 def reed_tip_width_is_measured(size_info: dict) -> bool:
     """このサイズのリード先端幅が実測されているか。**窓のかかり代の判定の分岐。**
 
-    未実測の値は同じ出所（記録なし）で、アルトでは 13.4 に対し実物 15.85〜16.4 ——
-    2.5〜3.0mm 狭かった。その借り物を相手に「縁が窓の上に浮く」と言っていたのが
-    Phase 4-F のかかり代の負の正体だった。
+    未実測の値は同じ出所（記録なし）で、アルトでは 13.4 に対し実物 15.85〜16.4
+    （2.5〜3.0mm 狭い）、ソプラノでは 12.9 に対し 13.9〜14.15（1.0〜1.25mm 狭い）
+    だった。その借り物を相手に「縁が窓の上に浮く」と言っていたのが Phase 4-F の
+    かかり代の負の正体だった（ソプラノは窓の法則も 1.3mm 広く、負の半分はそちら）。
     """
     return bool(size_info.get("reed_tip_width_range_mm"))
+
+
+def mp_tip_contour_is_measured(size_info: dict) -> bool:
+    """基準マウスピースのティップ輪郭が実測されているか。**リード前縁との比較の分岐。**
+
+    MP 側の輪郭（`profiles.tip_contour_z`）は胴の外形をリード面で切った縁で、
+    3 サイズとも外形が借り物（ソプラノの最大径 25.0 はボア比で縮めた値）。
+    2026-09-22 のソプラノ採寸で、実物の刻印 4 と先端カーブの形が「ほぼ一致」した
+    #3（逆算 2.60）に対し、モデルの輪郭に最も合うのは 1.7 だった ——
+    **モデルの輪郭は浅すぎる疑い**が強い。かかり代と同じく片方だけの実測で
+    判定しない。輪郭は「リード面の外幅」を z=1〜3 で測れば数値で取れるので、
+    その実測（`mp_face_width_at_z_mm`）が入ったサイズから判定する。
+    """
+    return bool(size_info.get("mp_face_width_at_z_mm"))
 
 
 def _span_text(lo: float, hi: float) -> str:

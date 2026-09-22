@@ -203,7 +203,7 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
 
     # 容積の比較は**判定ではなく理由**として出す。両者は一対一で動かない:
     # マウスピースは代替する欠損円錐より短いので、容積が数十%多くても音程が
-    # 合うことがある（合う挿し込み量では soprano +25.5 / alto +20.4 /
+    # 合うことがある（合う挿し込み量では soprano +24.1 / alto +20.4 /
     # tenor +23.4%。**揃っていたのはアルトが未実測だったからで、実測を入れたら崩れた**。
     # 一度 alto +13.3 と記録したが、あれは `cavity_floor_y` の特異点ぶんを含む）。
     advice += (f"（実効容積 {effective:.2f}cc は欠損円錐 {target:.2f}cc の "
