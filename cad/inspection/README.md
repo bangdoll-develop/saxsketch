@@ -9,14 +9,31 @@
 |---|---|
 | `inspection_values.py` | 採寸表の設計値・判定帯・**実測との判定**、フェイシングカーブ表、ビーク高さの測り方（精度要求）とバッフル天井に当たる下限、**対テナー比の散らばり**、ウィンドウ長の上限、**ティップ端→窓の後縁と、そこから派生するティップレール幅**、**`bore_length` と合う挿し込み量**、**実測形状どうしの Δin_tune と「その差を作れるつまみがあるか」の全域掃引**、**実測の挿し込み位置と実用域**、**音別の感度**、篏合と音響の予測値、質量 |
 | `analyze_recording.py` | 録音（`.m4a` など）から **F0 と倍音比** |
+| `survey_sheet.py` | **記入用紙**（印刷用 HTML）。リードの採寸 9 欄（採寸フォームと同じ欄・同じ並び）、**同じ z での窓幅とリード幅**、**リードを載せて光にかざす ○×**。1 サイズ 2 ページ |
 
 ```bash
 .venv/Scripts/python.exe cad/inspection/inspection_values.py <project.wproj>
 .venv/Scripts/python.exe cad/inspection/inspection_values.py --size alto
+.venv/Scripts/python.exe cad/inspection/inspection_values.py --size alto --reed-seat
+.venv/Scripts/python.exe cad/inspection/inspection_values.py --size soprano --reed-seat
 .venv/Scripts/python.exe cad/inspection/analyze_recording.py <file.m4a> [--a4 440] [--notes]
 ```
 
-**実測値は `inspection_values.py` の `MEASURED` にだけ書く。** 判定・差・比の
+`survey_sheet.py` は **OCCT が要るので WSL2 で回す**（`survey_targets` を読むために
+コンポーネントを作る）。出力は Windows 正本へ直接書く:
+
+```bash
+cd ~/mp_design && source .venv/bin/activate
+python cad/inspection/survey_sheet.py \
+  --out /mnt/c/HOME/<user>/develop/claude/mp_design/cad/inspection/survey_sheet.html
+```
+
+**用紙の数字も手で写さない。** 設計値は registry、判定帯は `inspection_values.bands()`
+（＝`Component.survey_card` と同じ式）、窓幅とリード幅の予測は
+`profiles.window_open_half_width` / `reed_profiles.width`。設計やテンプレートを
+変えたら刷り直す。生成物 `survey_sheet.html` も追跡する（`verify_report.md` と同じ扱い）。
+
+**実測値は `inspection_values.py` にだけ書く**（印刷品の検品は `MEASURED`、リードが載るかの採寸は `REED_SURVEY` / `MP_SURVEY` / `WINDOW_WIDTH_AT_Z` / `REED_WIDTH_AT_Z` / `LIGHT_TEST` をサイズ別に、アルト 2026-09-21・ソプラノ 09-22）。`--reed-seat` はそちらだけを出す（同じ z の窓幅とリード幅、実物どうしのかかり代、直線からの残差）。 判定・差・比の
 一覧はそこと `.wproj` から計算する。シートに手写しの数字を置かないため。
 
 **判定は「印刷した個体の `.wproj`」に対して回す**（`PRINTED_FROM`）。

@@ -1,0 +1,392 @@
+# Phase B-3 ボア 2 本の生ログ（2026-09-06、3 サイズ・OCCT ビルドあり）
+# 読み方は docs/param-limits.md の「B-3 ボア ＋ ウィンドウ」。
+# 掃引器: PYTHONPATH=. python cad/windycity/sweep_limits.py <key> [--steps N] [--with ...]
+#
+# このスライスで掃引器に足したもの: --steps（帯の外へ歩く段数）。
+#   届く距離は「段数 × 刻み」なので、刻み 0.05mm の bore_dia は既定 40 段だと
+#   帯の端から 2.0mm しか出られず、3 サイズとも「打ち切り」で終わる。
+#   §1 がその打ち切り、§2 が --steps 200（10mm）で歩き直したもの。
+#
+# 掃引器だけでは決められなかったものを別に焼いてある:
+#   §4 シャンクの肉厚 …… 段 3 は「ソリッド 1 個か」しか見ないので、
+#      シャンクが丸ごと消えても ok と言う（体積だけが 61% 落ちる）。
+#   §5 bore_length の両端 …… 上は掃引器の目（MIN_STATIONS 20 枚）が
+#      モデルの成立条件（cavity_layout_error）より 6.5mm 手前で止まる。
+#      下は段 1〜2 が −21mm まで素通りし、ビルドが Null shape で落ちる。
+#   §6 入れた壁そのものをビルドしたもの（--no-build の結果は hard_* に入れない）。
+#
+# §4〜§6 の一回きりのスクリプトは末尾に添付（リポジトリ直下に置いて
+# PYTHONPATH=. python <file> で再現できる）。
+
+########## §1 bore_dia（既定 40 段 ＝ 帯の端から 2.0mm。**打ち切り**）
+== soprano / bore_dia ==  帯 12.8〜14.8mm 既定 13.8 刻み 0.05  [convention]
+  下へ: 幾何は 10.8mm まで通る (1.2s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 12.8 → 壁 10.8 で **85%**  [cavity_a +9.31606→+7.87883 85% / cavity_w +0.89262→+0.90651 102%]
+    内側 10.85: ok  (6.1s, 注意 2 件)
+    端 10.8: ok  (5.5s, 注意 2 件)
+    外側 10.75: ok  (5.5s, 注意 2 件)
+  上へ: 幾何は 16.8mm まで通る (0.8s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 14.8 → 壁 16.8 で **103%**  [cavity_a +10.33644→+10.66697 103%]
+    内側 16.75: ok  (6.2s, 注意 1 件)
+    端 16.8: ok  (6.2s, 注意 1 件)
+    外側 16.85: ok  (6.5s, 注意 1 件)
+== alto / bore_dia ==  帯 14.8〜16.8mm 既定 15.8 刻み 0.05  [convention]
+  下へ: 幾何は 12.8mm まで通る (0.8s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 14.8 → 壁 12.8 で **88%**  [cavity_a +10.85117→+9.57005 88% / cavity_w +0.90434→+0.90863 100%]
+    内側 12.85: ok  (6.2s, 注意 2 件)
+    端 12.8: ok  (6.7s, 注意 2 件)
+    外側 12.75: ok  (6.1s, 注意 2 件)
+  上へ: 幾何は 18.8mm まで通る (0.8s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 16.8 → 壁 18.8 で **102%**  [cavity_a +11.53776→+11.73253 102% / cavity_w +0.88242→+0.75666 86%]
+    内側 18.75: ok  (7.5s, 注意 1 件)
+    端 18.8: ok  (7.5s, 注意 1 件)
+    外側 18.85: ok  (7.5s, 注意 1 件)
+== tenor / bore_dia ==  帯 16〜18mm 既定 17 刻み 0.05  [convention]
+  下へ: 幾何は 14mm まで通る (0.9s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 16 → 壁 14 で **88%**  [cavity_a +11.87771→+10.48041 88% / cavity_w +0.90687→+0.90937 100%]
+    内側 14.05: ok  (6.3s, 注意 2 件)
+    端 14: ok  (6.2s, 注意 2 件)
+    外側 13.95: ok  (6.4s, 注意 2 件)
+  上へ: 幾何は 20mm まで通る (0.8s)  40 段まで通った（打ち切り。壁はもっと外）
+    応答[本命 cavity_a]: 帯の端 18 → 壁 20 で **107%**  [cavity_a +13.09472→+14.01969 107% / cavity_w +0.89143→+0.78117 88%]
+    内側 19.95: ok  (7.1s, 注意 0 件)
+    端 20: ok  (7.3s, 注意 0 件)
+    外側 20.05: ok  (7.3s, 注意 0 件)
+
+########## §2 bore_dia --steps 200（帯の端から 10mm）
+== soprano / bore_dia ==  帯 12.8〜14.8mm 既定 13.8 刻み 0.05  [convention]
+  下へ: 幾何は 2.8mm まで通る (5.8s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 12.8 → 壁 2.8 で **40%**  [cavity_a +9.31606→+3.68795 40% / cavity_w +0.89262→+0.91182 102%]
+    内側 2.85: ok  (6.3s, 注意 2 件)
+    端 2.8: ok  (7.6s, 注意 2 件)
+    外側 2.75: ok  (6.8s, 注意 2 件)
+  上へ: 幾何は 24.8mm まで通る (3.4s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 14.8 → 壁 24.8 で **15%**  [cavity_a +10.33644→+1.52804 15%]
+    内側 24.75: *** ソリッド 2 個  (6.8s, 注意 2 件)
+    端 24.8: *** ソリッド 2 個  (6.4s, 注意 2 件)
+    外側 24.85: *** ソリッド 2 個  (6.6s, 注意 2 件)
+== alto / bore_dia ==  帯 14.8〜16.8mm 既定 15.8 刻み 0.05  [convention]
+  下へ: 幾何は 4.8mm まで通る (3.8s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 14.8 → 壁 4.8 で **49%**  [cavity_a +10.85117→+5.29904 49% / cavity_w +0.90434→+0.91066 101%]
+    内側 4.85: ok  (6.4s, 注意 2 件)
+    端 4.8: ok  (6.4s, 注意 2 件)
+    外側 4.75: ok  (6.4s, 注意 2 件)
+  上へ: 幾何は 26.8mm まで通る (4.1s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 16.8 → 壁 26.8 で **2%**  [cavity_a +11.53776→+0.24415 2% / cavity_w +0.88242→+0.00803 1%]
+    → **死に帯**（つまみが空回りする）。効くのは 26.2mm まで ＝ **hard_max はここ**
+    内側 26.15: ok  (8.2s, 注意 2 件)
+    端 26.2: ok  (8.1s, 注意 2 件)
+    外側 26.25: ok  (8.3s, 注意 2 件)
+== tenor / bore_dia ==  帯 16〜18mm 既定 17 刻み 0.05  [convention]
+  下へ: 幾何は 6mm まで通る (3.9s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 16 → 壁 6 で **47%**  [cavity_a +11.87771→+5.53010 47% / cavity_w +0.90687→+0.91095 100%]
+    内側 6.05: ok  (6.5s, 注意 2 件)
+    端 6: ok  (6.5s, 注意 2 件)
+    外側 5.95: ok  (6.4s, 注意 2 件)
+  上へ: 幾何は 28mm まで通る (4.0s)  200 段まで通った（打ち切り ＝ 帯の端から 10 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_a]: 帯の端 18 → 壁 28 で **25%**  [cavity_a +13.09472→+3.27251 25% / cavity_w +0.89143→+0.01204 1%]
+    → 注意: 本命 cavity_a は生きているが cavity_w 1% は死に帯。**本命の陰に隠れる**ので人が決めること
+    内側 27.95: ok  (8.4s, 注意 2 件)
+    端 28: ok  (8.2s, 注意 2 件)
+    外側 28.05: ok  (8.1s, 注意 2 件)
+
+########## §3 bore_length（既定 40 段 ＝ 帯の端から 40mm）
+== soprano / bore_length ==  帯 19〜48mm 既定 38.3 刻み 1  [convention]
+  下へ: 幾何は -21mm まで通る (1.9s)  40 段まで通った（打ち切り ＝ 帯の端から 40 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_h]: 帯の端 19 → 壁 -21 で **2%**  [cavity_h +0.05390→-0.00084 2% / cavity_a +0.58752→-0.01079 2%]
+    → **死に帯**（つまみが空回りする）。効くのは -12mm まで ＝ **hard_min はここ**
+    内側 -11: *** RAISED ValueError: Null TopoDS_Shape object  (7.4s, 注意 0 件)
+    端 -12: *** RAISED ValueError: Null TopoDS_Shape object  (7.1s, 注意 0 件)
+    外側 -13: *** RAISED ValueError: Null TopoDS_Shape object  (6.9s, 注意 0 件)
+  上へ: 幾何は 58mm まで通る (0.1s)  59 で止まった: ステーション 19 枚（< 20）
+    応答: 壁のすぐ外で幾何が落ちるので中心差分が取れない（壁は段 1〜2 が決めている）
+    内側 57: ok  (4.3s, 注意 2 件)
+    端 58: ok  (4.8s, 注意 2 件)
+    外側 59: 幾何で弾かれる（ステーション 19 枚（< 20））
+== alto / bore_length ==  帯 24〜60mm 既定 48.3 刻み 1  [convention]
+  下へ: 幾何は -16mm まで通る (1.2s)  40 段まで通った（打ち切り ＝ 帯の端から 40 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_h]: 帯の端 24 → 壁 -16 で **9%**  [cavity_h +0.04974→+0.00455 9% / cavity_a +0.62462→+0.05002 8%]
+    内側 -15: *** RAISED ValueError: Null TopoDS_Shape object  (8.2s, 注意 0 件)
+    端 -16: *** RAISED ValueError: Null TopoDS_Shape object  (8.1s, 注意 0 件)
+    外側 -17: *** RAISED ValueError: Null TopoDS_Shape object  (8.2s, 注意 0 件)
+  上へ: 幾何は 78mm まで通る (0.2s)  79 で止まった: ステーション 19 枚（< 20）
+    応答: 壁のすぐ外で幾何が落ちるので中心差分が取れない（壁は段 1〜2 が決めている）
+    内側 77: ok  (4.8s, 注意 2 件)
+    端 78: ok  (4.3s, 注意 3 件)
+    外側 79: 幾何で弾かれる（ステーション 19 枚（< 20））
+== tenor / bore_length ==  帯 29〜72mm 既定 57.5 刻み 1  [convention]
+  下へ: 幾何は -11mm まで通る (1.2s)  40 段まで通った（打ち切り ＝ 帯の端から 40 外まで。**その先は未測定**。--steps で伸ばせる）
+    応答[本命 cavity_h]: 帯の端 29 → 壁 -11 で **13%**  [cavity_h +0.04441→+0.00563 13% / cavity_a +0.57450→+0.06594 11%]
+    内側 -10: *** RAISED ValueError: Null TopoDS_Shape object  (8.4s, 注意 0 件)
+    端 -11: *** RAISED ValueError: Null TopoDS_Shape object  (8.2s, 注意 0 件)
+    外側 -12: *** RAISED ValueError: Null TopoDS_Shape object  (8.4s, 注意 0 件)
+  上へ: 幾何は 95mm まで通る (0.3s)  96 で止まった: ステーション 17 枚（< 20）
+    応答: 壁のすぐ外で幾何が落ちるので中心差分が取れない（壁は段 1〜2 が決めている）
+    内側 94: ok  (4.4s, 注意 2 件)
+    端 95: ok  (4.4s, 注意 2 件)
+    外側 96: 幾何で弾かれる（ステーション 17 枚（< 20））
+
+########## §4 シャンクの肉厚（b3_probe_wall.py）
+== soprano == shank_dia φ18.67 / min_wall 1.8 / 帯 12.8〜14.8 / 既定 φ13.8  肉厚が min_wall になるのは φ15.07
+   φ 14.80  肉厚 +1.94mm  params_error=None  ソリッド 1 個 / 体積   11776.2mm3  (6.4s)
+   φ 15.07  肉厚 +1.80mm  params_error=None  ソリッド 1 個 / 体積   11441.2mm3  (6.0s)
+   φ 15.57  肉厚 +1.55mm  params_error=None  ソリッド 1 個 / 体積   10807.1mm3  (5.9s)
+   φ 16.67  肉厚 +1.00mm  params_error=None  ソリッド 1 個 / 体積    9352.8mm3  (6.3s)
+   φ 17.67  肉厚 +0.50mm  params_error=None  ソリッド 1 個 / 体積    7969.6mm3  (6.4s)
+   φ 18.27  肉厚 +0.20mm  params_error=None  ソリッド 1 個 / 体積    7128.7mm3  (6.8s)
+   φ 18.67  肉厚 +0.00mm  params_error=None  ソリッド 1 個 / 体積    6570.0mm3  (6.5s)
+   φ 19.07  肉厚 -0.20mm  params_error=None  ソリッド 1 個 / 体積    6106.0mm3  (6.3s)
+   φ 19.67  肉厚 -0.50mm  params_error=None  ソリッド 1 個 / 体積    5478.7mm3  (6.2s)
+   φ 20.67  肉厚 -1.00mm  params_error=None  ソリッド 1 個 / 体積    4541.0mm3  (6.6s)
+== alto == shank_dia φ23.2 / min_wall 1.8 / 帯 14.8〜16.8 / 既定 φ15.8  肉厚が min_wall になるのは φ19.60
+   φ 16.80  肉厚 +3.20mm  params_error=None  ソリッド 1 個 / 体積   20555.6mm3  (6.8s)
+   φ 19.60  肉厚 +1.80mm  params_error=None  ソリッド 1 個 / 体積   15261.8mm3  (7.6s)
+   φ 20.10  肉厚 +1.55mm  params_error=None  ソリッド 1 個 / 体積   14253.1mm3  (7.5s)
+   φ 21.20  肉厚 +1.00mm  params_error=None  ソリッド 1 個 / 体積   11979.3mm3  (7.5s)
+   φ 22.20  肉厚 +0.50mm  params_error=None  ソリッド 1 個 / 体積    9853.4mm3  (7.7s)
+   φ 22.80  肉厚 +0.20mm  params_error=None  ソリッド 1 個 / 体積    8579.5mm3  (7.5s)
+   φ 23.20  肉厚 +0.00mm  params_error=None  ソリッド 1 個 / 体積    7740.8mm3  (7.5s)
+   φ 23.60  肉厚 -0.20mm  params_error=None  ソリッド 1 個 / 体積    7117.1mm3  (7.8s)
+   φ 24.20  肉厚 -0.50mm  params_error=None  ソリッド 1 個 / 体積    6281.8mm3  (8.1s)
+   φ 25.20  肉厚 -1.00mm  params_error=None  ソリッド 1 個 / 体積    5047.4mm3  (7.7s)
+== tenor == shank_dia φ23.0 / min_wall 1.8 / 帯 16.0〜18.0 / 既定 φ17.0  肉厚が min_wall になるのは φ19.40
+   φ 18.00  肉厚 +2.50mm  params_error=None  ソリッド 1 個 / 体積   26810.0mm3  (6.8s)
+   φ 19.40  肉厚 +1.80mm  params_error=None  ソリッド 1 個 / 体積   23515.2mm3  (7.3s)
+   φ 19.90  肉厚 +1.55mm  params_error=None  ソリッド 1 個 / 体積   22284.4mm3  (7.4s)
+   φ 21.00  肉厚 +1.00mm  params_error=None  ソリッド 1 個 / 体積   19483.0mm3  (8.0s)
+   φ 22.00  肉厚 +0.50mm  params_error=None  ソリッド 1 個 / 体積   16833.2mm3  (7.4s)
+   φ 22.60  肉厚 +0.20mm  params_error=None  ソリッド 1 個 / 体積   15198.3mm3  (7.4s)
+   φ 23.00  肉厚 +0.00mm  params_error=None  ソリッド 1 個 / 体積   14090.7mm3  (7.7s)
+   φ 23.40  肉厚 -0.20mm  params_error=None  ソリッド 1 個 / 体積   13240.6mm3  (7.4s)
+   φ 24.00  肉厚 -0.50mm  params_error=None  ソリッド 1 個 / 体積   12004.9mm3  (7.5s)
+   φ 25.00  肉厚 -1.00mm  params_error=None  ソリッド 1 個 / 体積   10062.4mm3  (7.5s)
+
+########## §5 bore_length の両端（b3_probe_len.py）
+== soprano == 全長 71.4 / 帯 19〜48 / 既定 38.3
+   上／既定: モデルが弾くのは 65.2mm（zb=6.2） / 掃引器の目（20 枚）は 58.7mm
+   上／window_length=44: モデルが弾くのは 65.2mm（zb=6.2） / 掃引器の目（20 枚）は 58.7mm
+   上／overall_length=53.5: モデルが弾くのは 47.3mm（zb=6.2） / 掃引器の目（20 枚）は 40.7mm
+   下／bore_length  +2.0  zb=  69.4  params_error=None  ソリッド 1 個 / 体積  16189.7mm3  (8.6s)
+   下／bore_length  +1.0  zb=  70.4  params_error=None  ソリッド 1 個 / 体積  16278.7mm3  (8.4s)
+   下／bore_length  +0.0  zb=  71.4  params_error=None  ソリッド 1 個 / 体積  16367.5mm3  (8.0s)
+   下／bore_length  -1.0  zb=  72.4  params_error=None  ソリッド 1 個 / 体積  16455.2mm3  (8.0s)
+   下／bore_length  -1.4  zb=  72.8  params_error=None  ソリッド 1 個 / 体積  16489.6mm3  (7.9s)
+   下／bore_length  -1.5  zb=  72.9  params_error=None  ソリッド 1 個 / 体積  16498.1mm3  (8.4s)
+   下／bore_length  -2.0  zb=  73.4  params_error=None  RAISED ValueError: Null TopoDS_Shape object  (6.8s)
+== alto == 全長 91.7 / 帯 24〜60 / 既定 48.3
+   上／既定: モデルが弾くのは 85.5mm（zb=6.2） / 掃引器の目（20 枚）は 78.9mm
+   上／window_length=44: モデルが弾くのは 85.5mm（zb=6.2） / 掃引器の目（20 枚）は 78.9mm
+   上／overall_length=69: モデルが弾くのは 62.800000000000004mm（zb=6.2） / 掃引器の目（20 枚）は 56.2mm
+   下／bore_length  +2.0  zb=  89.7  params_error=None  ソリッド 1 個 / 体積  27679.9mm3  (9.7s)
+   下／bore_length  +1.0  zb=  90.7  params_error=None  ソリッド 1 個 / 体積  27795.7mm3  (9.6s)
+   下／bore_length  +0.0  zb=  91.7  params_error=None  ソリッド 1 個 / 体積  27910.0mm3  (9.4s)
+   下／bore_length  -1.0  zb=  92.7  params_error=None  ソリッド 1 個 / 体積  28024.5mm3  (8.9s)
+   下／bore_length  -1.4  zb=  93.1  params_error=None  ソリッド 1 個 / 体積  28069.3mm3  (8.9s)
+   下／bore_length  -1.5  zb=  93.2  params_error=None  ソリッド 1 個 / 体積  28080.5mm3  (9.8s)
+   下／bore_length  -2.0  zb=  93.7  params_error=None  RAISED ValueError: Null TopoDS_Shape object  (7.8s)
+== tenor == 全長 107.5 / 帯 29〜72 / 既定 57.5
+   上／既定: モデルが弾くのは 101.10000000000001mm（zb=6.4） / 掃引器の目（20 枚）は 93.8mm
+   上／window_length=44: モデルが弾くのは 101.10000000000001mm（zb=6.4） / 掃引器の目（20 枚）は 93.8mm
+   上／overall_length=80.5: モデルが弾くのは 74.2mm（zb=6.3） / 掃引器の目（20 枚）は 66.80000000000001mm
+   下／bore_length  +2.0  zb= 105.5  params_error=None  ソリッド 1 個 / 体積  36566.0mm3  (10.4s)
+   下／bore_length  +1.0  zb= 106.5  params_error=None  ソリッド 1 個 / 体積  36700.3mm3  (10.7s)
+   下／bore_length  +0.0  zb= 107.5  params_error=None  ソリッド 1 個 / 体積  36834.5mm3  (10.0s)
+   下／bore_length  -1.0  zb= 108.5  params_error=None  ソリッド 1 個 / 体積  36967.6mm3  (10.0s)
+   下／bore_length  -1.4  zb= 108.9  params_error=None  ソリッド 1 個 / 体積  37020.1mm3  (10.2s)
+   下／bore_length  -1.5  zb= 109.0  params_error=None  ソリッド 1 個 / 体積  37033.1mm3  (10.4s)
+   下／bore_length  -2.0  zb= 109.5  params_error=None  RAISED ValueError: Null TopoDS_Shape object  (8.6s)
+
+########## §6 入れた壁をビルドする（b3_probe_latch.py / b3_probe_hlo.py）
+== soprano == 全長 71.4 / シャンク φ18.67
+   bore_length   63.90  ステーション 14 枚  params_error=None  ソリッド 1 個 / 体積  12021.2mm3  (4.2s)
+   bore_length   64.90  ステーション 13 枚  params_error=None  ソリッド 1 個 / 体積  12004.4mm3  (3.6s)
+   bore_length   65.90  ステーション ValueError 枚  params_error=空洞の並び（窓→チェンバー→スロート→ボア）が成立し  （params_error で弾かれる）  (0.0s)
+   bore_dia   18.62  ステーション 35 枚  params_error=None  ソリッド 1 個 / 体積   6639.6mm3  (6.6s)
+== alto == 全長 91.7 / シャンク φ23.2
+   bore_length   84.20  ステーション 12 枚  params_error=None  ソリッド 1 個 / 体積  21507.9mm3  (3.7s)
+   bore_length   85.20  ステーション 13 枚  params_error=None  ソリッド 1 個 / 体積  21491.1mm3  (3.7s)
+   bore_length   86.20  ステーション ValueError 枚  params_error=空洞の並び（窓→チェンバー→スロート→ボア）が成立し  （params_error で弾かれる）  (0.0s)
+   bore_dia   23.15  ステーション 44 枚  params_error=None  ソリッド 1 個 / 体積   7844.0mm3  (7.4s)
+== tenor == 全長 107.5 / シャンク φ23.0
+   bore_length  100.00  ステーション 12 枚  params_error=None  ソリッド 1 個 / 体積  26972.3mm3  (3.9s)
+   bore_length  101.00  ステーション 12 枚  params_error=None  ソリッド 1 個 / 体積  26953.7mm3  (4.0s)
+   bore_length  102.00  ステーション ValueError 枚  params_error=空洞の並び（窓→チェンバー→スロート→ボア）が成立し  （params_error で弾かれる）  (0.0s)
+   bore_dia   22.95  ステーション 43 枚  params_error=None  ソリッド 1 個 / 体積  14229.9mm3  (7.4s)
+soprano  bore_length 1.0: ソリッド 1 個 / 体積  16278.7mm3  (9.0s)
+alto     bore_length 1.0: ソリッド 1 個 / 体積  27795.7mm3  (9.5s)
+tenor    bore_length 1.0: ソリッド 1 個 / 体積  36700.3mm3  (10.4s)
+
+
+########## 添付: 一回きりのスクリプト
+
+----- b3_probe_wall.py -----
+# -*- coding: utf-8 -*-
+"""bore_dia の上側。**シャンクの肉厚**が実際にどこで壊れるかを 1 点ずつ測る。
+
+掃引器の段 3 は「ソリッド 1 個 ＋ 体積 > 100mm3」しか見ないので、
+**シャンクが消えても 1 個のまま**なら ok と言う（alto 26.2 / tenor 28.0 が
+それ）。ここでは肉厚を並べて印字し、どこで割れるか・どこで印刷できなく
+なるかを分けて見る。
+"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.stdout.reconfigure(encoding="utf-8")
+
+from saxsketch.core.registry import get_registry
+from saxsketch.instruments.saxophone.components import profiles as pf
+
+reg = get_registry()
+for size in ("soprano", "alto", "tenor"):
+    comp = reg.get("saxophone").make_component("mouthpiece", size)
+    base = {s.key: s.default for s in comp.param_specs()}
+    sh = base["shank_dia"]; mw = base["min_wall"]
+    spec = next(s for s in comp.param_specs() if s.key == "bore_dia")
+    print(f"== {size} == shank_dia φ{sh} / min_wall {mw} / 帯 {spec.min}〜{spec.max}"
+          f" / 既定 φ{base['bore_dia']}  肉厚が min_wall になるのは φ{sh - 2*mw:.2f}",
+          flush=True)
+    for d in (spec.max, sh - 2*mw, sh - 2*mw + 0.5, sh - 2.0, sh - 1.0, sh - 0.4,
+              sh, sh + 0.4, sh + 1.0, sh + 2.0):
+        p = dict(base, bore_dia=round(d, 3))
+        wall = (sh - d) / 2.0
+        err = comp.params_error(p)
+        t0 = time.time()
+        try:
+            part = comp.build(p)
+            got = f"ソリッド {len(part.solids())} 個 / 体積 {part.volume:9.1f}mm3"
+        except Exception as exc:
+            got = f"RAISED {type(exc).__name__}: {exc}"[:60]
+        print(f"   φ{d:6.2f}  肉厚 {wall:+5.2f}mm  params_error={'None' if err is None else err[:30]}"
+              f"  {got}  ({time.time()-t0:.1f}s)", flush=True)
+
+----- b3_probe_len.py -----
+# -*- coding: utf-8 -*-
+"""bore_length の両端。**掃引器の目とモデルの成立条件は別の場所にある。**
+
+上: 掃引器は `MIN_STATIONS`（20 枚）で止まるが、モデル自身が弾くのは
+    `cavity_layout_error`（窓 2.0mm）。どちらが先かを数える。
+下: cheap（段 1〜2）は負まで通るのにビルドが Null shape で落ちる。
+    どこから落ちるかを 1mm ずつ測る。
+"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.stdout.reconfigure(encoding="utf-8")
+
+from saxsketch.core.registry import get_registry
+from saxsketch.instruments.saxophone.components import profiles as pf
+
+reg = get_registry()
+for size in ("soprano", "alto", "tenor"):
+    comp = reg.get("saxophone").make_component("mouthpiece", size)
+    base = {s.key: s.default for s in comp.param_specs()}
+    spec = next(s for s in comp.param_specs() if s.key == "bore_length")
+    L = base["overall_length"]
+    print(f"== {size} == 全長 {L} / 帯 {spec.min}〜{spec.max} / 既定 {base['bore_length']}",
+          flush=True)
+
+    # --- 上: モデルの成立条件 vs 掃引器の目。3 通りの相手で。
+    for tag, extra in (("既定", {}), ("window_length=44", {"window_length": 44.0}),
+                       (f"overall_length={next(s for s in comp.param_specs() if s.key=='overall_length').min:g}",
+                        {"overall_length": next(s for s in comp.param_specs()
+                                                if s.key == "overall_length").min})):
+        b = dict(base, **extra)
+        err_at = st_at = None
+        for i in range(0, 1200):
+            v = spec.min + i * 0.1
+            p = dict(b, bore_length=v)
+            if err_at is None and comp.params_error(p) is not None:
+                err_at = v
+            if st_at is None:
+                try:
+                    if len(pf.cavity_stations(p)) < 20:
+                        st_at = v
+                except Exception:
+                    st_at = v
+            if err_at is not None and st_at is not None:
+                break
+        print(f"   上／{tag}: モデルが弾くのは {err_at}mm（zb={b['overall_length']-err_at:.1f}）"
+              f" / 掃引器の目（20 枚）は {st_at}mm", flush=True)
+
+    # --- 下: ビルドが落ちる位置。
+    for v in (2.0, 1.0, 0.0, -1.0, -1.4, -1.5, -2.0):
+        p = dict(base, bore_length=v)
+        err = comp.params_error(p)
+        t0 = time.time()
+        try:
+            part = comp.build(p)
+            got = f"ソリッド {len(part.solids())} 個 / 体積 {part.volume:8.1f}mm3"
+        except Exception as exc:
+            got = f"RAISED {type(exc).__name__}: {exc}"[:50]
+        print(f"   下／bore_length {v:+5.1f}  zb={L - v:6.1f}  "
+              f"params_error={'None' if err is None else err[:28]}  {got}  "
+              f"({time.time()-t0:.1f}s)", flush=True)
+
+----- b3_probe_latch.py -----
+# -*- coding: utf-8 -*-
+"""入れようとしている壁の値そのものをビルドする。
+
+`--no-build` の結果を `hard_*` に入れてはいけない（掃引器の docstring）。
+掃引の段 3 は「掃引器が止まった点」の周りしか焼いていないので、
+**モデルの成立条件まで広げた壁**は別に焼く。
+"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.stdout.reconfigure(encoding="utf-8")
+from saxsketch.core.registry import get_registry
+from saxsketch.instruments.saxophone.components import profiles as pf
+
+reg = get_registry()
+for size in ("soprano", "alto", "tenor"):
+    comp = reg.get("saxophone").make_component("mouthpiece", size)
+    base = {s.key: s.default for s in comp.param_specs()}
+    L, sh = base["overall_length"], base["shank_dia"]
+    hhi_len = round(L - 6.5, 2)
+    hhi_dia = round(sh - 0.05, 2)
+    print(f"== {size} == 全長 {L} / シャンク φ{sh}", flush=True)
+    for key, vals in (("bore_length", (hhi_len - 1.0, hhi_len, hhi_len + 1.0)),
+                      ("bore_dia", (hhi_dia,))):
+        for v in vals:
+            p = dict(base, **{key: round(v, 2)})
+            err = comp.params_error(p)
+            n = None
+            try:
+                n = len(pf.cavity_stations(p))
+            except Exception as exc:
+                n = f"{type(exc).__name__}"
+            t0 = time.time()
+            if err is not None:
+                got = "（params_error で弾かれる）"
+            else:
+                try:
+                    part = comp.build(p)
+                    got = f"ソリッド {len(part.solids())} 個 / 体積 {part.volume:8.1f}mm3"
+                except Exception as exc:
+                    got = f"RAISED {type(exc).__name__}: {exc}"[:50]
+            print(f"   {key} {v:7.2f}  ステーション {n} 枚  "
+                  f"params_error={'None' if err is None else err[:26]}  {got}"
+                  f"  ({time.time()-t0:.1f}s)", flush=True)
+
+----- b3_probe_hlo.py -----
+# -*- coding: utf-8 -*-
+"""入れた `hard_min` = bore_length 1.0 を焼く（壁は必ずビルドして確かめる）。"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.stdout.reconfigure(encoding="utf-8")
+from saxsketch.core.registry import get_registry
+from saxsketch.instruments.saxophone.components import profiles as pf
+reg = get_registry()
+for size in ("soprano", "alto", "tenor"):
+    comp = reg.get("saxophone").make_component("mouthpiece", size)
+    base = {s.key: s.default for s in comp.param_specs()}
+    for key, v in (("bore_length", 1.0),):
+        p = dict(base, **{key: v})
+        t0 = time.time()
+        try:
+            part = comp.build(p)
+            got = f"ソリッド {len(part.solids())} 個 / 体積 {part.volume:8.1f}mm3"
+        except Exception as exc:
+            got = f"RAISED {type(exc).__name__}: {exc}"[:60]
+        print(f"{size:8s} {key} {v}: {got}  ({time.time()-t0:.1f}s)", flush=True)

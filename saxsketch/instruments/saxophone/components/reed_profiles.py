@@ -60,13 +60,20 @@ def _nose_geometry(d: float, r: float, tip_w: float, heel_w: float, length: floa
 
     フィレットは前縁アークと側面の両方に内接する円。中心は側面から r だけ内側
     （x = a − r）なので、アーク中心との距離が R − r になる z が閉形式で出る。
-    テーパーは片側 0.004/mm しか傾いていないので、a の再代入で数回で収束する。
+    テーパーは片側 0.02mm/mm 以下しか傾いていないので（旧既定 +0.004〜0.005 /
+    実測アルト −0.015）、a の再代入で数回で収束する。
 
     **`tip_curve_depth = 0` で現行式に戻る**: R が無くなって z_t = 0 / z_f = r と
     なり、輪郭は「z=0 の直線 → 半径 r のフィレット → 側面」＝ 4-C.2 以前の形。
 
     sqrt の中が負になるのは R ≤ a_f のときだけで、パラメータの可動域では起きない
-    （R − 先端半幅 = (hw − d)²/(2d) ≥ 0.8 に対し、テーパーの伸びは ≤ 0.37）。
+    （R − 先端半幅 = (hw − d)²/(2d) ≥ 0.52 ―― 先端幅 9.0・カーブの上限 2.8 ――
+    に対し、踵へ広がる側のテーパーの伸びは ≤ 0.37）。**テーパーは向きを仮定しない**
+    —— 実物は**先端のほうが広かった**（踵＝先端 −1.8〜2.2 のアルト 5 本、−1.0〜1.4 の
+    ソプラノ 5 本、2026-09-21 / 22 実測）。狭まる側は a_f < 先端半幅なので、この条件は
+    かえって楽になる。**ただし sqrt が負にならないことは輪郭が滑らかなことを意味しない**
+    —— 先端 9.0 × 踵 ≥ 15.4 の組ではカーブ 2.5〜2.8 で輪郭の傾きが跳ぶ（走査で 5 通り、
+    うち 1 通りは旧来の上限 2.5 でも）。
     """
     def a_at(z: float) -> float:
         t = min(max(z / length, 0.0), 1.0)
@@ -97,8 +104,45 @@ def tip_full_width_z(p: dict) -> float:
 
     `tip_curve_depth`（前縁アークの理論的な角）より 0.46〜0.59mm 後ろにある。
     差はフィレット半径ぶんの逃げで、意図した造形。適合カードがこの値を出す。
+
+    **実物のリードで直定規が測るのはこちら**（「側面がまっすぐになる所」、
+    2026-09-21 のアルト採寸で実測者に確認）。`tip_curve_depth` そのものは
+    丸みを無視した見かけの角なので、ノギスでは当てられない。
     """
     return _nose(p)[2]
+
+
+def curve_depth_for_full_width_z(p: dict, z_full: float) -> float:
+    """全幅に達する z（実物で測れる量）から `tip_curve_depth` を逆算する。
+
+    `tip_full_width_z` は `tip_curve_depth` について単調増加なので二分法で解く
+    （`profiles.table_cut_end_z` と同じ手）。丸みだけで届く所（深さ 0 でも
+    `tip_corner_r` ぶんは後ろにある）より手前なら 0 を返す。上端は先端半幅 ——
+    それより深い前縁は半円を越えて閉じない。届かなければ上端を返し、範囲の
+    外であることは呼び出し側（`ParamSet` の丸めの報告）に言わせる。
+    """
+    lo, hi = 0.0, p["tip_width"] / 2.0
+    if tip_full_width_z({**p, "tip_curve_depth": lo}) >= z_full:
+        return lo
+    if tip_full_width_z({**p, "tip_curve_depth": hi}) <= z_full:
+        return hi
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if tip_full_width_z({**p, "tip_curve_depth": mid}) < z_full:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def nose_half_width(p: dict) -> float:
+    """先端の輪郭が全幅へ達したときの半幅（`tip_full_width_z` での側面）。
+
+    **先端が広いリードではここが最大の半幅**で、そこから後ろは踵へ向かって
+    狭まる。`tip_width/2` と同じではない —— 先端幅は z=0 へ延ばしたテーパーの
+    値で、全幅の点は z_f ぶん後ろにある。
+    """
+    return _nose(p)[4]
 
 
 def _outline_width(p: dict, z: float) -> float:
@@ -146,20 +190,28 @@ def front_edge_z(p: dict, x: float) -> float:
     **アークの閉形式では角のフィレットを取りこぼす。** 4-C.2 の実装はアークだけを
     逆に解いていたので、角の近くで実際の輪郭と 0.28〜0.56mm 食い違っていた
     （適合カードの許容差 0.3mm より大きい）。フィレット区間は閉形式にすると
-    テーパーの傾きが混ざるので、`half_width` は単調非減少なことを使って二分法で解く
+    テーパーの傾きが混ざるので、`half_width` が単調な区間で二分法で解く
     （`profiles.table_cut_end_z` と同じ手）。
+
+    **単調なのは先端から全幅の点 z_f までだけ。** 以前は区間を踵まで取って
+    「幅は z で単調非減少」を仮定していた —— 旧既定は 3 サイズとも踵が 0.6 広く、
+    その仮定が**一度も測られないまま**成り立っていた。実物のアルトは先端のほうが
+    2.2mm 広く（2026-09-21）、入れると踵の端で幅が足りずに「角の位置 71.10mm」
+    （＝リード全長）が返った。狭まるリードでは z_f から後ろにそれ以上広い所は
+    無いので、区間を z_f で閉じる。
     """
     x = abs(x)
     if x <= 0.0:
         return 0.0
-    radius, z_t, _z_f, x_t, _a_f = _nose(p)
+    radius, z_t, z_f, x_t, _a_f = _nose(p)
     if x <= x_t:
         if radius <= 0.0:
             return 0.0            # 前縁カーブなし＝ z=0 の直線
         return radius - math.sqrt(max(radius * radius - x * x, 0.0))
-    lo, hi = z_t, p["reed_length"]
+    widening = p["heel_width"] >= p["tip_width"]
+    lo, hi = z_t, (p["reed_length"] if widening else z_f)
     if half_width(p, hi) < x:
-        return hi                 # この幅までリードが広がらない
+        return p["reed_length"]   # この幅までリードが広がらない
     for _ in range(60):
         mid = (lo + hi) / 2.0
         if half_width(p, mid) >= x:
@@ -199,6 +251,14 @@ def _profile_shape(kind: str, t: float) -> float:
 def heel_edge_thickness(p: dict) -> float:
     """踵の**側端**の厚み [mm]。キーが無ければ中央厚と同じ＝上面が平ら。"""
     return p.get("heel_edge_thickness", p["heel_thickness"])
+
+
+#: 踵の中央厚 − 側端厚 の下限 [mm]（カマボコの最小の盛り上がり）。**新しい数字では
+#: ない** —— 以前は `heel_edge_thickness` の上限 1.6 と `heel_thickness` の下限 1.8
+#: の差として 2 本の直値に分けて持っていた（`reed._specs` の旧注記）。実物の側端厚
+#: 1.65（2026-09-21、アルト #1）がその上限を越えたので、関係のほうを持つ
+#: （`reed.ReedComponent.param_bounds`）。
+MIN_CROWN_MM = 0.2
 
 
 def cane_radius(p: dict) -> float:

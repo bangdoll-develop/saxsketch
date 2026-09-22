@@ -216,7 +216,8 @@ export function GoalSeekDialog({ tier2, schema, onApply, onClose }: {
           <div className="note">
             予測: 明るさ {result.predicted_metrics.brightness.toFixed(1)} /
             パワー {result.predicted_metrics.power.toFixed(1)} /
-            チューニング位置 {result.predicted_tier1.in_tune_mm.toFixed(1)} mm — {result.note}
+            チューニング位置 {result.predicted_tier1.in_tune_mm === null ? "—"
+              : `${result.predicted_tier1.in_tune_mm.toFixed(1)} mm`} — {result.note}
           </div>
           <div className="actions">
             <button onClick={() => setResult(null)}>破棄</button>

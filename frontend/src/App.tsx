@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type Dimension, type ManualEdit, type ProjectData, type Region,
-  type SetPlacement, type Simulation,
+  api, type Dimension, type ManualEdit, type ParamBound, type ProjectData,
+  type Region, type SetPlacement, type Simulation,
 } from "./api";
 import type { ExtraPart } from "./components/Viewer3D";
 import ParamPanel from "./components/ParamPanel";
@@ -51,6 +51,10 @@ export default function App() {
   // 帯／壁で丸めた報告（サーバが `adjustments` で返す）。**毎回入れ替える** ——
   // スライダ 1 本ごとに出るものなので、積むと古い報告が残る。
   const [adjust, setAdjust] = useState<string[]>([]);
+  // いまの組での**実効の壁**（Phase 4-E B-5）。`hard_*` はテンプレート値で作った
+  // 掛け金でしかないので、関係で決まる 9 本はサーバが組ごとに引き直して返す。
+  // **PUT のたびに入れ替える** —— 相手を動かした瞬間にスライダの端も動く。
+  const [bounds, setBounds] = useState<Record<string, ParamBound>>({});
   // このページがサーバの配っているアプリより古いか（下の useEffect を参照）
   const [staleApp, setStaleApp] = useState(false);
   const [viewMode, setViewMode] = useState<"3d" | "section">("3d");
@@ -75,6 +79,7 @@ export default function App() {
     // 起動時: サーバに既存セッションがあれば復元、なければ新規ダイアログのまま
     api.getProject().then((p) => {
       setProject(p); setParams(p.params); setSim(p.simulation);
+      setBounds(p.bounds ?? {});
       setManualEdit(p.manual_edit);
       // 変換報告はサーバ側に残っている（利用者が値を触るまで消えない）。ここで
       // 拾わないと、旧プロジェクトを開いた後に**再読み込みしただけで報告が消える**。
@@ -198,6 +203,7 @@ export default function App() {
   // 同じ経路**を通す（切替だけ別に書くと、片方にしか無い更新が必ず出る）。
   const applyProject = useCallback((p: ProjectData) => {
     setProject(p); setParams(p.params); setSim(p.simulation);
+      setBounds(p.bounds ?? {});
     setManualEdit(p.manual_edit);
     setNotices(p.notices ?? []);
     setViewDerived(false);
@@ -221,6 +227,7 @@ export default function App() {
   // 採寸ダイアログの操作後: パラメータ・シミュ・形状まで更新（ダイアログは開いたまま）
   const onSurveyApplied = useCallback((p: ProjectData) => {
     setProject(p); setParams(p.params); setSim(p.simulation);
+      setBounds(p.bounds ?? {});
     setManualEdit(p.manual_edit);
     setViewDerived(false);
     setModelVersion((v) => v + 1);
@@ -247,6 +254,8 @@ export default function App() {
         setSim(r.simulation);
         // クランプは黙って起きてはならない（既知 8 例目）。空でも必ず入れ替える。
         setAdjust((r.adjustments ?? []).map((a) => a.message));
+        // 相手を動かすと**別のパラメータの壁**が動く。空でも必ず入れ替える。
+        setBounds(r.bounds ?? {});
         // サーバ側でクランプされた値だけ拾い直す。丸ごと入れ替えると、値が
         // 同じでもオブジェクトが変わって断面が無駄に取り直される。
         setParams((prev) => {
@@ -325,6 +334,7 @@ export default function App() {
       const p = await api.setReference(
         project.reference?.component_id ?? "mouthpiece", path);
       setProject(p); setParams(p.params); setSim(p.simulation);
+      setBounds(p.bounds ?? {});
       // 参照が変われば形状も凍結との関係も変わる（陳腐化バッジの更新に必要）
       setManualEdit(p.manual_edit);
       setViewDerived(false);
@@ -392,7 +402,8 @@ export default function App() {
                       onExport={exportMember} />
           )}
           {project && (
-            <ParamPanel schema={project.schema} params={shownParams} onChange={onParamChange}
+            <ParamPanel schema={project.schema} params={shownParams} bounds={bounds}
+                        onChange={onParamChange}
                         onHover={setHoverKey} regionKeys={regionKeys}
                         reference={project.reference}
                         onPickReference={pickReference}

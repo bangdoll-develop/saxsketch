@@ -5,6 +5,25 @@ import ImpedancePanel from "./ImpedancePanel";
 
 const METRIC_ORDER = ["brightness", "power", "resistance", "flexibility", "edge"] as const;
 
+/** いまのパラメータについての注意。**警告があるときだけ現れる**。
+ *
+ *  ここが唯一の常設の出口 —— 以前は断面タブ（`SectionEditor`）にしか出て
+ *  おらず、3D タブでスライダを上げると「形が動かない・理由も出ない」だった。
+ *  右パネルはどのタブを見ていても出ているので、出る場所がタブに依らなくなる。
+ *
+ *  **出来事の報告（壁で丸めた・旧プロジェクト変換・凍結後に触った）は
+ *  ここに入れないこと。** あれは「いま起きた」話で、常設カードに貼ると
+ *  いつの話か分からなくなる（`App.tsx` のトーストのまま）。 */
+function WarningsCard({ items }: { items?: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div className="simcard warncard">
+      <h3>⚠ 注意</h3>
+      {items.map((w, i) => <div className="warnline" key={i}>{w}</div>)}
+    </div>
+  );
+}
+
 /** 汎用カード（リード/リガチャー）。マウスピースの .simcard スタイルを流用する */
 function Card({ card }: { card: SimCard }) {
   return (
@@ -38,6 +57,7 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
     // ことになる（断面タブを 404 で出し分けているのと同じ約束）。
     return (
       <div>
+        <WarningsCard items={sim.warnings} />
         {setCardEl}
         {sim.cards.map((c) => <Card key={c.title} card={c} />)}
         {sim.has_impedance && <ImpedancePanel paramsKey={paramsKey} />}
@@ -50,6 +70,8 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
   const sugg = sim.sensitivity?.suggestions ?? {};
   return (
     <div>
+      {/* 警告はいちばん上。スクロールで通り過ぎられる位置に置かない。 */}
+      <WarningsCard items={sim.warnings} />
       {setCardEl}
       <div className="simcard">
         {/* 主指標はセントではなく「合う挿し込み量」。コーク挿入深さは寸法ではなく
@@ -58,9 +80,10 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
             容積の行は判定の理由として並べてある（両者は一対一で動かない）。 */}
         <h3>チューニング位置</h3>
         <div className={`big ${t1.status}`}>
-          {t1.in_tune_mm.toFixed(1)} mm
+          {t1.in_tune_mm === null ? "—" : `${t1.in_tune_mm.toFixed(1)} mm`}
           <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-            {t1.status === "ok" ? "実用域の内側" :
+            {t1.in_tune_mm === null ? "合う位置が無い" :
+             t1.status === "ok" ? "実用域の内側" :
              t1.status === "tight" ? "端に寄っている" : "実用域の外"}
           </span>
         </div>

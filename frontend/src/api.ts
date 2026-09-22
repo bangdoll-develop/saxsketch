@@ -13,19 +13,33 @@ export interface ParamSpec {
   hard_min: number | null; hard_max: number | null;
 }
 
+/**
+ * **相手で動く壁**（Phase 4-E B-5）。`hard_min`/`hard_max` は「テンプレート値で
+ * 作った掛け金」でしかないので、関係で決まる 9 本はサーバが**いまの組から
+ * 引き直して**返す。入っている側だけが掛け金を上書きする（`null` は掛け金のまま）。
+ * `*_by` は動かしている相手の名前で、スライダの説明文に出す ——「越えられない壁」
+ * とだけ言うと、**相手を動かせば届く**ことが伝わらない。
+ */
+export interface ParamBound {
+  lo: number | null; hi: number | null; lo_by: string; hi_by: string;
+}
+
 /** 帯／壁で丸めた 1 項目。**黙ってクランプしないための経路**（既知 8 例目）。 */
 export interface ParamAdjustment {
   key: string; label: string; unit: string;
   requested: number | string; applied: number | string;
-  /** edge: min|max。at: 帯（band）と壁（wall）のどちらに当たったか */
-  edge: string; at?: string; limit_kind: string; source: string; message: string;
+  /** edge: min|max。at: 帯（band）／壁（wall）／相手で動く壁（relation） */
+  edge: string; at?: string; partner?: string | null;
+  limit_kind: string; source: string; message: string;
 }
 export interface Tier1 {
   total_cc: number; effective_cc: number; target_cc: number;
   // deviation_cents は「いまの挿し込み量での」ズレ。判定そのものは in_tune_mm が
   // cork_range_mm に入るかで出ている（コーク挿入深さは寸法ではなくチューニング）。
   deviation_cents: number;
-  in_tune_mm: number; cork_range_mm: [number, number];
+  // **null は「合う挿し込み量が無い」**（1mm 押しても音程が動かない形）。
+  // サーバは NaN を返さない —— JSON にできず 500 になる（openwind_bridge）。
+  in_tune_mm: number | null; cork_range_mm: [number, number];
   cents_per_mm: number; current_mm: number; tuning_method: string;
   status: string; advice: string; note: string;
 }
@@ -48,6 +62,10 @@ export interface SimCard {
 }
 export interface MouthpieceSimulation {
   kind: "mouthpiece";
+  /** いまのパラメータについての注意。**空なら警告カードを出さない**。
+   *  出所はサーバの `Component.warnings()` 1 か所で、`simulate()` の便に
+   *  乗ってくる（＝スライダ 1 目盛ごとに更新される）。 */
+  warnings?: string[];
   tier1: Tier1; tier2: Tier2; harmonics: Harmonics;
   sensitivity: { table: Record<string, unknown>; suggestions: Record<string, Suggestion> };
   /** 規格・実物との照合。リード/リガチャーの cards と同じ形式 */
@@ -56,6 +74,8 @@ export interface MouthpieceSimulation {
 export interface CardSimulation {
   kind: "reed" | "ligature" | "neck" | "body";
   cards: SimCard[];
+  /** `MouthpieceSimulation.warnings` と同じ。持たない部品では空。 */
+  warnings?: string[];
   /** インピーダンス曲線を出せるか。**UI に部品名を書かない**ため、
    *  「どの部品が音響を持つか」はサーバ（コンポーネント）が宣言する。 */
   has_impedance?: boolean;
@@ -68,6 +88,8 @@ export interface ProjectData {
   instrument_id: string; template_id: string; component_id: string;
   component_label: string;
   params: Record<string, unknown>; schema: ParamSpec[]; simulation: Simulation;
+  /** いまの組での**実効の壁**（`ParamBound`）。無い key は掛け金のまま。 */
+  bounds: Record<string, ParamBound>;
   manual_edit: ManualEdit;
   /** 参照コンポーネント（リード/リガチャーのみ非 null） */
   reference: ReferenceInfo | null;
@@ -295,7 +317,7 @@ export const api = {
   getProject: () => req<ProjectData>("/api/project"),
   putParams: (params: Record<string, unknown>) =>
     req<{ params: Record<string, unknown>; simulation: Simulation; stale: boolean;
-          adjustments: ParamAdjustment[] }>(
+          adjustments: ParamAdjustment[]; bounds: Record<string, ParamBound> }>(
       "/api/project/params", { ...json({ params }), method: "PUT" }),
   putMeta: (b: object) => req("/api/project/meta", { ...json(b), method: "PUT" }),
   save: (path: string) => req<{ ok: boolean; path: string }>("/api/project/save", json({ path })),

@@ -180,6 +180,9 @@ def project_get():
         "component_label": STATE.component.label,
         "params": STATE.paramset.values,
         "schema": STATE.paramset.schema_dicts(),
+        # いまの組での**実効の壁**（Phase 4-E B-5）。スキーマの `hard_*` は
+        # テンプレート値で作った掛け金なので、関係で決まる 9 本はここが上書きする。
+        "bounds": STATE.param_bounds(),
         "simulation": STATE.simulate(),
         "manual_edit": STATE.manual_edit_summary(),
         "reference": STATE.reference_summary(),
@@ -301,8 +304,12 @@ def project_params(req: ParamUpdate):
         raise HTTPException(status_code=400, detail=str(e))
     # 帯／壁で丸めた項目。**空でも必ず入れる** —— フロントは前回の報告を
     # 消す判断をこのキーだけで行う。
+    # 壁は**毎回返す**。相手を動かすと別のパラメータの端が動くので、フロントが
+    # 前回の値を使い回すとスライダが古い壁で止まる（`adjustments` と同じ理由で
+    # 空でも必ず入れる）。
     return {"params": applied, "simulation": STATE.simulate(),
-            "stale": STATE.is_stale(), "adjustments": STATE.adjustments}
+            "stale": STATE.is_stale(), "adjustments": STATE.adjustments,
+            "bounds": STATE.param_bounds()}
 
 
 class MetaUpdate(BaseModel):
@@ -519,13 +526,23 @@ def model_section(request: Request):
     """
     _require_project()
     values = dict(STATE.paramset.values)
+    # **まず型だけ合わせて組を作り、その組から壁を引く。** ドラッグ中の丸めが
+    # 確定（`PUT`）の丸めと食い違わないようにするため ——相手で動く壁は
+    # 「頼まれた組」から引くので、静的な `hard_*` で丸めると指を離した瞬間に
+    # 値が飛ぶ（Phase 4-E B-5）。
     for k, v in request.query_params.items():
         spec = STATE.paramset.specs.get(k)
         if spec is None:
             continue
         # 数値に読めないクエリは無視して現在値のままにする（500 にしない）。
         with contextlib.suppress(ValueError, TypeError):
-            values[k] = spec.validate(v)
+            values[k] = spec.coerce(v)
+    bounds = STATE.param_bounds(values)
+    for k in list(request.query_params):
+        spec = STATE.paramset.specs.get(k)
+        if spec is not None and k in values:
+            with contextlib.suppress(ValueError, TypeError):
+                values[k] = spec.validate(values[k], bounds.get(k))
     data = STATE.component.section(values)
     if data is None:
         raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
@@ -534,6 +551,14 @@ def model_section(request: Request):
     # の 1 か所のまま）。ドラッグ中のクエリ上書きがそのまま効くので、寸法は
     # 形と同じフレームで動く。
     data["dimensions"] = STATE.component.dimensions(values)
+    # 警告も同じ理由でルート側が足す。**ここに置くとドラッグ中も追従する** ——
+    # 上のクエリ上書きがそのまま `values` に効くので、断面側の警告は指を離す前に
+    # 動く（右パネルの警告カードは確定＝`PUT` を待つ）。定義は `warnings()` の
+    # 1 か所のまま。
+    data["warnings"] = STATE.component.warnings(values)
+    # 実効の壁も同じフレームで返す。**ドラッグで相手を動かすと別のハンドルの
+    # 端が動く**ので、指を離すまで古い壁のままにしない。
+    data["bounds"] = bounds
     return data
 
 

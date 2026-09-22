@@ -58,15 +58,18 @@ SWEEP_KEYS = ["tip_curve_depth", "heel_edge_thickness", "side_rail_thin",
 
 def _cases(comp, base: dict) -> list[tuple[str, dict]]:
     specs = {s.key: s for s in comp.param_specs()}
+    # 「深いカーブ」は帯の上限（2026-09-22 に実物 10 本の逆算の最大 2.72 が入る
+    # よう 2.5 → 2.8）。数字を書くと上限を動かしたとき組がそこへ付いてこない。
+    deep = specs["tip_curve_depth"].max
     out: list[tuple[str, dict]] = [
         ("既定", dict(base)),
         ("ファイルド", dict(base, file_cut="filed")),
         # 円弧が最も深い × 前縁が最も後ろ。上面の折れと細片が同時に効く組
         ("深い円弧×深いカーブ", dict(base, heel_edge_thickness=0.3,
-                                     tip_curve_depth=2.5)),
+                                     tip_curve_depth=deep)),
         ("前縁直線（旧形状）", dict(base, tip_curve_depth=0.0)),
         ("薄い側端×深いカーブ", dict(base, side_rail_thin=0.20,
-                                     tip_curve_depth=2.5, file_cut="filed")),
+                                     tip_curve_depth=deep, file_cut="filed")),
         # ファイルド × 深い円弧 × 先端幅 > 踵幅。**1 パラメータの端値では届かない**
         # 領域で、表皮を落とす面がテーブル面より下へ潜る組（4-C.2c で発見）。
         ("ファイルド×深い円弧×先端広", dict(base, heel_edge_thickness=0.3,
@@ -86,7 +89,14 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
 
 
 def _outline_defect(p: dict) -> str | None:
-    """平面視の輪郭が単調非減少で、傾きが跳ね上がらないこと。
+    """平面視の輪郭が**先端の輪郭（z_f まで）で**単調非減少、そこから後ろは側面
+    テーパーそのもので、傾きが跳ね上がらないこと。
+
+    **以前は全長で単調非減少を見ていた** —— 旧既定は 3 サイズとも踵が 0.6 広く、
+    その未実測の仮定を検査が固定していた。実物のアルトは先端が 2.2 広く
+    （2026-09-21）、入れるとアルトの全ケースが「z_f で細る」と出た。
+    カーブ 0 の旧式だけは角の丸みを局所テーパーに乗せるので、狭まるリードでは
+    z_f の手前で最大 r·テーパー²（全幅、実物アルトで 0.0002mm）だけ下がる。
 
     **この掃引が 4-C.2 のヒレを素通りさせた。** ソリッド数・水密・bbox・頂点数は
     全部通るのに、最先端の断面だけ全幅のまま残って前へ板が張り出していた
@@ -100,12 +110,19 @@ def _outline_defect(p: dict) -> str | None:
     zs = [i * 0.001 for i in range(int(z_hi / 0.001) + 1)]
     zs += [z_hi + i * 0.5 for i in range(int((p["reed_length"] - z_hi) / 0.5) + 1)]
     zs.append(p["reed_length"])
-    prev_w, prev_slope, worst = -1.0, None, None
+    z_f = rp.tip_full_width_z(p)
+    dip = (p["tip_corner_r"] * taper * taper
+           if rp.tip_curve_depth(p) <= 0.0 and taper < 0.0 else 0.0)
+    peak, prev_slope, worst = -1.0, None, None
     for z in zs:
         w = rp.width(p, z)
-        if w < prev_w - 1e-9:
-            return f"*** NG 輪郭が z={z:.3f} で {prev_w:.3f} → {w:.3f} と細る"
-        prev_w = w
+        if z <= z_f:
+            if w < peak - dip - 1e-9:
+                return f"*** NG 輪郭が z={z:.3f} で {peak:.3f} → {w:.3f} と細る"
+            peak = max(peak, w)
+        elif abs(w - 2.0 * rp.taper_half_width(p, z)) > 1e-9:
+            return (f"*** NG 輪郭が z={z:.3f} で側面テーパーから外れる"
+                    f"（{w:.3f} vs {2.0 * rp.taper_half_width(p, z):.3f}）")
         if 0.02 <= z <= z_hi:
             slope = (rp.half_width(p, z + h) - rp.half_width(p, z)) / h
             if prev_slope is not None and slope - prev_slope > max(taper, 0.0) + 1e-3:

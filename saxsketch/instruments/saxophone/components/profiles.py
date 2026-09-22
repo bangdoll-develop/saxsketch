@@ -29,6 +29,7 @@ ny>1 なら上下どちらの半分も X=±1 で接線が垂直なので、赤�
 """
 from __future__ import annotations
 
+import bisect
 import functools
 import math
 import threading
@@ -251,16 +252,57 @@ def shank_radius(p: dict) -> float:
     return p.get("shank_dia", 0.747 * p["body_dia"]) / 2.0
 
 
+#: 最大径の位置の下限（全長に対する比）。**これは床であって設計値ではない** ——
+#: シャンク平行部と肩が全長を食い尽くすと踵が原点へ寄って形が潰れるので、
+#: そこで止めている。**止めた先では `heel_z` が凍る**（`shank_length` も
+#: `shoulder_ratio` も動かしても形が 1 ビットも変わらない）ので、
+#: `outer_layout_error` が床に当たる組を弾き、スライダの `hard_max` はその
+#: 手前に置いてある（Phase B-4a で実測。黙ったクランプの 8 例目だった）。
+HEEL_FLOOR_RATIO = 0.30
+
+
+def heel_raw(p: dict) -> float:
+    """床を掛ける**前**の最大径位置。`heel_z` との差が「床に当たっているか」。
+
+    肩比が −1 以下だと分母が 0 以下になる。掃引（B-4a）は `shoulder_ratio`
+    を下へ歩いて **−1 ちょうどで素の `ZeroDivisionError`** を踏んだ
+    （割り算が潰れる型の 7 つ目）。ここでは `-inf` を返して
+    `outer_layout_error` に理由を言わせる —— 例外の出所が分からないまま
+    上がるのがいちばん悪い。
+    """
+    denom = 1.0 + shoulder_ratio(p)
+    if denom <= 0.0:
+        return float("-inf")
+    return (p["overall_length"] - shank_length(p)) / denom
+
+
+def heel_floor(p: dict) -> float:
+    return HEEL_FLOOR_RATIO * p["overall_length"]
+
+
+def shank_length_at_heel_floor(p: dict) -> float:
+    """`shank_length` がこれを超えると `heel_z` が床で凍る（他は既定のまま）。"""
+    return p["overall_length"] * (1.0 - HEEL_FLOOR_RATIO
+                                  * (1.0 + shoulder_ratio(p)))
+
+
+def shoulder_ratio_at_heel_floor(p: dict) -> float:
+    """`shoulder_ratio` がこれを超えると `heel_z` が床で凍る（他は既定のまま）。"""
+    length = p["overall_length"]
+    return (length - shank_length(p)) / (HEEL_FLOOR_RATIO * length) - 1.0
+
+
 def heel_z(p: dict) -> float:
     """最大径の位置 = リード踵 = テーブル平面が胴に接する z。
 
     ここから後ろは肩テーパ→シャンク平行部。全長からシャンク構成を引いて決めるので、
     `shank_length` を変えても踵の位置とテーブル長が正しく追従する。
+
+    床（`HEEL_FLOOR_RATIO`）は**もう届かない**はずの守り ——`outer_layout_error`
+    が床に当たる組を先に弾く。残してあるのは、部分的な dict で呼ばれる経路
+    （`.get` の既定に頼る呼び出し）が素の負値や 0 除算に落ちないようにするため。
     """
-    length = p["overall_length"]
-    sh = shank_length(p)
-    heel = (length - sh) / (1.0 + shoulder_ratio(p))
-    return max(heel, 0.30 * length)
+    return max(heel_raw(p), heel_floor(p))
 
 
 def shoulder_length(p: dict) -> float:
@@ -285,6 +327,11 @@ def ligature_seat_range(p: dict) -> tuple[float, float]:
 
     実物は「最大径に向かって単調に太る」形なので、旧実装のような r/rb==1.0 の
     平坦区間は存在しない。踵（最大径）から前方へリガチャー幅ぶん取った帯を座とする。
+
+    **この「単調に太る」に座の定義が乗っている。** `body_waist` を強く負へ振ると
+    胴の中ほど（u≈0.23）に凹みが出て前提が崩れ、座は最大径ではない所に置かれる
+    ——`heel_z` は軸方向の式なので何も言わない。Phase B-4b でそこをスライダの壁に
+    した（`body_waist_limits`）。
     """
     heel = heel_z(p)
     return heel - _SEAT_LENGTH_RATIO * heel, heel
@@ -382,6 +429,13 @@ def outer_radius_nominal(p: dict, z: float) -> float:
     `shoulder_fullness` は z > heel_z だけを動かし、どちらも境の半径 `r_max` を
     動かさない。動かすのは `body_dia` だけ。実物も滑らかな極大ではなく角で、
     `_SHOULDER_PROFILE` の s=0 の傾きは胴側の傾きと一致しない。
+
+    **ただし「境の半径を動かさない」＝「境が最大」ではない。** 歪みが強いと
+    胴の途中や肩の途中がそこを追い越す ——`heel_z` は軸方向の式なので**動かず**、
+    OCCT もソリッド 1 個を返すので、Phase B-4b までこれは誰にも見えていなかった。
+    いまは母線の単調性（`body_waist_limits` / `shoulder_fullness_limits`）が
+    スライダの壁として掛かっていて、範囲内なら頂点は踵にある。壊れていないことを
+    直に確かめるのは `outer_apex` / `shoulder_dip`。
     """
     r_max = p["body_dia"] / 2.0
     heel = heel_z(p)
@@ -393,6 +447,205 @@ def outer_radius_nominal(p: dict, z: float) -> float:
     if s >= 1.0:
         return r_sh
     return r_sh + (r_max - r_sh) * shoulder_shape(p, s)
+
+
+# ---------------------------------------------------------------- 頂点は「主張」
+#
+# 「最大径は踵（`heel_z`）にある」は**設計の主張であって計算結果ではない**。
+# `heel_z` は (全長 − シャンク長)/(1 + 肩比) という**軸方向の式**なので、形を歪める
+# 2 本（`body_waist` / `shoulder_fullness`）では定義上 1 ビットも動かない ——
+# つまり `heel_z` を見張っても、この 2 本が頂点を壊したことは**永久に検出できない**
+# （`cad/windycity/sweep_outer.py` の主張 (1) が Phase B-4b までそうだった。
+# 式を検算していて形を見ていない）。だから形を直に測る側をここに置く。
+#
+# 壊れ方は 2 通りあり、**どちらも OCCT はソリッド 1 個を返す**（掃引の段 3 が
+# 「1 個か」しか見ていないので素通りする。B-3 の「1 個は必要条件でしかない」の
+# 2 例目）:
+#
+#   - 頂点が胴／肩の途中へ移る → `ligature_seat_range` は `heel_z` 基準なので
+#     **リガチャー座の位置そのものが嘘**になる（セット適合の基準でもある）。
+#   - 肩の途中が `shank_radius` を下回る → 「最大径からシャンクへ絞る」が破れて
+#     **えぐれ（アンダーカット）**になる。単調に細るという前提の上に立っている
+#     ものが全部ずれる。
+#
+# 限界値は `_BODY_PROFILE` / `_SHOULDER_PROFILE` だけで決まる（`r/r_max` に
+# 正規化した形の性質なので **3 サイズ共通・他のパラメータに依らない**）。
+# **数字を書き写さずに表から解く** —— 実測表を差し替えたら限界も一緒に動く。
+# 散文へ焼くと腐るのは Phase B-2 で踏んだとおり。
+
+
+def _min_on_unit(fn, n: int = 4000) -> float:
+    """`fn(t)` の最小値を t∈(0,1) で。走査で括ってから黄金分割で詰める。
+
+    端は分母が 0 に落ちるので除く。呼び出し側はどれもキャッシュ付きなので、
+    精度側に倒して走査を粗くしない。
+    """
+    ts = [(i + 1) / (n + 1) for i in range(n)]
+    vals = [fn(t) for t in ts]
+    k = min(range(n), key=vals.__getitem__)
+    a = ts[k - 1] if k > 0 else 0.0
+    b = ts[k + 1] if k < n - 1 else 1.0
+    phi = (math.sqrt(5.0) - 1.0) / 2.0
+    c, d = b - phi * (b - a), a + phi * (b - a)
+    fc, fd = fn(c), fn(d)
+    for _ in range(200):
+        if b - a < 1e-13:
+            break
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - phi * (b - a)
+            fc = fn(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + phi * (b - a)
+            fd = fn(d)
+    return min(vals[k], fc, fd)
+
+
+#: 数値微分の刻み（`_pchip` は C1 なので中心差分で十分）。
+_D = 1e-6
+
+
+def _deriv(fn, t: float) -> float:
+    a, b = max(t - _D, 0.0), min(t + _D, 1.0)
+    return (fn(b) - fn(a)) / (b - a)
+
+
+@functools.lru_cache(maxsize=1)
+def body_waist_limits() -> tuple[float, float]:
+    """`body_waist` が「胴は最大径に向かって単調に太る」を保つ範囲。
+
+    `r(u) = P(u)·(1 + w·B(u))` の微分から
+    `P' + w·(P·B)' ≥ 0` ——`(P·B)'` の符号で上下に割れるので、
+    正のところが上限を、負のところが下限を決める。
+
+    **上限は「頂点が u=1 から外れる点」と同じ事象**（頂点が端から外れるのは、
+    端の直前で母線が下り始めることだから）。実測で 0.072573 と 0.072572 が
+    一致する。下限のほうは胴の中ほど（u≈0.23）に凹みが出る点で、
+    こちらは頂点を見ていても永久に分からない。
+    """
+    prof = lambda u: _pchip(_BODY_PROFILE, u)          # noqa: E731
+    both = lambda u: prof(u) * _waist_bump(u)          # noqa: E731
+
+    def hi(u: float) -> float:
+        g = _deriv(both, u)
+        return _deriv(prof, u) / -g if g < -1e-12 else float("inf")
+
+    def lo(u: float) -> float:
+        g = _deriv(both, u)
+        return _deriv(prof, u) / g if g > 1e-12 else float("inf")
+
+    return -_min_on_unit(lo), _min_on_unit(hi)
+
+
+@functools.lru_cache(maxsize=1)
+def shoulder_fullness_limits() -> tuple[float, float]:
+    """`shoulder_fullness` が「肩は最大径からシャンクへ単調に細る」を保つ範囲。
+
+    `v(s) = S(s) + k·(L(s) − S(s))`（`L(s) = 1 − s` は直線）の微分から
+    `S' + k·(L − S)' ≤ 0`。
+
+    **単調のほうが「値が [0, 1] を出る」より先に破れる**（実測 −0.3607 /
+    +1.8633 に対し、シャンク径を割るのは −0.3729、最大径を超えるのは
+    +2.6175）ので、こちらを壁にする。+1（母線が直線＝円錐）は内側に残る。
+    """
+    prof = lambda s: _pchip(_SHOULDER_PROFILE, s)               # noqa: E731
+    gap = lambda s: (1.0 - s) - _pchip(_SHOULDER_PROFILE, s)    # noqa: E731
+
+    def hi(s: float) -> float:
+        g = _deriv(gap, s)
+        return -_deriv(prof, s) / g if g > 1e-12 else float("inf")
+
+    def lo(s: float) -> float:
+        g = _deriv(gap, s)
+        return _deriv(prof, s) / g if g < -1e-12 else float("inf")
+
+    return -_min_on_unit(lo), _min_on_unit(hi)
+
+
+def outer_apex(p: dict, n: int = 2000) -> tuple[float, float]:
+    """外形の**実際の**最大半径とその z（面取り前の `outer_radius_nominal` 基準）。
+
+    `heel_z` と食い違ったら「最大径は踵」という主張が破れている。**式ではなく
+    形を見る**ためのものなので、ここでは閉じた式を使わず素直に走査する
+    （`*_limit()` の解と互いの答え合わせになる）。
+    """
+    heel = heel_z(p)
+    sl = shoulder_length(p)
+    best_z, best_r = heel, outer_radius_nominal(p, heel)
+    for span, base in ((heel, 0.0), (sl, heel)):
+        if span <= 0.0:
+            continue
+        for i in range(n + 1):
+            z = base + span * i / n
+            r = outer_radius_nominal(p, z)
+            if r > best_r:
+                best_z, best_r = z, r
+    return best_z, best_r
+
+
+def body_dip(p: dict, n: int = 2000) -> tuple[float, float]:
+    """胴（ティップ〜踵）が**太るのをやめる**点と、その落ち込み量 [mm]。
+
+    単調に太っていれば `(heel_z, 0.0)`。`shoulder_dip` が半径を返すのと違って
+    第 2 要素は**落ち込み量**（0 なら健全）——凹みは局所的なので、絶対値では
+    なく「前より細くなったか」で見るしかない。
+
+    `outer_apex` では捕まらない。負の `body_waist` が作るのは中ほどの凹みで、
+    最大径は踵のままだから ——**壊れ方が 3 通りあるので、目も 3 つ要る**。
+    """
+    heel = heel_z(p)
+    if heel <= 0.0:
+        return heel, 0.0
+    worst_z, worst = heel, 0.0
+    prev = outer_radius_nominal(p, 0.0)
+    for i in range(1, n + 1):
+        z = heel * i / n
+        r = outer_radius_nominal(p, z)
+        if prev - r > worst:
+            worst_z, worst = z, prev - r
+        prev = r
+    return worst_z, worst
+
+
+def shoulder_bulge(p: dict, n: int = 2000) -> tuple[float, float]:
+    """肩（踵〜シャンク平行部）が**細るのをやめる**点と、その膨らみ量 [mm]。
+
+    単調に細っていれば `(heel_z, 0.0)`。`body_dip` の肩側の相方で、2 つ合わせて
+    「母線は単調」という主張そのものになる ——`outer_apex` と `shoulder_dip` は
+    その主張が破れたときに**見える症状**でしかなく、症状が出ないまま主張だけが
+    破れる帯がある（肩比 1.86〜2.62 は膨らむのに最大径を超えず、シャンク径も
+    割らないので、その 2 つは何も言わない）。
+    """
+    heel, sl = heel_z(p), shoulder_length(p)
+    if sl <= 0.0:
+        return heel, 0.0
+    worst_z, worst = heel, 0.0
+    prev = outer_radius_nominal(p, heel)
+    for i in range(1, n + 1):
+        z = heel + sl * i / n
+        r = outer_radius_nominal(p, z)
+        if r - prev > worst:
+            worst_z, worst = z, r - prev
+        prev = r
+    return worst_z, worst
+
+
+def shoulder_dip(p: dict, n: int = 2000) -> tuple[float, float]:
+    """肩（踵〜シャンク平行部）の**最小**半径とその z。
+
+    `shank_radius` を下回っていたらえぐれている。
+    """
+    heel, sl = heel_z(p), shoulder_length(p)
+    if sl <= 0.0:
+        return heel, outer_radius_nominal(p, heel)
+    best_z, best_r = heel + sl, outer_radius_nominal(p, heel + sl)
+    for i in range(n + 1):
+        z = heel + sl * i / n
+        r = outer_radius_nominal(p, z)
+        if r < best_r:
+            best_z, best_r = z, r
+    return best_z, best_r
 
 
 # ティップ前縁の面取り
@@ -574,6 +827,14 @@ def facing_rise(p: dict, z: float) -> float:
         t = (fl - z) / fl
         return tip * (1.0 - math.sqrt(max(1.0 - t * t, 0.0)))
     # 円弧（テーブルに接する。R は y(0)=tip となるよう決定）。実物の実測はこちらが一致。
+    if tip <= 0.0:
+        # **開きが 0 の円弧は半径が定まらない。** `cavity_layout_error` が
+        # 先に弾くので通常ここへは来ないが、素の `ZeroDivisionError` が
+        # 出所不明のまま上がるのを防ぐ（掃引 `sweep_limits.py tip_opening` が
+        # ちょうど 0 で踏んだ。`_pchip_table` の節点衝突と同じ型）。
+        raise ValueError(
+            f"ティップ開きが {tip!r} なのでフェイシングの円弧半径が定まりません"
+            f"（radial は y(0)=tip となる R を解くので tip > 0 が要ります）。")
     r = (fl * fl + tip * tip) / (2.0 * tip)
     return r - math.sqrt(max(r * r - (fl - z) ** 2, 0.0))
 
@@ -761,6 +1022,34 @@ def beak_top_y(p: dict, z: float, x: float = 0.0) -> float:
 def beak_y(p: dict, z: float) -> float:
     """[互換] ビーク稜線の Y。`beak_top_y(p, z, 0.0)` と同じ。"""
     return beak_apex_y(p, z)
+
+
+def beak_height_flat(p: dict) -> float:
+    """ビーク稜線がティップ〜バイトポイントで**水平**になる `beak_height` [mm]。
+
+    ティップ側の頂点 `beak_apex_y0` は「テーブル＋ティップ開き＋ティップレール厚」
+    で固定なので、これを下回ると稜線が**前下がり**になる ——ビークが後ろへ向かって
+    低くなる形は、実測 18.0° の「ティップからバイトへ立ち上がる」直線ランプでは
+    もはやない。Phase B-4b でスライダの `hard_min` にした。
+    """
+    return beak_apex_y0(p) - table_plane_y(p, _BEAK_BITE * p["overall_length"])
+
+
+def beak_height_at_body_top(p: dict) -> float:
+    """バイトポイントで稜線が胴の頂点に届く `beak_height` [mm]。
+
+    `beak_height` は「バイトポイントでのテーブル面からの高さ ＝ くわえたときの
+    口の開き量」と定義されている。これを超えると**その定義が壊れる** ——
+    稜線が胴の外（空中）に出て切除が効かず、バイトポイントの上面は胴のままに
+    なるので、与えた数字は部品のどこにも現れない。
+
+    **旧コメントの「胴の全高 0.9·`body_dia`」は外れていた。** 実測すると
+    0.723 / 0.734 / 0.746·`body_dia`（3 サイズ）で、**比は一定ですらない** ——
+    バイトポイントは全長の 1/4 で、そこの胴の太さは踵までの比で決まるため。
+    旧レンジの上端 0.75·`body_dia` は 3 サイズとも**この壁の外**にあった。
+    """
+    z_bite = _BEAK_BITE * p["overall_length"]
+    return outer_radius(p, z_bite) - table_plane_y(p, z_bite)
 
 
 #: 切除ソリッドをティップより手前へ出す量 [mm]。
@@ -1039,7 +1328,8 @@ def table_flat_width(p: dict, z: float) -> float:
     `reed_width` はソリッドの上に存在しない —— 窓幅の公称値とリガチャーのタブ幅に
     使われるだけで、マウスピースの面を 1 つも決めていない。テーブルは平面カットなので
     実幅は「半径」と「カットの深さ」から決まり、**z によって変わる**（既定の
-    リガチャー座中央で 13.98 / 15.14 / 14.66mm。`reed_width` は 12.9 / 13.4 / 14.8）。
+    リガチャー座中央で 13.98 / 15.14 / 14.66mm。`reed_width` は当時 12.9 / 13.4 / 14.8
+    で、ソプラノとアルトはのちに実物のリード幅 14.0 / 16.4 へ置き換えた）。
 
     `reed_chord` と違ってフェイシングの持ち上がりを含めない: 平面が平面である区間
     （z ≥ `facing_length`）の弦なので、テーブル平面そのもので測る。
@@ -1047,6 +1337,63 @@ def table_flat_width(p: dict, z: float) -> float:
     r = outer_radius(p, z)
     d = abs(table_plane_y(p, z))
     return 2.0 * math.sqrt(max(r * r - d * d, 0.0))
+
+
+@_pcached
+def _window_edge_table(p: dict) -> tuple:
+    """空洞ステーションの (z 列, 断面ポリゴン列)。窓の実開口を引く元。
+
+    `cavity_stations` は 35 前後の断面を pchip で組むので、z ごとに呼ぶと
+    `window_open_half_width` が O(n²) になる。`params_scope` の中では 1 回で済む。
+    """
+    sts = cavity_stations(p)
+    return ([s["z"] for s in sts], [section_pts(s) for s in sts])
+
+
+def window_open_half_width(p: dict, z: float) -> float:
+    """リード面での**窓の実開口**の半幅 [mm]。閉じている z は 0。
+
+    `window_width` は `reed_width − 2·side_rail_width` の**公称値**で、ソリッドの
+    上に存在しない（`table_flat_width` の注記と同じ話）。実際の開口は「空洞の断面が
+    リード面 `cut_top_y` を切った弦」で、いままで法則側にこれを引く道が無く、
+    メッシュへ下からレイを打つ検品スクリプト（`cad/windycity/align_reference.py`
+    の `window_outline`）でしか出せなかった。**リードが載るかはこの縁とリードの縁の
+    関係で決まる**ので、法則側に置く（`reed_seat`）。
+
+    断面ポリゴンは `_super_pts` も `_horseshoe_pts` も同じ 72 点を同じ角度で作る。
+    ルールドロフトは対応する点どうしを直線で結ぶので、**ステーション間の断面は
+    点ごとの線形補間そのもの** —— 近似ではない。
+
+    外殻でも切られるので `reed_chord` の半分で頭打ちにする。
+    """
+    zs, ptss = _window_edge_table(p)
+    if z <= zs[0] or z >= zs[-1]:
+        return 0.0
+    i = min(max(bisect.bisect_right(zs, z) - 1, 0), len(zs) - 2)
+    dz = zs[i + 1] - zs[i]
+    t = (z - zs[i]) / dz if dz > 1e-12 else 0.0
+    a, b = ptss[i], ptss[i + 1]
+    y0 = cut_top_y(p, z)
+    n = len(a)
+    # y だけ先に補間し、**跨いだ辺でだけ x を補間する**。全点の (x, y) を作ると
+    # 1 呼び出しが 3 倍かかり、`seat_profile` の 240 点で simulate の予算を食う。
+    ys = [a[k][1] + t * (b[k][1] - a[k][1]) - y0 for k in range(n)]
+    best, hit = 0.0, False
+    for k in range(n):
+        j = k + 1 if k + 1 < n else 0
+        y1, y2 = ys[k], ys[j]
+        if y1 * y2 <= 0.0 and abs(y2 - y1) > 1e-12:
+            hit = True
+            x1 = a[k][0] + t * (b[k][0] - a[k][0])
+            x2 = a[j][0] + t * (b[j][0] - a[j][0])
+            best = max(best, abs(x1 - y1 / (y2 - y1) * (x2 - x1)))
+    if not hit:
+        # 交わらない＝閉じている。断面が丸ごとリード面の**上**なら面は無傷、
+        # 丸ごと**下**ならフェイシングカットが既に落とした領域にあるだけで、
+        # どちらもリード面に穴を開けない（ロフト前端の蚋が後者。
+        # `_LOFT_FRONT_LEAD` の注記）。
+        return 0.0
+    return min(best, reed_chord(p, z) / 2.0)
 
 
 #: ロフト前端を窓の前縁より手前へ置く量 [mm]。前端の蓋がリード面より下
@@ -1095,18 +1442,23 @@ def window_end_z(p: dict) -> float:
 def window_length_effective(p: dict) -> float:
     """実際に開く窓の長さ [mm]。指定した `window_length` とは限らない。
 
-    `window_end_z` は `zb − 4.0` 側でも頭打ちになる。そちらが効くと
-    **`window_length` を上げても形が一切変わらない**。`cavity_layout_error` は
-    窓が `_MIN_WINDOW_SPAN_MM` を割るまで黙っているので、その手前に
-    「落ちないし壊れてもいないが、スライダが効いていない」帯がある。
-
-    既定値で測ると soprano は可動域 24〜44mm のうち **28.5mm 以上が丸ごと死んでいる**
-    （alto は 37.9mm 以上、tenor は全域が効く）。全長側から入っても同じで、
-    既定の窓長が届かなくなるのは soprano 70.1 / alto 88.7 / tenor 103.3mm 以下。
-    （アルトの 2 つは 4-C.5 で測り直した。旧記載の 41.1 / 95.0 はテンプレートが
-    変わる前の値で、いまの `bore_start_z` 42.65 とは合わない。）
+    `window_end_z` は `bore_start_z − chamber_to_bore_mm` 側でも頭打ちになる。
+    そちらが効くと **`window_length` を上げても形が一切変わらない**。
+    `cavity_layout_error` は窓が `_MIN_WINDOW_SPAN_MM` を割るまで黙っているので、
+    その手前に「落ちないし壊れてもいないが、スライダが効いていない」帯がある。
     `ParamSpec.validate` の黙ったクランプ（Stage F）と同じ種類だが、こちらは
     **導出側で起きるのでレンジを見ても分からない**。だから量として公開する。
+
+    凍る点は導出できる ——
+
+        window_length_freeze = bore_start_z − chamber_to_bore_mm − window_front_z
+
+    **この数字を docstring に焼くのはやめた。** 3 つの項がどれもテンプレートに
+    ぶら下がっているので、テンプレートを直すたびに本文だけが古くなる。実際
+    ここは 2 世代連続で腐った（4-C.5 で 41.1/95.0 → 37.92/88.7 に直し、
+    9/05 の `bore_length` 実測でまた 38.67/91.70 になった）。いまの値は
+    `test_the_window_freeze_point_is_where_the_docs_say_it_is` が持っていて、
+    テンプレートが動けばそのテストが落ちて新しい値を教える。
     """
     return window_end_z(p) - window_front_z(p)
 
@@ -1367,6 +1719,23 @@ def baffle_plateau(p: dict) -> float:
     return min(max(p.get("baffle_plateau", _BAFFLE_FLAT), lo), hi)
 
 
+def baffle_plateau_bounds(p: dict) -> dict:
+    """`baffle_plateau` の**その型での**可動域（Phase 4-E B-5）。
+
+    帯 0.02〜0.75 は 4 型を覆う**和集合**で、どの型のものでもない ——
+    B-2 の実測ではスライダの死んでいる割合が step/rollover で 18%、
+    straight/curve で **86%**。断面タブのハンドルは `_PLATEAU_RANGE` を
+    読むので正しく、**食い違っているのはスライダのほう**だった。
+
+    `_PLATEAU_RANGE` は外さない ——「長い棚を許せばそれはもうストレートでは
+    なくステップ」という**理由が書いてある**掛け金だから。数字を写さずに
+    同じ 1 テーブルを引く。
+    """
+    lo, hi = _PLATEAU_RANGE.get(p.get("baffle_type", "step"), (0.10, 0.70))
+    return {"baffle_plateau": {"lo": lo, "hi": hi,
+                               "lo_by": "バッフル型", "hi_by": "バッフル型"}}
+
+
 def _plateau_warp(sigma: float, a: float) -> float:
     """σ を「棚の長さ a」から実測基準 `_BAFFLE_FLAT` の尺度へ写す区分線形写像。
 
@@ -1389,7 +1758,13 @@ def _v_step(p: dict, sigma: float) -> float:
     してあるので、型の作り直しで既定形状は 1μm も動かない。
     """
     a = baffle_plateau(p)
-    r = min(max(p.get("baffle_step_rise", 0.0), 0.0), 0.85)
+    # **上限のクランプは外した**（Phase 4-E B-2）。以前は 0.85 で頭打ちにして
+    # いたが、`src` は「上限は未測定」で**止めている理由が無かった**。r は
+    # `r·smoothstep + (1−r)·base` の混合重みなので 1 を超えると外挿になるだけで、
+    # 式は壊れない。壁は掃引で測って `ParamSpec.hard_max` に置く。
+    # 負のほうは下の `if` が `base` を返すので**構造として効かない** ——
+    # 下限 0 の理由は測定ではなくこの分岐そのもの。
+    r = p.get("baffle_step_rise", 0.0)
     base = _pchip(_CAVITY_C, _plateau_warp(sigma, a))
     if r <= 0.0:
         return base
@@ -1414,7 +1789,11 @@ def _v_rollover(p: dict, sigma: float) -> float:
     """
     a = baffle_plateau(p)
     span = max((1.0 - a) * bore_start_z(p), 1e-6)
-    w = min(max(p.get("rollover_radius", 8.0) / span, 0.02), 0.9)
+    # 上限 0.9 は外した（Phase 4-E B-2。`src` が空 ＝ 止めている理由が無かった）。
+    # **下限 0.02 は残す** —— 下の `f` が `u²/(2w)` で割るので w→0 で発散する。
+    # `_pchip_table` の節点衝突・`cavity_floor_y` の特異点・`_chamber_weight`・
+    # `facing_rise` の円弧半径に続く、割り算が潰れる同じ型の 5 つ目。
+    w = max(p.get("rollover_radius", 8.0) / span, 0.02)
     t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
 
     def f(u: float) -> float:
@@ -1439,7 +1818,10 @@ def _v_curve(p: dict, sigma: float) -> float:
     （c=−1 で 0.87mm/mm）。ふくらみ側とスクープ側は、この式で互いの鏡像になる。
     """
     a = baffle_plateau(p)
-    c = min(max(p.get("baffle_curvature", 0.5), -1.0), 1.0)
+    # ±1 のクランプは外した（Phase 4-E B-2）。`src` は「パラメータの定義域
+    # そのもの」と書いてあったが、n = 2^(1.6|c|) も t^n も |c|>1 で普通に解ける
+    # ので、**定義域を定義域で説明した循環**だった。壁は掃引で測る。
+    c = p.get("baffle_curvature", 0.5)
     t = min(max((sigma - a) / (1.0 - a), 0.0), 1.0)
     n = 2.0 ** (1.6 * abs(c))
     return t ** n if c >= 0.0 else 1.0 - (1.0 - t) ** n
@@ -1576,7 +1958,8 @@ _STATION_DZ = 1.6
 
 #: 窓が窓として成立する最小の長さ [mm]。
 #:
-#: `window_end_z` は既に `bore_start_z − 4.0` で頭打ちにしてあるので、
+#: `window_end_z` は既に `bore_start_z − chamber_to_bore_mm` で頭打ちに
+#: してあるので、
 #: 「窓がボアに飲まれる」側は防いである。防いでいないのは**その頭打ちが
 #: 窓の始まりを追い越す**場合で、窓の長さが 0 以下になる。ステーションの
 #: 最小間隔 0.40mm を数枚は置ける値として 2.0mm を採る。既定の窓長は
@@ -1617,24 +2000,130 @@ def cavity_layout_error(p: dict) -> str | None:
         return (f"チェンバー→ボアの遷移が {gap:.2f}mm ＝ 長さを持ちません。"
                 f"ウィンドウの後端とボアの始まりが同じ位置になり、"
                 f"チェンバーの区間が消えます。0 より大きい値にしてください。")
-    if z_we - z0 >= _MIN_WINDOW_SPAN_MM:
+    # ティップ開きは**正でなければならない**。0 だと radial のフェイシング
+    # 円弧半径が定まらず `facing_rise` が落ちる（掃引で発見。`params_error` は
+    # `None` を返していたので、素の `ZeroDivisionError` が上がっていた）。
+    # `ParamSpec.hard_min = 0.05` でも止めているが、成立条件はここに 1 箇所書く。
+    if p["tip_opening"] <= 0.0:
+        return (f"ティップ開きが {p['tip_opening']:.2f}mm ＝ リードとの隙間が"
+                f"ありません。フェイシングの円弧が定義できず、息の入口も"
+                f"閉じます。0 より大きい値にしてください。")
+    # ボアも**長さを持たなければならない**。`bore_length <= 0` は「ボアが部品の
+    # 外から始まる」で、削る円柱の高さが `overall_length − zb + 1.5` ＝
+    # `bore_length + 1.5` なので、−1.5 を割ると `Solid.make_cylinder` が
+    # `Null TopoDS_Shape` を返してビルドが素の `ValueError` で落ちる
+    # （B-3 の掃引で発見。3 サイズとも −1.5 までソリッド 1 個、−2.0 で落ちる）。
+    # **落ちる手前の 0〜−1.5 も通してはいけない** —— 円柱が 1 ビットも削らない
+    # ので「ボア長を縮めるほど体積が増える」逆向きの形になり、しかも
+    # `cavity_stations` は平然と通る（段 1〜2 は −21mm まで素通りした）。
+    if p["bore_length"] <= 0.0:
+        return (f"ボア長が {p['bore_length']:.1f}mm ＝ 長さを持ちません。"
+                f"ボアの始まり z={zb:.1f}mm が全長 "
+                f"{p['overall_length']:.1f}mm の外にあり、円筒が 1 ビットも"
+                f"削りません。0 より大きい値にしてください。")
+    # **ちょうど最低幅は通す。** 1e-9 の遊びが無いと、`cavity_bounds` が
+    # 「ここまでは置けます」と返した全長そのものを入れた瞬間に
+    # `z_we - z0` が 1.9999999999999998 と出て断られる（テナーで実際に踏んだ）。
+    # `outer_layout_error` の踵の床が `raw < floor - 1e-9` としているのと
+    # 同じ寄せ方 ——**言われたとおりの値を入れた直後に断られない**ようにする。
+    if z_we - z0 >= _MIN_WINDOW_SPAN_MM - 1e-9:
         return None
     return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
             f"窓が z {z0:.2f}→{z_we:.2f}mm ＝ 長さ {z_we - z0:+.2f}mm しか残らず、"
             f"最低 {_MIN_WINDOW_SPAN_MM:.1f}mm 要ります。"
             f"ボアの始まり（全長 {p['overall_length']:.1f} − ボア長 "
             f"{p['bore_length']:.1f} ＝ {zb:.2f}mm）が手前すぎるためで、"
-            f"ボア長を短く / 全長を長く すれば直ります"
+            f"「チェンバー→ボアの遷移」を縮める / ボア長を短く / 全長を長く "
+            f"すれば直ります"
             f"（ウィンドウ長 {p['window_length']:.1f}mm はこの場合効きません —— "
-            f"窓の後端は {zb:.2f} − 4.0 で頭打ちになっています）。")
+            f"窓の後端は {zb:.2f} − チェンバー→ボアの遷移 "
+            f"{p.get('chamber_to_bore_mm', _CHAMBER_TO_BORE_DEFAULT_MM):.1f} で"
+            f"頭打ちになっています）。")
+
+
+def _window_tail_mm(p: dict) -> float:
+    """ボアの始まりが窓の後ろに残さなければならない長さ [mm]。
+
+    `cavity_layout_error` の最後の条件（窓が `_MIN_WINDOW_SPAN_MM` 残る）を
+    **`bore_start_z` について解いた形**。窓の後端は `zb − chamber_to_bore_mm`
+    で頭打ちなので、条件は `zb − gap − window_start_z >= _MIN_WINDOW_SPAN_MM`
+    ＝ `zb >= window_start_z + gap + _MIN_WINDOW_SPAN_MM` になる。
+
+    既定では 6.2 / 6.2 / 6.4mm（3 サイズ）。B-3 が「壁は長さではなく**始まりの
+    位置**が決めている」と測った量そのもので、B-4a の「全長 ≥ ボア長 + 6.5」は
+    この裏返し。
+    """
+    gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
+    return window_start_z(p) + gap + _MIN_WINDOW_SPAN_MM
+
+
+def cavity_bounds(p: dict) -> dict:
+    """空洞の並びが決める**相手で動く壁**（Phase 4-E B-5）。
+
+    `cavity_layout_error` と**同じ条件**を境界について解いたもの。数字は
+    持たず `_window_tail_mm` を通して同じ定数を読むが、条件が 2 か所に
+    書かれること自体は代理変数の型なので、**テストが `params_error` を
+    二分して交差点と一致することを 3 サイズで検査する**
+    （`test_the_moving_walls_land_exactly_where_params_error_flips`）。
+    """
+    tail = _window_tail_mm(p)
+    return {
+        "bore_length": {"hi": p["overall_length"] - tail, "hi_by": "全長"},
+        "overall_length": {"lo": p["bore_length"] + tail, "lo_by": "ボア長"},
+    }
+
+
+def shank_warnings(p: dict) -> list[str]:
+    """シャンクの肉厚についての注意 ＝ **形は指定どおりだが刷れない**側。
+
+    空洞は `shell_limit` が `min_wall` を守らせるのに、**ボアの円柱は素で
+    引かれる**（`mouthpiece._bore_solid`）。同じ法則が片方にしか掛かって
+    いないので、ボア径を上げるとシャンクの肉厚だけが黙って薄くなる。
+    肉厚 0 以下は `outer_layout_error` が弾くので、**ここが受け持つのは
+    0 と `min_wall` の間**（B-3 の実測で soprano は帯の上端 φ14.8 が
+    肉厚 1.94mm ＝ `min_wall` 1.8 まで 0.14mm しかない）。
+
+    `cavity_warnings` と別にしてあるのは出所が違うから ——
+    あちらは空洞の法則、こちらは外形と製造。`mouthpiece.warnings()` が
+    2 つを繋いで 1 枚のカードにする。
+    """
+    r_sh, r_bore, mw = shank_radius(p), bore_radius(p), p["min_wall"]
+    wall = r_sh - r_bore
+    # **ちょうど `min_wall` は警告しない。** 1e-6 の遊びが無いと、
+    # `shank_dia − 2·min_wall`（23.2 − 3.6 = 19.599999999999998）を入れた
+    # だけで肉厚が 1.7999999999999972 と出て警告が立つ ——
+    # 利用者が「言われたとおりの値」を入れた直後に警告が出ることになる。
+    if not (0.0 < wall < mw - 1e-6):
+        return []
+    return [f"シャンクの肉厚が {wall:.2f}mm ＝ 最小肉厚 {mw:.1f}mm を"
+            f"下回っています（シャンク径 φ{r_sh * 2.0:.2f} に対しボア径 "
+            f"φ{p['bore_dia']:.2f}）。形は指定どおり出ますが、この厚みでは"
+            f"印刷したシャンクが割れます。ボア径を "
+            f"φ{r_sh * 2.0 - 2.0 * mw:.2f}mm 以下にするか、シャンク径を "
+            f"φ{p['bore_dia'] + 2.0 * mw:.2f}mm 以上にしてください。"]
 
 
 def outer_layout_error(p: dict) -> str | None:
     """外形の並びが成立しないときに理由を返す。成立していれば `None`。
 
-    条件は 1 つだけ ——**最大径は本当に最大でなければならない**（`body_dia` ≥
-    `shank_dia`）。この 2 つは各自のレンジが独立していて、`ParamSpec` は 1 本ずつ
-    しか見ないので、**UI のスライダ 2 本から到達できる**。逆転すると:
+    条件は 6 つ。前の 3 つは「各自のレンジは守っているのに組で破れる」型で、
+    `ParamSpec` は 1 本ずつしか見ないので **UI のスライダ 2 本から到達できる**。
+
+    **(4)(5) は相手のいない 1 本の拘束**（Phase B-4b の「母線は単調」）。
+    `ParamSpec.hard_*` でも表せるが、そちらは**スライダの刻みへ丸めた**値
+    なので、刻みに乗らない経路（プロジェクトファイル、直に組んだ dict、
+    掃引器）はすり抜ける。`hard_*` が刻みの格子で止め、ここが**真の交差**で
+    断る ——B-4a の踵の床（`shank_length` / `shoulder_ratio`）と同じ組み方。
+    どちらも数字は持たず `body_waist_limits` / `shoulder_fullness_limits` が
+    実測プロファイル表から解いた値を使うので、置き場所が 2 つでもずれない。
+
+    **(6) はまた「関係」**（B-3・B-4a で 5 本出たのと同じ型）。`beak_height` の
+    上下は `body_dia`・全長・テーブル角・ティップ開き・ティップレール厚で動く
+    ので、`hard_*` はテンプレート値での**掛け金**にしかならない ——相手を
+    動かせば帯の端が壁の外へ出ることもある。成立条件はここが 1 か所で持つ。
+
+    **(1) 最大径は本当に最大でなければならない**（`body_dia` ≥ `shank_dia`）。
+    逆転すると:
 
     - 肩プロファイルが内向きではなく**外向き**になる。`outer_radius_nominal` は
       `r_sh + (r_max − r_sh)·shape` なので `r_max < r_sh` だと符号が反転し、
@@ -1648,16 +2137,162 @@ def outer_layout_error(p: dict) -> str | None:
     ソプラノとアルトはたまたま割れずに残るが、**3 サイズとも最大径がシャンク径を
     下回っている**（下限 18.0 に対しシャンク径は 18.7 / 21.1 / 23.0）ので、
     割れなかったほうが偶然。サイズで挙動が変わる組合せは弾く側に倒す。
+
+    **(2) ボアはシャンクの中に収まらなければならない**（`bore_dia` <
+    `shank_dia`）。ボアの円柱（`mouthpiece._bore_solid`）は**素で引かれる** ——
+    空洞のほうは `shell_limit` で `min_wall` を守らせているのに、こちらには
+    同じ法則が掛かっていない。B-3 の実測では、肉厚が 0 になっても −1.0mm に
+    なっても `params_error` は `None`、OCCT も**ソリッド 1 個**を返す
+    （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる ＝ シャンクが丸ごと
+    消えて部品が短くなっている）。段 3 が「1 個か」しか見ていないので、
+    掃引では捕まらない。0 と `min_wall` の間は `shank_warnings` が注意を出す。
+
+    **(3) 踵が全長の `HEEL_FLOOR_RATIO` より前に来てはならない**（Phase B-4a）。
+    `heel_z` は `max(heel_raw, 0.30·全長)` で床を持っていて、**床に当たった先は
+    `shank_length` も `shoulder_ratio` も形を 1 ビットも動かさない** ——
+    掃引では `shank_length` が 100mm まで、`shoulder_ratio` が 3.0 まで素通りし、
+    段 1〜3 が全部 ok を返しながら応答だけが 0% になる（黙ったクランプ 8 例目）。
+    しかも寸法図と仕様書は与えた数字を印字し続けるので、**図と形が食い違う**。
+    床に当たる点は `shank_length_at_heel_floor` /
+    `shoulder_ratio_at_heel_floor` が返し、スライダの `hard_max` は
+    そこから 1 目盛り内側に置いてある。
     """
     r_max, r_sh = p["body_dia"] / 2.0, shank_radius(p)
-    if r_max >= r_sh:
-        return None
-    return (f"最大径がシャンク径より細くなっています: 最大径 "
-            f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
-            f"肩が最大径からシャンクへ**太る**向きになり、"
-            f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
-            f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
-            f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+    r_bore = bore_radius(p)
+    if r_bore >= r_sh:
+        return (f"ボア径がシャンク径以上です: ボア径 φ{p['bore_dia']:.2f} ≥ "
+                f"シャンク径 φ{r_sh * 2.0:.2f} mm。ボアの円筒がシャンクを"
+                f"丸ごと削り、ネックに挿す部分が無くなります（肉厚 "
+                f"{r_sh - r_bore:+.2f}mm）。ボア径を φ{r_sh * 2.0:.2f}mm 未満に"
+                f"するか、シャンク径を φ{p['bore_dia']:.2f}mm より太くして"
+                f"ください。")
+    if r_max < r_sh:
+        return (f"最大径がシャンク径より細くなっています: 最大径 "
+                f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
+                f"肩が最大径からシャンクへ**太る**向きになり、"
+                f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
+                f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
+                f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+    if 1.0 + shoulder_ratio(p) <= 0.0:
+        # 肩比 ≤ −1。踵の式の分母が 0 以下になる（掃引が素の ZeroDivisionError
+        # を踏んだ点）。ここだけは「踵の z」を出せないので別文にする。
+        return (f"肩の長さ比が {shoulder_ratio(p):.3f} ＝ −1 以下です。"
+                f"踵の位置 (全長 − シャンク長)/(1 + 肩比) の分母が 0 以下に"
+                f"なり、形が定義できません。肩の長さ比を 0 より大きくして"
+                f"ください。")
+    raw, floor = heel_raw(p), heel_floor(p)
+    if raw < floor - 1e-9:
+        return (f"シャンク平行部と肩が全長を食い尽くしています: 踵（最大径の"
+                f"位置）が z={raw:.1f}mm ＝ 全長 {p['overall_length']:.1f}mm の"
+                f"{HEEL_FLOOR_RATIO * 100:.0f}%（{floor:.1f}mm）より前に"
+                f"来ます。この先は踵が {floor:.1f}mm で頭打ちになり、"
+                f"**シャンク長も肩比も形を動かさなくなります**"
+                f"（寸法図だけが与えた数字を印字し続けます）。"
+                f"シャンク長を {shank_length_at_heel_floor(p):.1f}mm 以下、"
+                f"または肩の長さ比を {shoulder_ratio_at_heel_floor(p):.3f} "
+                f"以下にしてください。")
+    # (4)(5) 母線は単調（Phase B-4b）。**壊れ方が 4 通りあるので、名指しは
+    # 症状の出ているほうを選ぶ** ——壁のすぐ外では逸脱量が 1µm に満たず、
+    # 量を印字しても「0.00mm」としか出ない。どこで何が起きるかを言う。
+    heel = heel_z(p)
+    w_lo, w_hi = body_waist_limits()
+    w = body_waist(p)
+    if not (w_lo <= w <= w_hi):
+        az, _ = outer_apex(p)
+        if abs(az - heel) > 1e-3:
+            why = (f"最大径が踵（z={heel:.1f}mm）ではなく z={az:.1f}mm へ"
+                   f"移ります")
+        else:
+            why = f"胴が z={body_dip(p)[0]:.1f}mm で太るのをやめます"
+        return (f"胴の膨らみ {w:+.3f} では母線が単調でなくなります: {why}。"
+                f"「最大径に向かって単調に太る」が崩れると、リガチャー座"
+                f"（`ligature_seat_range`）が最大径ではない所に置かれます"
+                f"——**形は通り、OCCT もソリッド 1 個を返す**ので、"
+                f"出来上がりを見ても気づけません。"
+                f"{w_lo:+.3f}〜{w_hi:+.3f} の範囲にしてください。")
+    k_lo, k_hi = shoulder_fullness_limits()
+    k = shoulder_fullness(p)
+    if not (k_lo <= k <= k_hi):
+        _, dr = shoulder_dip(p)
+        r_sh = shank_radius(p)
+        if dr < r_sh - 1e-9:
+            why = (f"肩の途中の最小半径 {dr:.3f}mm がシャンク半径 "
+                   f"{r_sh:.3f}mm を下回り、えぐれます ——**最薄の肉厚が"
+                   f"シャンクではなくそこ**になるので、肉厚の注意の数字も"
+                   f"甘くなります")
+        else:
+            why = f"肩が z={shoulder_bulge(p)[0]:.1f}mm で細るのをやめます"
+        return (f"肩の張り {k:+.3f} では母線が単調でなくなります: {why}。"
+                f"「最大径からシャンクへ単調に細る」が崩れます ——"
+                f"**形は通り、OCCT もソリッド 1 個を返す**ので、"
+                f"出来上がりを見ても気づけません。"
+                f"{k_lo:+.3f}〜{k_hi:+.3f} の範囲にしてください。")
+    bh = p.get("beak_height")
+    if bh is not None:
+        top, flat = beak_height_at_body_top(p), beak_height_flat(p)
+        z_bite = _BEAK_BITE * p["overall_length"]
+        if bh > top:
+            return (f"ビーク高さ {bh:.2f}mm がバイトポイント（z="
+                    f"{z_bite:.1f}mm）での胴の全高 {top:.2f}mm を超えています。"
+                    f"ビークは切除ソリッドなので、稜線が胴の外へ出ると"
+                    f"**そこは何も削られず**、上面は胴のままになります ——"
+                    f"「くわえたときの口の開き量」という `beak_height` の"
+                    f"定義が成り立たなくなり、寸法図だけが与えた数字を"
+                    f"印字し続けます。{top:.2f}mm 以下にするか、最大径か"
+                    f"全長を大きくしてください。")
+        if bh < flat:
+            return (f"ビーク高さ {bh:.2f}mm ではビーク稜線が**前下がり**に"
+                    f"なります（水平になるのは {flat:.2f}mm）。ティップ側の"
+                    f"頂点はテーブル＋ティップ開き＋ティップレール厚で"
+                    f"決まっているので、これを下回るとビークがティップから"
+                    f"後ろへ向かって低くなります ——実測 18.0° の"
+                    f"「ティップからバイトへ立ち上がる直線ランプ」ではもはや"
+                    f"ありません。{flat:.2f}mm 以上にしてください。")
+    return None
+
+
+def outer_bounds(p: dict, step: dict | None = None) -> dict:
+    """外形が決める**相手で動く壁**（Phase 4-E B-5）。
+
+    `outer_layout_error` の条件 (1)(2)(3)(6) を、それぞれのパラメータについて
+    解いたもの ——B-3・B-4a・B-4b で「壁は数字ではなく関係だった」と測った
+    8 本のうち、外形側の 6 本がここ（残り 2 本は `cavity_bounds`）。
+
+    `step` は `ParamSpec.step`（`{key: 刻み}`）。**条件 (1) は狭義の不等号**
+    （`bore_dia` < `shank_dia`）なので、境界そのものは通らない ——1 目盛り
+    内側へ寄せる。刻みは**スキーマが持ち主**なのでここには書かず、呼び出し側
+    （`Mouthpiece.param_bounds`）から渡してもらう。
+
+    `body_waist` / `shoulder_fullness` は入れない ——B-4b で測ったとおり
+    **相手がいない**（`r/r_max` に正規化した形の性質で 3 サイズ共通）ので、
+    静的な `hard_*` で正しく表せる。
+
+    条件が `outer_layout_error` と 2 か所に書かれることは代理変数の型なので、
+    **テストが `params_error` を二分して交差点と一致することを 3 サイズで
+    検査する**（`cavity_bounds` と同じ担保）。
+    """
+    step = step or {}
+    r_sh, r_max = shank_radius(p), p["body_dia"] / 2.0
+    return {
+        # (1) ボアはシャンクの中に収まる（狭義）
+        "bore_dia": {"hi": r_sh * 2.0 - (step.get("bore_dia") or 0.05),
+                     "hi_by": "シャンク径"},
+        # (1)(2) シャンク径はボア径と最大径に挟まれる
+        "shank_dia": {"lo": p["bore_dia"] + (step.get("shank_dia") or 0.1),
+                      "lo_by": "ボア径", "hi": r_max * 2.0, "hi_by": "最大径"},
+        # (2) 最大径は本当に最大（等号は通る）
+        "body_dia": {"lo": r_sh * 2.0, "lo_by": "シャンク径"},
+        # (3) 踵の床。**2 本は互いに相手**なので、片方の壁はもう片方の現在値で動く
+        "shank_length": {"hi": shank_length_at_heel_floor(p),
+                         "hi_by": "肩の長さ比と全長"},
+        "shoulder_ratio": {"hi": shoulder_ratio_at_heel_floor(p),
+                           "hi_by": "シャンク長と全長"},
+        # (6) ビーク高さ。上は胴の全高、下は稜線が前下がりになる点
+        "beak_height": {"lo": beak_height_flat(p),
+                        "lo_by": "テーブル角とティップ開き",
+                        "hi": beak_height_at_body_top(p),
+                        "hi_by": "最大径と全長"},
+    }
 
 
 def _station_zs(p: dict) -> list[float]:
@@ -2492,12 +3127,21 @@ def cavity_warnings(p: dict) -> list[str]:
     # スライダの可動域から到達できる（`window_length_effective` を見ること）。
     short = window_length_shortfall(p)
     if short > 0.05:
+        # **止めている量を直値で書かないこと。** 以前はここが「ボアの始まり
+        # {zb} − 4.0mm」で、その 4.0 は Phase 4-A で `chamber_to_bore_mm` に
+        # なっている。直値のままだと、利用者がその値を 0.5 にして窓が実際に
+        # 伸びても文面は 4.0 と言い続け、しかも**直し方に本命のつまみが
+        # 挙がらない** —— `window_length` の説明文だけが「これを縮める」と
+        # 言っていて、実際に読まれる警告が古い、という食い違いだった。
+        gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
         out.append(f"ウィンドウ長が {short:.1f}mm 届いていません"
                    f"（指定 {p['window_length']:.1f} → 実際 "
                    f"{window_length_effective(p):.1f}mm）。窓の後端は"
                    f"チェンバー→ボアの遷移区間を残すため「ボアの始まり "
-                   f"{bore_start_z(p):.1f} − 4.0mm」で頭打ちになります。"
-                   f"ここから先へ伸ばすには全長を長く / ボア長を短くしてください"
+                   f"{bore_start_z(p):.1f} − チェンバー→ボアの遷移 "
+                   f"{gap:.1f}mm」で頭打ちになります。ここから先へ伸ばすには"
+                   f"「チェンバー→ボアの遷移」を縮める / 全長を長く / "
+                   f"ボア長を短くしてください"
                    f"（ウィンドウ長を上げても形は変わりません）")
     # 息の通り道。`_soft_min` の丸め（最大 k/2）は差と見ない。
     ent, h_min, z_min = airway_min(p)

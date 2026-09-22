@@ -123,6 +123,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .simcard td { padding: 2px 4px; }
 .simcard td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* 警告カード。**出るのは警告があるときだけ**なので、出ていること自体が
+   合図になる。枠と見出しを警告色にして、他のカードと取り違えないようにする。 */
+.warncard { border-color: var(--warn); }
+.warncard h3 { color: var(--warn); }
+.simcard .warnline { color: var(--warn); font-size: 11.5px; line-height: 1.7; }
+.simcard .warnline + .warnline { margin-top: 8px; }
+
 .sugg { font-size: 11.5px; color: var(--muted); line-height: 1.7; }
 .sugg b { color: var(--accent2); }
 

@@ -1,5 +1,6 @@
 """SaxSketch 結合テスト: ジオメトリ・音響・プロジェクトI/O・API。"""
 import collections
+import json
 import math
 from pathlib import Path
 
@@ -101,7 +102,8 @@ TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.0, "tenor": 0.3}
 # 3 サイズとも実用域の内側に入る。浅い側はフェルール＋コルクが噛む下限、深い側は
 # **押し込み限界の実測**（`insertion_limit_mm` = 27.1 / 36.4 / 36.0mm、2026-08-13）。
 # 実用域は soprano 5.7〜27.1 / alto 3.0〜36.4 / tenor 3.0〜36.0 で、そこでの
-# チューニング幅は soprano −27.5〜+4.6 / alto −10.5〜+10.3 / tenor −7.5〜+4.7 セント。
+# チューニング幅は soprano −25.9〜+6.3 / alto −10.5〜+10.3 / tenor −7.5〜+4.7 セント
+# （soprano は 2026-09-22 に窓を実物へ合わせる前 −27.5〜+4.6）。
 #
 # アルトの 19.2 → 13.6 は形状が動いたぶん（Wood Stone PHROX の実測で全長が
 # 98.54 → 91.7mm）。胴が短くなれば空洞が減るので、同じ音に合わせるには
@@ -115,7 +117,10 @@ TIER1_RESIDUAL_CENTS = {"soprano": -0.1, "alto": 0.0, "tenor": 0.3}
 #     だった（`test_window_length_does_not_touch_the_tip`）。特異点を直したら
 #     空洞が実物の深さへ戻り、合う位置も 14.4 へ戻った。
 #     **形が変われば零点も動く、を 1 セッションで 2 回踏んだ。**
-IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 14.4, "tenor": 20.9}
+# ソプラノの 23.5 → **22.5** は 2026-09-22。窓がテンプレートの基準（刻印 4）より
+# 一様に 1.3mm 広かったので `side_rail_width` を 0.89 → 1.55 に直した。空洞が
+# 狭まったぶん浅く挿すことになる（`cork_depth` も同じだけ引き直した）。
+IN_TUNE_INSERTION_MM = {"soprano": 22.5, "alto": 14.4, "tenor": 20.9}
 
 # **その挿し込み量での**実効容積 / 欠損円錐（soprano +25 / alto +21 / tenor +26%）。
 # 0 ではないのがこの模型の要点で、マウスピースは代替する円錐より短いぶん太くて
@@ -124,6 +129,8 @@ IN_TUNE_INSERTION_MM = {"soprano": 23.5, "alto": 14.4, "tenor": 20.9}
 # **この「揃い」はアルトの実測で壊れた**（2026-09-05）: soprano +25.5 /
 # alto **+20.4** / tenor +23.4%。**+21〜26% で揃うという観察は、アルトが未実測
 # だったから成立していた。**
+# ソプラノは 2026-09-22 に窓を実物へ合わせて **+24.1**（直前の形で測り直すと +24.8。
+# +25.5 はさらに前の形の値）。帯の内側で動いただけ。
 #
 # 同じ日にいったん alto +13.3 と記録したが、あれは `cavity_floor_y` の特異点で
 # 床が 3.5 倍深く出ていたぶんを含んでいた。特異点を直すと +20.4 に戻り、散らばりは
@@ -264,8 +271,16 @@ def test_measured_stop_brings_tip_opening_back_into_the_verdict():
     問題ない。**上界で判定して安心することの危うさ**がそのまま出た例なので、
     「広げても平気」に戻ったらここで落とす。
 
-    値ではなく**向きと到達**を張る: 広げるほど深く挿すことになり、可動域の上端では
-    届かなくなり、そのとき黙って ok を返さない。
+    **ソプラノの窓を実物へ合わせたら「上端では届かない」が崩れた**（2026-09-22、
+    `side_rail_width` 0.89 → 1.55）。空洞が小さくなって合う挿し込みが 1.1mm 浅くなり、
+    帯の上端 3.2 でも止まりの 0.06mm 手前で合う（旧形は 2.66 で止まりの外へ出た）。
+    広げたときの音程の効きが −7.5 セントで頭打ちになるので、壁の 5.2 まで振っても
+    外へは出ない。**判定を動かすことは変わらない** —— 余裕が `TUNING_MARGIN_MM`
+    を割って tight になる。届かないときの unreachable は
+    `test_tier1_advice_admits_saturation`（下、合成したチューニング結果）が押さえている。
+
+    値ではなく**向きと余裕**を張る: 広げるほど深く挿すことになり、可動域の上端では
+    余裕が無くなり、そのとき黙って ok を返さない。
     """
     from saxsketch.acoustics import openwind_bridge as ob
     from saxsketch.acoustics import volume as ac_volume
@@ -281,13 +296,12 @@ def test_measured_stop_brings_tip_opening_back_into_the_verdict():
 
     stop = si["insertion_limit_mm"]
     assert zs[1] < stop, zs                    # 既定は届く
-    assert zs[2] > stop, (zs, stop)            # 可動域の上端は届かない
-    # 届かないときに黙って ok を返さないこと。
+    # 可動域の上端では余裕が無い。そのとき黙って ok を返さないこと。
     wide = dict(p, tip_opening=tip.max)
     t = ob.tuning_position(wide, si, exact=True)
     rep = ac_volume.tier1_report(profiles.cavity_volume_cc(wide), si, t)
-    assert not t["reachable"], t
-    assert rep["status"] == "unreachable", rep
+    assert stop - zs[2] < ac_volume.TUNING_MARGIN_MM, (zs, stop)
+    assert rep["status"] in ("tight", "unreachable"), rep
 
 
 def test_bore_length_is_the_same_fraction_of_overall_length():
@@ -601,6 +615,136 @@ def test_window_length_says_when_it_stops_doing_anything():
         assert profiles.cavity_layout_error(wide) is None, tid
 
 
+#: 既定テンプレートでの `window_length` の凍る点 [mm]
+#: （= `bore_start_z − chamber_to_bore_mm − window_front_z`）。
+#: **本文に焼くのをやめてここへ移した数字。** 3 つの項がどれもテンプレート
+#: ぶら下がりなので、テンプレートを直すたびに散らばった散文だけが古くなる ——
+#: `window_length_effective` の docstring は 2 世代連続で腐った。ここが落ちたら
+#: 値を書き換えるだけでなく、下の `_WINDOW_FREEZE_DOCS` の 3 か所も直すこと。
+_WINDOW_FREEZE_MM = {"soprano": 28.54, "alto": 38.67, "tenor": 45.15}
+
+#: 上の数字を散文で持っている場所。テストは中身までは見ない（読む人への地図）。
+_WINDOW_FREEZE_DOCS = (
+    "saxsketch/instruments/saxophone/components/mouthpiece.py（window_length のコメント）",
+    "cad/windycity/README.md（寸法図示で食い違った量の表）",
+    "docs/param-limits.md（Phase 4-E の帯と壁の表）",
+)
+
+
+def test_the_window_freeze_point_is_where_the_docs_say_it_is():
+    """**ウィンドウ長が効かなくなる点を数字で釘打つ。**
+
+    「窓の後端はボアに阻まれる」という規則そのものは
+    `test_window_length_says_when_it_stops_doing_anything` が見ている。ここが
+    見るのは**どこで阻まれるか** —— 散文が持っていて腐った数字のほう。
+
+    腐り方はいつも同じで、`bore_length` なりテンプレートなりが実測で動き、
+    形とテストは追随するのに**散文だけ置き去りになる**。実際この数字は
+    4-C.5 で 1 度直され（41.1 → 37.92）、9/05 の `bore_length` 実測でまた
+    動いた（→ 38.67）のに、docstring も README も 4-C.5 のままだった。
+    テンプレートが動いたらこのテストが落ちて新しい値を教える。
+
+    **アルトが既定でちょうど凍る点に載っているのは事故ではない。**
+    `bore_length` を PHROX 実測が許す上限 48.30 に置いた帰結で、
+    `docs/print-inspection.md` に「承知のうえで踏んだ」と記録がある。
+    だから既定は「届いている」（不足 0）と「1 目盛り上げたら効かない」を
+    同時に満たす —— 両方ここで固定する。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        p = _template_params("mouthpiece", tid)
+        freeze = (profiles.bore_start_z(p) - p["chamber_to_bore_mm"]
+                  - profiles.window_front_z(p))
+        assert freeze == pytest.approx(_WINDOW_FREEZE_MM[tid], abs=0.01), (
+            tid, freeze, "散文の数字も直すこと:", _WINDOW_FREEZE_DOCS)
+        # 凍る点は「指定した窓長が実効値と一致する上限」でもある。
+        assert profiles.window_length_effective(
+            dict(p, window_length=freeze + 5.0)) == pytest.approx(freeze, abs=1e-6), tid
+
+        spec = next(s for s in comp.param_specs() if s.key == "window_length")
+        live = min(freeze, spec.max) - spec.min
+        assert live > 0.0, (tid, "帯が丸ごと死んでいる")
+
+    # アルトだけ、既定がちょうど天井に載っている（意図的）。
+    alto = _template_params("mouthpiece", "alto")
+    assert profiles.window_length_shortfall(alto) == pytest.approx(0.0), "既定は届く"
+    up = dict(alto, window_length=alto["window_length"] + 0.5)
+    assert profiles.window_length_effective(up) == pytest.approx(
+        alto["window_length"], abs=1e-6), "1 目盛り上げても 1 ビットも動かない"
+
+    # **ステーションの等値比較はしない。** `window_end_z` は
+    # `min(前縁 + 窓長, zb − gap)` で、既定はちょうど両辺が並ぶ点なので
+    # どちらの式で計算したかによって答えが 1 ULP ずれ、`s_we = z_we/zb` を
+    # 通った `_section_exponents` の指数に nx 6.0 対 6.000000000000001 として
+    # 出る。**形の違いではなく、同じ数の別の計算経路**（OCCT の三角形分割は
+    # 一致する）。だから許容付きで見る。
+    def _same(a, b, tol=1e-9):
+        return len(a) == len(b) and all(
+            set(x) == set(y) and all(
+                (x[k] == y[k]) if isinstance(x[k], str) else abs(x[k] - y[k]) <= tol
+                for k in x)
+            for x, y in zip(a, b))
+
+    assert _same(profiles.cavity_stations(up), profiles.cavity_stations(alto))
+    # 下げるほうは生きている（凍っているのは上だけ、と言い切れること）
+    down = dict(alto, window_length=alto["window_length"] - 0.5)
+    assert not _same(profiles.cavity_stations(down), profiles.cavity_stations(alto))
+
+    # そして「見た目のモデル」そのもので 1 度だけ確かめる —— 利用者が見るのは
+    # ステーションではなくソリッド。帯の上端まで上げても体積が動かないこと。
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    v_default = comp.build(alto).volume
+    v_top = comp.build(dict(alto, window_length=44.0)).volume
+    assert v_top == pytest.approx(v_default, abs=1e-6), "既定から上は形が動かない"
+
+
+def test_the_window_warning_names_the_gap_that_is_actually_stopping_it():
+    """**警告は「いま止めている量」を言うこと。直値を書かない。**
+
+    以前ここは「ボアの始まり 43.4 − 4.0mm」と書いていた。その 4.0 は
+    Phase 4-A で `chamber_to_bore_mm` になっているので、利用者がそれを 0.5 に
+    縮めて窓が実際に伸びても、**文面だけ 4.0 と言い続ける**。しかも直し方に
+    本命のつまみが挙がっておらず（全長 / ボア長しか出てこない）、
+    `window_length` の説明文だけが「これを縮める」と言っていた ——
+    **説明文と、実際に読まれる警告が食い違っていた。**
+
+    代理変数が 1 か所直しても終わらない型（`min`/`max` がスキーマの外で
+    4 か所消費されていたのと同じ）。ここは文面に数字を持たせず `p` から読む。
+    """
+    p = _template_params("mouthpiece", "alto")
+    wide = dict(p, window_length=44.0)
+
+    def why(q):
+        return [w for w in profiles.cavity_warnings(q) if "ウィンドウ長" in w]
+
+    for gap, eff in ((4.0, 38.67), (2.0, 40.67), (0.5, 42.17)):
+        q = dict(wide, chamber_to_bore_mm=gap)
+        assert profiles.window_length_effective(q) == pytest.approx(eff, abs=0.01)
+        msg = why(q)
+        assert len(msg) == 1, (gap, msg)
+        assert f"{gap:.1f}mm" in msg[0], (gap, msg[0])
+        # 効いていない量を名指ししない。4.0 のときだけは値が一致するので除く。
+        if gap != 4.0:
+            assert "− 4.0mm" not in msg[0], (gap, msg[0])
+        # 直し方に本命が入っている。
+        assert "「チェンバー→ボアの遷移」を縮める" in msg[0], (gap, msg[0])
+
+    # 実効値も文面の中で更新されること（実際の頭打ちを書く）。
+    assert "42.2mm" in why(dict(wide, chamber_to_bore_mm=0.5))[0]
+
+    # **同じ直値が `cavity_layout_error` にもあった。** こちらは注意ではなく
+    # エラーで、窓が `_MIN_WINDOW_SPAN_MM` を割ったときに出る文。1 か所直して
+    # 終わりにしないこと（代理変数の型）。
+    # 遷移を縮めれば直る側に居ると当然エラーが消えるので、どちらの gap でも
+    # 割るところまでボアを伸ばす（88.0 は gap 0.5 なら成立してしまう）。
+    for gap in (4.0, 0.5):
+        broke = dict(p, bore_length=90.0, chamber_to_bore_mm=gap)
+        err = profiles.cavity_layout_error(broke)
+        assert err is not None and "チェンバー→ボアの遷移" in err, (gap, err)
+        assert f"チェンバー→ボアの遷移 {gap:.1f}" in err, (gap, err)
+
+
 def test_window_length_does_not_touch_the_tip():
     """**ウィンドウ長は先端の形に効いてはいけない。**
 
@@ -883,17 +1027,95 @@ def test_api_reports_clamping_to_the_browser(tmp_path):
     r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
     assert r.json()["adjustments"] == []
 
-    # 成立しない組で弾かれたときは**丸めの話をしない**（値は保存されていない）。
-    # `body_dia` 下限と `shank_dia` 上限はどちらも各自の帯の中なので丸めは起きず、
-    # 組で `outer_layout_error` に当たる ——「弾いた」と「丸めた」が混ざらないこと。
+    # **相手で動く壁は「弾く」より先に「丸める」**（B-5）。帯の端どうしの
+    # `body_dia` 18.0 / `shank_dia` 28.0 は、以前はここで 400 になっていたが、
+    # いまは互いの壁で丸まって成立する組に落ちる ——両方とも相手の名前つきで
+    # 報告される。**黙って通ってはいない。**
     r = c.put("/api/project/params",
               json={"params": {"body_dia": 18.0, "shank_dia": 28.0}})
+    assert r.status_code == 200, r.text
+    adjs = {a["key"]: a for a in r.json()["adjustments"]}
+    assert set(adjs) == {"body_dia", "shank_dia"}
+    assert all(a["at"] == "relation" and a["partner"] for a in adjs.values())
+    assert "シャンク径" in adjs["body_dia"]["message"]
+    assert "最大径" in adjs["shank_dia"]["message"]
+
+    # 成立しない組で弾かれたときは**丸めの話をしない**（値は保存されていない）。
+    # 径 2 本を壁ちょうど（`hard_min` 4.9）へ置くと丸めは起きず、組で
+    # `outer_layout_error` に当たる ——「弾いた」と「丸めた」が混ざらないこと。
+    # **上下が逆転した組では動的な壁を返さない**ので（`Mouthpiece.param_bounds`）、
+    # ここは掛け金だけが効いて素通りし、本当の理由が 400 で出る。
+    keep = dict(r.json()["params"])
+    r = c.put("/api/project/params",
+              json={"params": {"body_dia": 4.9, "shank_dia": 4.9}})
     assert r.status_code == 400, r.text
-    assert "最大径" in r.json()["detail"]
+    assert "ボア径" in r.json()["detail"]
     # 弾かれたあとサーバ側は前の値のまま（丸めの報告も残っていない）
     r = c.put("/api/project/params", json={"params": {"min_wall": 2.0}})
     assert r.json()["adjustments"] == []
-    assert r.json()["params"]["body_dia"] == pytest.approx(29.1)
+    assert r.json()["params"]["body_dia"] == pytest.approx(keep["body_dia"])
+
+
+def test_the_warning_reaches_every_tab_not_just_the_section(alto):
+    """**警告の出る場所がタブに依らないこと。**
+
+    `cavity_warnings` は `Component.section()` の戻り値に埋まっていて、それを
+    読むのは断面タブ（`/api/section`）だけだった —— 3D タブでウィンドウ長を
+    上げると「形が動かない・理由も出ない」になる（2026-09-06 に報告して
+    残した穴）。いまは `simulate()` の便に載るので、どのタブを見ていても
+    右パネルの「⚠ 注意」カードに出る。
+
+    出所は `Component.warnings()` 1 つで、3 経路が同じ 1 本を運ぶ。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+
+    comp, base = alto
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+
+    def window_lines(ws):
+        return [w for w in ws if "ウィンドウ長" in w]
+
+    # **既定でも 1 行出ている**（天井がビーク下の肉厚で頭打ち ——
+    # `docs/print-inspection.md` の既知の状態）ので、「空か否か」ではなく
+    # ウィンドウ長の行で見る。
+    assert window_lines(c.get("/api/project").json()["simulation"]["warnings"]) == []
+
+    # 凍る点（alto 38.67 ＝ `_WINDOW_FREEZE_MM`）より上へ
+    body = c.put("/api/project/params", json={"params": {"window_length": 44.0}}).json()
+    line = window_lines(body["simulation"]["warnings"])
+    assert len(line) == 1, body["simulation"]["warnings"]
+    assert "38.7" in line[0]
+
+    # 開き直しても、断面タブでも、同じ 1 本
+    assert window_lines(c.get("/api/project").json()["simulation"]["warnings"]) == line
+    assert window_lines(c.get("/api/section").json()["warnings"]) == line
+
+    # 断面はクエリ上書きで**指を離す前に**動く（右カードは PUT を待つ）。
+    # ここが断面側に警告を残してある唯一の理由。
+    assert window_lines(c.get("/api/section",
+                              params={"window_length": 30.0}).json()["warnings"]) == []
+
+    # 帯の中へ戻せば消える（＝カードから行が消える）
+    back = c.put("/api/project/params", json={"params": {"window_length": 30.0}}).json()
+    assert window_lines(back["simulation"]["warnings"]) == []
+
+    # 警告を持たない部品では空 —— UI はこれを見てカードごと出さない。
+    # 「どの部品が警告を持つか」を UI に書かないための既定フック。
+    for cid in ("reed", "ligature"):
+        assert c.post("/api/project/new", json={
+            "instrument_id": "saxophone", "template_id": "alto",
+            "component_id": cid}).status_code == 200
+        assert c.get("/api/project").json()["simulation"]["warnings"] == [], cid
+
+    # 出所は `profiles` の 2 つだけ（代理変数を作らない）。`Component.warnings`
+    # は繋ぐだけで、判定は書かない —— B-3 でシャンクの肉厚が 2 つ目になった。
+    p = dict(base, window_length=44.0)
+    assert comp.warnings(p) == (profiles.cavity_warnings(p)
+                                + profiles.shank_warnings(p))
 
 
 def test_widening_a_band_does_not_leave_the_analysis_silently_flat():
@@ -976,6 +1198,1414 @@ def test_goalseek_never_drags_a_deliberate_value_back_into_the_band():
     assert r["proposal"]["tip_opening"] >= 3.2 - 1e-9
 
 
+def _sweeper():
+    """`cad/windycity/sweep_limits.py` を読み込む（パッケージではないので直読み）。
+
+    掃引器は出荷物ではなく道具だが、**壁の根拠を作っているのはこの道具**なので、
+    目が利くかどうかはテストで押さえる。
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "cad" / "windycity" / "sweep_limits.py"
+    spec = importlib.util.spec_from_file_location("sweep_limits_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_sweeper_measures_more_than_the_cavity_height():
+    """**掃引器の目が盲だったことの回帰テスト（Phase B-0）。**
+
+    初版の指紋は「ステーション枚数・先端高さ・最大高さ・窓の後端・ボアの
+    始まり」だけを見ていた。だから**幅でしか効かない** `side_rail_width` と、
+    **外形の先端 0.29mm でしか効かない** `tip_chamfer` を「形が動かない ＝
+    このパラメータは効いていない」と誤判定する。掃引器が捕まえるために
+    作られた型に、掃引器自身が嵌まっていた。
+
+    ここで主張するのは 2 つ: 旧指紋の成分（`cavity_h` と離散量）は本当に
+    動かないこと（＝ 誤判定は本物だったこと）と、新しい指紋なら動くこと。
+    """
+    sw = _sweeper()
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    grids = sw._grids(base)
+    specs = {s.key: s for s in comp.param_specs()}
+    for key, want in (("side_rail_width", "cavity_w"), ("tip_chamfer", "outer_r")):
+        spec = specs[key]
+        probe = sw._probe(comp, base, key, spec.default, spec.step, grids)
+        assert probe is not None, key
+        _slopes, rels = probe
+        assert sw._kept(rels, None)[0] == want, (key, rels)
+        a0 = sw._axes(base, grids)
+        a1 = sw._axes(dict(base, **{key: base[key] + 2.0 * spec.step}), grids)
+        assert a0["cavity_h"] == a1["cavity_h"], key      # 旧指紋は動かない
+        assert a0["_disc"] == a1["_disc"], key
+        assert sw._fingerprint(a0) != sw._fingerprint(a1), key
+
+
+def test_the_tip_chamfer_disappears_on_a_coarse_grid():
+    """**先端の面取りは粗いグリッドでは消える。**
+
+    アルトの面取り長は `tip_chamfer` 既定で 0.07mm、上限 1.2mm でも 0.29mm。
+    全長を 60 等分すると最初の標本は 1.3mm 先なので、**面取りを跨いで
+    「何も動かない」と出る**。掃引器の外形グリッドが先端だけ 0.05mm 刻みなのは
+    このため —— 物差しの目盛りが測る対象より粗いと、無いのと同じ。
+    """
+    sw = _sweeper()
+    p = _template_params("mouthpiece", "alto")
+    q = dict(p, tip_chamfer=1.2)
+    assert profiles.tip_chamfer_len(q) < 0.35, profiles.tip_chamfer_len(q)
+    length = p["overall_length"]
+    coarse = [length * i / sw.OUTER_GRID_N for i in range(1, sw.OUTER_GRID_N + 1)]
+    assert ([profiles.outer_radius(p, z) for z in coarse]
+            == [profiles.outer_radius(q, z) for z in coarse])
+    dense = [0.001 + sw.TIP_GRID_DZ * i for i in range(sw.TIP_GRID_N)]
+    assert ([profiles.outer_radius(p, z) for z in dense]
+            != [profiles.outer_radius(q, z) for z in dense])
+
+
+def test_the_sweeper_can_pin_a_choice_parameter():
+    """**choice を固定できないと測れないパラメータが 2 本ある。**
+
+    `baffle_curvature` は `baffle_type="curve"` のとき、`rollover_radius` は
+    `"rollover"` のときにしか形を動かさない。テンプレートの既定は `"step"` なので、
+    `--with` が float しか受けない初版では、この 2 本は永久に
+    「効いていない」としか出なかった。
+    """
+    sw = _sweeper()
+    rest, flags, extra, axis, steps = sw.parse_args(
+        ["baffle_curvature", "alto", "--no-build",
+         "--with", "baffle_type=curve", "--with", "window_length=44",
+         "--axis", "cavity_a"])
+    assert rest == ["baffle_curvature", "alto"]
+    assert flags == {"--no-build"}
+    assert extra == {"baffle_type": "curve", "window_length": 44.0}
+    assert axis == "cavity_a"
+    assert steps == sw.OUT_STEPS                     # 既定は据え置き
+
+    # B-3 で足した `--steps`。**届く距離は段数 × 刻み**なので、刻みの細い
+    # パラメータ（`bore_dia` は 0.05mm）では既定 40 段が打ち切りになる。
+    _r, _f, _e, _a, steps = sw.parse_args(["bore_dia", "--steps", "200"])
+    assert steps == 200
+
+    p = _template_params("mouthpiece", "alto")
+    for key, kind in (("baffle_curvature", "curve"), ("rollover_radius", "rollover")):
+        step = 0.2 if key == "baffle_curvature" else 2.0
+        for baffle, moves in ((kind, True), ("step", False)):
+            a = profiles.cavity_stations(dict(p, baffle_type=baffle))
+            b = profiles.cavity_stations(dict(p, baffle_type=baffle,
+                                              **{key: p[key] + step}))
+            same = all(x["h"] == pytest.approx(y["h"], abs=1e-12)
+                       for x, y in zip(a, b))
+            assert same != moves, (key, baffle)
+
+
+def test_tip_opening_zero_is_rejected_with_a_reason():
+    """**開き 0 は素の `ZeroDivisionError` ではなく理由で断ること。**
+
+    radial のフェイシングは `y(0)=tip` となる円弧半径を
+    `r = (fl² + tip²) / (2·tip)` で解くので、`tip_opening = 0` で落ちる。
+    落ちる場所は `facing_rise` の奥（`cavity_stations` → `_roof_base_y` →
+    `tip_roof_y` → `cut_top_y`）で、**`params_error` は `None` を返していた**。
+    掃引 `sweep_limits.py tip_opening` が下限へ歩いてちょうど 0 で踏んだ
+    ——`_pchip_table` の節点衝突と同じ型（退化する割り算）で、これで 4 つ目。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    err = comp.params_error(dict(base, tip_opening=0.0))
+    assert err is not None and "ティップ開き" in err
+    assert comp.params_error(dict(base, tip_opening=0.05)) is None
+    with pytest.raises(ValueError) as e:
+        profiles.facing_rise(dict(base, tip_opening=0.0), 0.0)
+    assert "ティップ開き" in str(e.value)
+    # 楕円カーブは割り算をしないので落ちない（ここも 0 は断るが、理由は上流）
+    assert profiles.facing_rise(
+        dict(base, tip_opening=0.0, facing_curve="elliptic"), 0.0) == 0.0
+
+
+#: Phase B-1 で掃引した「フェイシング」6 本。
+_B1_FACING = ("facing_length", "tip_rail_width", "tip_rail_thickness",
+              "tip_chamfer", "side_rail_width", "table_angle")
+
+
+def test_the_facing_walls_hold_up_as_geometry():
+    """**B-1 で測った壁が 3 サイズとも幾何として成立していること。**
+
+    掃引はソリッドまで確かめている（生ログは `docs/param-limits.md`）が、
+    OCCT はここでは 1 点 15 秒かかるので、テストは段 1〜2（成立条件と
+    ステーションの退化）を押さえる。**壁の数字を書き写すのではなく、
+    壁で形が成立することを主張する** —— 数字を写すテストは、値を変えた
+    ときに一緒に書き換わるだけで何も守らない。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in _B1_FACING:
+            spec = specs[key]
+            lo, hi = spec.bounds()
+            assert lo is not None and hi is not None, key
+            assert lo < spec.min or hi > spec.max, key       # 帯より広いこと
+            for v in (lo, hi):
+                p = dict(base, **{key: v})
+                assert comp.params_error(p) is None, (tid, key, v)
+                st = profiles.cavity_stations(p)
+                assert len(st) > 20, (tid, key, v, len(st))
+                assert st[0]["h"] < 1.6, (tid, key, v, st[0]["h"])
+
+
+def test_the_widened_facing_band_is_not_a_dead_band():
+    """**広げた先でつまみが空回りしていないこと。**
+
+    「ソリッドが 1 個できる」は壁の条件であって、つまみが効く条件ではない。
+    帯の端から壁まで動かして、形が実際に変わることを主張する ——
+    `side_rail_width` は**幅でしか効かない**ので、空洞の高さしか見ていな
+    かった初版の掃引器はここを「効いていない」と誤判定していた（Phase B-0）。
+    """
+    def shape(p):
+        st = profiles.cavity_stations(p)
+        return ([round(x["h"], 9) for x in st], [round(x["w"], 9) for x in st],
+                [round(profiles.section_area(x), 9) for x in st])
+
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    checked = 0
+    for key in _B1_FACING:
+        spec = specs[key]
+        lo, hi = spec.bounds()
+        for edge, wall in ((spec.min, lo), (spec.max, hi)):
+            if wall == edge:
+                continue                      # その向きへは広げていない
+            assert shape(dict(base, **{key: edge})) !=                 shape(dict(base, **{key: wall})), (key, edge, wall)
+            checked += 1
+    assert checked == 11, checked            # tip_chamfer の下だけ広げていない
+
+
+def test_the_facing_walls_clamp_and_say_which_wall():
+    """帯の外は通し、壁の外は丸めて**壁だと名乗る**こと。
+
+    Phase A で `at` を「帯」と「壁」に分けたのは、同じ丸めでも利用者にとって
+    意味が違うから。B-1 で広げた 6 本でもそれが効いていることを見る。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "facing_length")
+    assert (spec.hard_min, spec.hard_max) == (3.0, 50.0)
+    # 帯の外・壁の内 —— 丸めない
+    v, rep = spec.validate_report(10.0)
+    assert v == pytest.approx(10.0) and rep is None
+    # 壁の外 —— 丸めて、壁だと言う
+    v, rep = spec.validate_report(1.0)
+    assert v == pytest.approx(3.0) and rep is not None
+    assert rep["at"] == "wall" and rep["applied"] == pytest.approx(3.0)
+    assert "越えられない壁" in rep["message"]
+    # 下限を広げていない `tip_chamfer` は帯のままクランプし、帯だと言う
+    ch = next(s for s in comp.param_specs() if s.key == "tip_chamfer")
+    assert ch.hard_min is None and ch.hard_max == 3.2
+    v, rep = ch.validate_report(-0.5)
+    assert v == pytest.approx(0.0) and rep["at"] == "band"
+
+
+def test_the_lifted_baffle_clamps_reach_the_shape():
+    """**外した掛け金が本当に外れていることの回帰テスト（Phase B-2）。**
+
+    `baffle_step_rise` は `_v_step` の中で 0.85 に、`baffle_curvature` は
+    `_v_curve` の中で ±1 に頭打ちにされていた。**スキーマの帯と同じ数字が
+    コードの中にもう 1 部あった**ので、`hard_max` だけ広げてもつまみは
+    空回りする。ここで見るのは「旧クランプの外で天井が動くこと」。
+
+    下限のほうは外していない。`baffle_step_rise` が負のときは
+    `if r <= 0.0: return base` が実測どおりの肩を返すので、**分岐そのものが
+    下限 0 の理由**（測定ではない）。それも一緒に固定する。
+    """
+    p = _template_params("mouthpiece", "alto")
+    zb = profiles.bore_start_z(p)
+
+    def roof(**kw):
+        return [profiles.cavity_roof_y(dict(p, **kw), zb * i / 40.0)
+                for i in range(41)]
+
+    assert roof(baffle_type="step", baffle_step_rise=1.2) !=         roof(baffle_type="step", baffle_step_rise=0.85)
+    assert roof(baffle_type="curve", baffle_curvature=1.5) !=         roof(baffle_type="curve", baffle_curvature=1.0)
+    assert roof(baffle_type="curve", baffle_curvature=-1.5) !=         roof(baffle_type="curve", baffle_curvature=-1.0)
+    # 負の段は構造として効かない（クランプではなく分岐）
+    assert roof(baffle_type="step", baffle_step_rise=-0.5) ==         roof(baffle_type="step", baffle_step_rise=0.0)
+
+
+def test_the_rollover_fillet_saturates_by_arithmetic_not_by_a_clamp():
+    """ロールオーバーの肩は **w ≥ 1 で式そのものが飽和する**。
+
+    `f(u) = u²/(2w) (u<w) / u−w/2 (u≥w)` を `f(t)/f(1)` で正規化しているので、
+    `w = rollover_radius / span` が 1 を超えると t は常に w 未満 ＝ `t²` に
+    なり、**w が消える**。外した 0.9 のクランプはこの飽和のすぐ内側にいた
+    だけで、壁を作っていたのは掛け金ではなく算数のほう。
+
+    下限 0.02 は残してある —— `u²/(2w)` の割り算が w→0 で発散する。
+    `_pchip_table` の節点衝突・`cavity_floor_y` の特異点・`_chamber_weight`・
+    `facing_rise` の円弧半径に続く、同じ型の 5 つ目。
+    """
+    p = dict(_template_params("mouthpiece", "alto"), baffle_type="rollover")
+    zb = profiles.bore_start_z(p)
+    span = (1.0 - profiles.baffle_plateau(p)) * zb
+
+    def roof(r):
+        return [profiles.cavity_roof_y(dict(p, rollover_radius=r), zb * i / 40.0)
+                for i in range(41)]
+
+    assert roof(span) == pytest.approx(roof(5.0 * span), abs=1e-9)   # w≥1 で飽和
+    assert roof(0.999 * span) != roof(span)        # その手前はまだ動く
+    assert roof(0.0) == pytest.approx(roof(0.02 * span), abs=1e-9)   # 下はガードで一定
+    for r in (0.0, 1e-9, 0.01 * span):             # 発散しない
+        assert all(abs(y) < 1e3 for y in roof(r)), r
+
+
+def test_the_brightness_cap_is_policy_not_a_missed_edit():
+    """`brightness` が壁の外で頭打ちなのは**わざと**。
+
+    `baffle_step_rise` の 0.85 は 3 か所にあった —— スキーマの `max`、
+    `_v_step` のクランプ、そして `brightness._baffle_bonus` の正規化 `/0.85`。
+    幾何の掛け金は外したが、**あちらは回帰の有効範囲**であって幾何の壁では
+    ないので外さない（Phase A の Tier2 と同じ扱い）。数値が同じでも意味が違う。
+
+    これを書いておかないと、次に読む人が「片方だけ直し忘れ」として直す。
+    """
+    from saxsketch.acoustics import brightness
+    p = dict(_template_params("mouthpiece", "alto"), baffle_type="step")
+    at_band = brightness.tone_metrics(dict(p, baffle_step_rise=0.85))["brightness"]
+    for v in (1.5, 2.85):
+        assert brightness.tone_metrics(
+            dict(p, baffle_step_rise=v))["brightness"] == at_band, v
+    # 形のほうは動いている（＝ 頭打ちなのは音響モデルだけ）
+    zb = profiles.bore_start_z(p)
+    assert (profiles.cavity_roof_y(dict(p, baffle_step_rise=2.85), 0.9 * zb)
+            != profiles.cavity_roof_y(dict(p, baffle_step_rise=0.85), 0.9 * zb))
+
+
+def test_the_throat_ratio_is_invisible_to_the_old_fingerprint():
+    """**B-0 で足した軸が無いと `throat_ratio` は測れない。**
+
+    初版の指紋は「ステーション枚数・先端高さ・最大高さ・窓の後端・ボアの
+    始まり」の 5 つのスカラーだった。`throat_ratio` は空洞の**途中**を相似に
+    絞るだけなので、この 5 つは 1 ビットも動かない ——「効いていない」と
+    誤判定される。掃引の実測でも本命の軸は `cavity_a`（応答 117〜118%）。
+
+    `chamber_ratio` のほうは最大高さが動くので旧指紋でも見えていた。
+    **同じ節のパラメータでも、見える／見えないは別々に決まる。**
+    """
+    p = _template_params("mouthpiece", "alto")
+
+    def coarse(q):
+        st = profiles.cavity_stations(q)
+        return (len(st), st[0]["h"], max(s["h"] for s in st),
+                profiles.window_end_z(q), profiles.bore_start_z(q))
+
+    def areas(q):
+        return [profiles.section_area(s) for s in profiles.cavity_stations(q)]
+
+    assert coarse(dict(p, throat_ratio=0.7)) == coarse(p)      # 旧指紋は盲
+    assert areas(dict(p, throat_ratio=0.7)) != areas(p)        # 新しい軸は見える
+    assert coarse(dict(p, chamber_ratio=1.6)) != coarse(p)     # こちらは見えていた
+
+
+def test_the_baffle_plateau_band_is_a_union_across_types():
+    """`baffle_plateau` の帯は**どの型のものでもない**（Phase B-2 の実測）。
+
+    実効範囲は `_PLATEAU_RANGE` が型ごとに決めていて、スキーマの帯
+    0.02〜0.75 は 4 型を覆う和集合。だから**どの型で見てもスライダの端は
+    死んでいる** —— straight / curve では上側の 86%、step / rollover では
+    合わせて 18% が動かない。掃引も 3 サイズ全部で「帯の端から先は形が
+    動かない」と出た（＝ 壁はスキーマではなく型の定義の側にある）。
+
+    `_PLATEAU_RANGE` は外さない。「長い棚を許せばそれはもうストレートでは
+    なくステップ」という**理由が書いてある**掛け金だから ——理由が
+    「未測定」「出所なし」「循環」だった 3 本とはそこが違う。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "baffle_plateau")
+    assert (spec.hard_min, spec.hard_max) == (None, None)      # 広げていない
+    base = {s.key: s.default for s in comp.param_specs()}
+    zb = profiles.bore_start_z(base)
+
+    def roof(bt, v):
+        return [profiles.cavity_roof_y(
+            dict(base, baffle_type=bt, baffle_plateau=v), zb * i / 40.0)
+            for i in range(41)]
+
+    for bt in ("step", "straight", "curve", "rollover"):
+        lo, hi = profiles._PLATEAU_RANGE[bt]
+        assert spec.min < lo or spec.max > hi, bt        # 帯のほうが広い
+        assert roof(bt, spec.min) == roof(bt, lo)        # 端は型の実効範囲へ丸まる
+        assert roof(bt, spec.max) == roof(bt, hi)
+        assert roof(bt, lo) != roof(bt, hi)              # 実効範囲の中では効く
+
+
+#: Phase B-2 で掃引して壁を書いた「バッフル ＋ チェンバー」5 本と、
+#: それが生きるバッフル型。`baffle_plateau` は**わざと入っていない** ——
+#: 壁が `_PLATEAU_RANGE`（型の定義）の側にあると測定で分かったので広げていない。
+_B2_WALLED = (("baffle_step_rise", "step"), ("baffle_curvature", "curve"),
+              ("rollover_radius", "rollover"), ("throat_ratio", "step"),
+              ("chamber_ratio", "step"))
+
+
+def test_the_baffle_and_chamber_walls_hold_up_as_geometry():
+    """**B-2 で測った壁が 3 サイズとも幾何として成立していること。**
+
+    B-1 と同じ流儀 —— 壁の数字を書き写すのではなく、壁で形が成立することを
+    主張する。掃引はここで OCCT のソリッドまで確かめている（生ログは
+    `docs/sweeps/b2-baffle-chamber.txt`）が、テストは段 1〜2 を押さえる。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, kind in _B2_WALLED:
+            spec = specs[key]
+            lo, hi = spec.bounds()
+            assert lo is not None and hi is not None, key
+            assert lo < spec.min or hi > spec.max, key       # 帯より広いこと
+            for v in (lo, hi):
+                p = dict(base, baffle_type=kind, **{key: v})
+                assert comp.params_error(p) is None, (tid, key, v)
+                st = profiles.cavity_stations(p)
+                assert len(st) > 20, (tid, key, v, len(st))
+                assert st[0]["h"] < 1.6, (tid, key, v, st[0]["h"])
+
+
+def test_the_widened_baffle_band_is_not_a_dead_band():
+    """**広げた先でつまみが効いていること。**
+
+    B-2 は 4 本で「壁がスキーマではなくコードの中にあった」ので、
+    `hard_*` を広げただけでは足りない ——`profiles` 側の掛け金を外して
+    初めて形が動く。ここはその両方が揃っていることの回帰。
+
+    型ごとに効く本が違うので、`_B2_WALLED` の型を当ててから比べる
+    （既定の `step` のままだと `baffle_curvature` と `rollover_radius` は
+    どちらの端でも同じ形になり、テストが素通りする）。
+    """
+    def shape(p):
+        st = profiles.cavity_stations(p)
+        return ([round(x["h"], 9) for x in st], [round(x["w"], 9) for x in st],
+                [round(profiles.section_area(x), 9) for x in st])
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    checked = 0
+    for key, kind in _B2_WALLED:
+        spec = specs[key]
+        lo, hi = spec.bounds()
+        for edge, wall in ((spec.min, lo), (spec.max, hi)):
+            if wall == edge:
+                continue                      # その向きへは広げていない
+            assert shape(dict(base, baffle_type=kind, **{key: edge})) !=                 shape(dict(base, baffle_type=kind, **{key: wall})), (key, edge, wall)
+            checked += 1
+    assert checked == 9, checked      # baffle_step_rise の下だけ広げていない
+
+
+def test_the_baffle_walls_clamp_and_say_which_wall():
+    """帯の外は通し、壁の外は丸めて**壁だと名乗る**こと（B-2 の 5 本）。"""
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    specs = {s.key: s for s in comp.param_specs()}
+
+    ro = specs["rollover_radius"]
+    assert (ro.hard_min, ro.hard_max) == (0.5, 21.0)
+    v, rep = ro.validate_report(20.5)                 # 帯の外・壁の内
+    assert v == pytest.approx(20.5) and rep is None
+    v, rep = ro.validate_report(40.0)                 # 壁の外
+    assert v == pytest.approx(21.0) and rep["at"] == "wall"
+    assert "越えられない壁" in rep["message"]
+
+    # 下だけ広げていない `baffle_step_rise` は、下は帯・上は壁と名乗り分ける
+    sr = specs["baffle_step_rise"]
+    assert sr.hard_min is None and sr.hard_max == 2.85
+    assert sr.validate_report(-0.5)[1]["at"] == "band"
+    assert sr.validate_report(4.0)[1]["at"] == "wall"
+
+    # 広げていない `baffle_plateau` は両側とも帯のまま
+    pl = specs["baffle_plateau"]
+    assert (pl.hard_min, pl.hard_max) == (None, None)
+    assert pl.validate_report(0.9)[1]["at"] == "band"
+
+
+def test_the_bore_walls_are_relations_not_numbers():
+    """**ボア 2 本の壁は他のパラメータとの関係で決まる（Phase B-3）。**
+
+    - `bore_dia` 上 …… シャンクが残ること（`bore_dia` < `shank_dia`）
+    - `bore_length` 上 …… 窓が 2.0mm 残ること。止まる位置は 3 サイズとも
+      **ボアの始まり zb ＝ 6.2〜6.4mm** で揃い、`overall_length` を動かすと
+      壁も同じだけ動く。**`window_length` を動かしても動かない** ——
+      窓の後端は既に `zb − chamber_to_bore_mm` で頭打ちなので、この向きで
+      相手になるのは全長のほう。
+
+    掛け金の数字だけを書き写すと、相手が動いたときに嘘になる。だからここは
+    **関係のほうを主張する**（数字は `hard_*` が持ち、成立条件は
+    `outer_layout_error` / `cavity_layout_error` が 1 か所ずつ持つ）。
+    """
+    reg = get_registry().get("saxophone")
+
+    def top(comp, base):
+        """`params_error` が通る最大の `bore_length`（0.1mm 刻み）。"""
+        v = base["bore_length"]
+        while comp.params_error(dict(base, bore_length=round(v + 0.1, 1))) is None:
+            v = round(v + 0.1, 1)
+        return v
+
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+
+        # --- bore_dia: 壁はシャンク径の 1 段手前 ＝ シャンクが残る限界
+        bd = specs["bore_dia"]
+        assert bd.hard_max == pytest.approx(round(base["shank_dia"] - 0.05, 2))
+        assert comp.params_error(dict(base, bore_dia=bd.hard_max)) is None, tid
+        err = comp.params_error(dict(base, bore_dia=base["shank_dia"]))
+        assert err is not None and "シャンク径" in err, tid
+        # 下は帯の端から 10mm（掃引で 3 サイズともソリッド 1 個まで確認した）
+        assert bd.hard_min == pytest.approx(round(base["bore_dia"] - 11.0, 2))
+        assert comp.params_error(dict(base, bore_dia=bd.hard_min)) is None, tid
+
+        # --- bore_length: 壁を決めているのは長さではなく zb
+        t_def = top(comp, base)
+        zb = round(base["overall_length"] - t_def, 2)
+        assert 6.0 <= zb <= 6.6, (tid, zb)
+        assert specs["bore_length"].hard_max <= t_def, tid      # 掛け金は内側
+        short = specs["overall_length"].min
+        t_short = top(comp, dict(base, overall_length=short))
+        assert short - t_short == pytest.approx(zb, abs=0.15), tid
+        assert t_short < t_def - 1.0, tid                       # 壁が動いた
+        # ウィンドウ長は**この向きでは相手にならない**
+        assert top(comp, dict(base, window_length=44.0)) == pytest.approx(t_def)
+
+
+def test_the_bore_cylinder_ignores_min_wall_and_the_card_says_so():
+    """**空洞は `min_wall` を守るのに、ボアの円柱は守らない（B-3 の実測）。**
+
+    `shell_limit` は空洞を `ro − min_wall` に収めるが、`_bore_solid` は素の
+    円柱を引く。**同じ法則が片方にしか掛かっていない**ので、肉厚 0 でも
+    −1.0mm でも `params_error` は `None`、OCCT もソリッド 1 個を返した
+    （体積だけが soprano 11776 → 4541mm3 と 61% 落ちる ＝ シャンクが丸ごと
+    消えている）。段 3 は「1 個か」しか見ないので掃引では捕まらない。
+
+    線引き:
+      肉厚 ≤ 0        → `outer_layout_error`（壁。越えさせない）
+      0 < 肉厚 < 壁厚 → 注意カード（形は指定どおり出るが刷れない）
+      肉厚 ≥ 壁厚     → 何も言わない
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    sh, mw = base["shank_dia"], base["min_wall"]
+
+    # ちょうど min_wall では言わない（浮動小数の縁で立たせない）
+    assert profiles.shank_warnings(dict(base, bore_dia=sh - 2.0 * mw)) == []
+    thin = dict(base, bore_dia=round(sh - 2.0 * mw + 0.5, 2))
+    w = profiles.shank_warnings(thin)
+    assert len(w) == 1 and "シャンクの肉厚" in w[0] and "1.55mm" in w[0]
+    # カードへ届く経路（`Component.warnings` が 2 つの出所を繋ぐ）
+    assert w[0] in comp.warnings(thin)
+    # 肉厚 0 は注意ではなく壁
+    assert profiles.shank_warnings(dict(base, bore_dia=sh)) == []
+    assert comp.params_error(dict(base, bore_dia=sh)) is not None
+    # 空洞のほうは同じ肉厚を守っている（片方にしか掛かっていなかったことの記録）
+    z = profiles.bore_start_z(base) * 0.5
+    assert profiles.shell_limit(base, z)["half_width"] == pytest.approx(
+        profiles.outer_radius(base, z) - mw)
+
+
+def test_a_bore_without_length_is_rejected_before_occt_sees_it():
+    """**ボアは長さを持たなければならない（B-3）。**
+
+    `bore_length <= 0` は「ボアが部品の外から始まる」。円柱が 1 ビットも
+    削らないので体積が逆に増え、−1.5 を割ると `Solid.make_cylinder` が
+    `Null TopoDS_Shape` を返してビルドが素の `ValueError` で落ちる
+    （掃引で 3 サイズとも −1.5 までソリッド 1 個、−2.0 で落ちた）。
+
+    書く前は**段 1〜2 が −21mm まで素通りしていた** —— `cavity_stations` は
+    平然とステーションを返し、掃引器の段 3 で初めて落ちた（生ログ
+    `docs/sweeps/b3-bore-window.txt`）。条件を `cavity_layout_error` に
+    1 か所書いたので、いまは `params_error` と `cavity_stations` の
+    **両方が同じ理由**を返す。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        spec = next(s for s in comp.param_specs() if s.key == "bore_length")
+        assert spec.hard_min == 1.0
+        assert comp.params_error(dict(base, bore_length=1.0)) is None, tid
+        assert len(profiles.cavity_stations(dict(base, bore_length=1.0))) > 20
+        for v in (0.0, -1.0, -2.0):
+            err = comp.params_error(dict(base, bore_length=v))
+            assert err is not None and "ボア長" in err, (tid, v)
+            # 出所は 1 つ ——ステーション側も同じ理由で断る
+            with pytest.raises(ValueError, match="ボア長"):
+                profiles.cavity_stations(dict(base, bore_length=v))
+
+
+def test_no_wall_value_makes_the_analysis_emit_something_json_cannot_carry():
+    """**壁まで開けた値で `simulate()` が JSON になること。**
+
+    B-3 で `bore_length` の壁を 1.0mm まで広げたら、そこで
+    `tier1.in_tune_mm` が **NaN** になり `PUT /api/project/params` が 500 で
+    落ちた —— ボアがほとんど無いとコーク線が空洞の終端でクランプされ、
+    1mm 押しても音程が動かない（傾き 0）。零点が出ないのを NaN で表していた。
+
+    いまは `None`（＝「合う挿し込み量が無い」）を返す。**壁を広げると下流が
+    壊れる**のは Phase A で 4 か所出た型なので、ここは 1 本ずつではなく
+    **壁を持つ全パラメータ × 3 サイズ**をまとめて見る。
+
+    **B-4a で「壁に立てない」組が出た。** 径 2 本の壁は相手との関係
+    （ボア径 < シャンク径 ≤ 最大径）で、掛け金は相手を壁まで寄せたときに
+    届く所に置いてある。だから既定の相手のままだと `hard_min` に立てない ——
+    それは壊れているのではなく**関係だから**なので、通らないときは理由が
+    相手の名前を挙げていることだけ確かめて数えない。
+    """
+    reg = get_registry().get("saxophone")
+    checked, relational = 0, 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {sp.key: sp.default for sp in comp.param_specs()}
+        for spec in comp.param_specs():
+            for wall in (spec.hard_min, spec.hard_max):
+                if wall is None:
+                    continue
+                p = dict(base, **{spec.key: wall})
+                err = comp.params_error(p)
+                if err is not None:
+                    # 関係で決まる壁だけが既定の相手で立てない。理由が相手を
+                    # 名指ししていることを確かめる（黙って通さない）。
+                    assert spec.key in ("body_dia", "shank_dia"), (tid, spec.key)
+                    assert ("ボア径" in err or "最大径" in err
+                            or "シャンク径" in err), (tid, spec.key, err)
+                    relational += 1
+                    continue
+                res = comp.simulate(p)
+                # allow_nan=False —— FastAPI の JSON 化と同じ厳しさで見る
+                json.dumps(res, allow_nan=False, default=str)
+                checked += 1
+    assert checked >= 30, checked
+    assert relational == 9, relational
+
+
+def test_the_outer_diameter_walls_are_relations_not_numbers():
+    """**径 2 本の壁は相手で決まる（Phase B-4a）。**
+
+    測ったのは「通る範囲そのもの」で、帯の外へ歩く掃引では出せない ——
+    帯の端が既に弾かれている組があるため（下のテスト）。範囲の端は 3 サイズとも
+    ぴったり相手の値になる:
+
+        ボア径 < シャンク径 ≤ 最大径
+
+    ここでも数字ではなく**関係**を主張する。掛け金（`hard_*`）は相手を壁まで
+    寄せたときに届く所に置いてあるだけで、成立条件は `outer_layout_error` が
+    1 か所で持つ。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+
+        def span(key, lo, hi, step, b=None, _c=comp, _base=base):
+            """`params_error` が通る値の最小と最大（総当たり）。"""
+            b = _base if b is None else b
+            ok = [round(lo + step * i, 3)
+                  for i in range(int(round((hi - lo) / step)) + 1)
+                  if _c.params_error(
+                      dict(b, **{key: round(lo + step * i, 3)})) is None]
+            return (ok[0], ok[-1]) if ok else (None, None)
+
+        # --- 最大径: 下はシャンク径そのもの。上はこの範囲では見つからない
+        lo, hi = span("body_dia", 10.0, 40.0, 0.1)
+        assert lo == pytest.approx(base["shank_dia"], abs=0.1), (tid, lo)
+        assert hi == pytest.approx(40.0), (tid, hi)
+        # 相手を動かすと壁も動く（数字ではない）
+        lo2, _ = span("body_dia", 10.0, 40.0, 0.1,
+                      dict(base, shank_dia=20.0, bore_dia=15.0))
+        assert lo2 == pytest.approx(20.0, abs=0.1), (tid, lo2)
+
+        # --- シャンク径: 下はボア径、上は最大径。**両端とも関係**
+        lo, hi = span("shank_dia", 8.0, 40.0, 0.1)
+        assert lo == pytest.approx(base["bore_dia"] + 0.1, abs=0.1), (tid, lo)
+        assert hi == pytest.approx(base["body_dia"], abs=0.1), (tid, hi)
+        lo2, hi2 = span("shank_dia", 8.0, 40.0, 0.1,
+                        dict(base, bore_dia=12.0, body_dia=34.0))
+        assert lo2 == pytest.approx(12.1, abs=0.1), (tid, lo2)
+        assert hi2 == pytest.approx(34.0, abs=0.1), (tid, hi2)
+
+
+def test_a_relation_wall_leaves_band_ends_that_cannot_be_reached():
+    """**帯の端が壁の外へはみ出すことがある（B-4a の実測）。**
+
+    径 2 本の帯は 3 サイズ共通の絶対レンジ（18〜34 / 14〜28）で、既定の相手の
+    ままだと **12 端（2 本 × 2 端 × 3 サイズ）のうち 6 端が弾かれる** ——
+    最大径の下端 18.0 は 3 サイズとも、シャンク径の下端 14.0 はアルトと
+    テナー、上端 28.0 はソプラノ。これは帯の数字が下手なのではなく、
+    **相手で動く壁を静的な帯で表せない**ということ ——相手を一緒に動かせば
+    どの端も届く。
+
+    大事なのは黙って丸めないこと。`hard_*` を入れた今は、帯の端に置いた値は
+    クランプされず、通らないときは**理由つきで断られる**（相手の名前が文面に
+    出る）。
+
+    なお 18.0 / 14.0 という数字は `f1e79e8` で「ソプラノ実測 シャンク径 15.3mm
+    が入る位置」として下げたものだが、**その 15.3 はもう存在しない**（旧軸
+    スケール 0.664 の導出値で、テンプレートの note 自身が「肉厚 0.74mm で
+    min_wall を割る」と否定している）。理由の消えた追従。
+    """
+    reg = get_registry().get("saxophone")
+    dead = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, partner in (("body_dia", "シャンク径"),
+                             ("shank_dia", "ボア径")):
+            spec = specs[key]
+            for edge in (spec.min, spec.max):
+                # 帯の端は**壁の内側**なので、まずクランプされない
+                v, rep = spec.validate_report(edge)
+                assert v == pytest.approx(edge) and rep is None, (tid, key)
+                err = comp.params_error(dict(base, **{key: edge}))
+                if err is None:
+                    continue
+                dead += 1
+                assert partner in err or "最大径" in err, (tid, key, edge, err)
+    assert dead == 6, dead
+
+
+def test_the_heel_floor_is_a_stated_wall_not_a_silent_clamp():
+    """**踵の床を黙ったクランプから壁へ（Phase B-4a、8 例目）。**
+
+    `heel_z` は `max(heel_raw, 0.30·全長)` で床を持つ。掃引は
+    `shank_length` を 110mm まで、`shoulder_ratio` を 2.45 まで素通りさせ、
+    段 1〜3 が全部 ok を返した —— **形は床から先で 1 ビットも動かないのに**。
+    寸法図と仕様書は与えた数字を印字し続けるので、図と形が食い違う。
+
+    ここで見るのは 3 つ: 壁の内側では踵が式どおり動くこと、床の外は理由つきで
+    断られること、そして**断らなければ形が凍っていたこと**（＝ 壁の必要性）。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key, step in (("shank_length", 0.5), ("shoulder_ratio", 0.005)):
+            wall = specs[key].hard_max
+            assert wall is not None and wall > specs[key].max, (tid, key)
+            assert comp.params_error(dict(base, **{key: wall})) is None, (tid, key)
+            # 壁の内側では踵が床ではなく式で決まる
+            p_wall = dict(base, **{key: wall})
+            assert profiles.heel_raw(p_wall) > profiles.heel_floor(p_wall), tid
+            assert profiles.heel_z(p_wall) == pytest.approx(
+                profiles.heel_raw(p_wall)), (tid, key)
+            # 床の外は理由つきで断る
+            cross = (profiles.shank_length_at_heel_floor(base)
+                     if key == "shank_length"
+                     else profiles.shoulder_ratio_at_heel_floor(base))
+            assert wall < cross, (tid, key, wall, cross)     # 掛け金は 1 段内側
+            over = round(cross + 2 * step, 4)
+            err = comp.params_error(dict(base, **{key: over}))
+            assert err is not None and "食い尽くし" in err, (tid, key, err)
+            # 断らなかったら踵が凍っていた（壁の必要性そのもの）
+            a = dict(base, **{key: over})
+            b = dict(base, **{key: round(over + 10 * step, 4)})
+            assert profiles.heel_z(a) == pytest.approx(profiles.heel_z(b)), tid
+            # **凍り方は 2 本で違う。** `shank_length` は外形まで丸ごと凍る
+            # （踵も肩の長さも動かない）。`shoulder_ratio` は踵が凍っても
+            # 肩の長さ ＝ 比 × 踵 が伸び続けるので母線は変わる —— それでも
+            # 「最大径位置に対する比」という**この量の意味が成り立たない**
+            # ので壁にした。掃引の応答が 0% にならなかったのはこのため。
+            z = 0.6 * base["overall_length"]
+            same = profiles.outer_radius(a, z) == pytest.approx(
+                profiles.outer_radius(b, z))
+            assert same == (key == "shank_length"), (tid, key)
+        # **2 本の壁は互いに「相手が既定のとき」の値**（ブラウザで踏んだ）。
+        # 床は 2 本の組で決まるので、両方を壁へ置くと当然その先へ出る ——
+        # 掛け金は静的な数字なのでそれを表せない。径 2 本とまったく同じ形で、
+        # 断るときに理由が出ることだけを確かめる（黙って丸めない）。
+        both = dict(base, shank_length=specs["shank_length"].hard_max,
+                    shoulder_ratio=specs["shoulder_ratio"].hard_max)
+        err = comp.params_error(both)
+        assert err is not None and "食い尽くし" in err, (tid, err)
+
+
+def test_a_shoulder_ratio_of_minus_one_is_refused_before_the_division():
+    """**踵の分母が 0 になる点を素の例外にしない（B-4a、割り算 7 例目）。**
+
+    掃引が `shoulder_ratio` を下へ歩いて −1 ちょうどで
+    `ZeroDivisionError: float division by zero` を踏んだ。手前（−0.99）は
+    段 1〜2 を素通りして**段 3 でソリッドが 2〜3 個**に割れる。
+
+    帯の下限 0.02 があるので UI からは届かないが、**出所の分からない例外が
+    上がるのがいちばん悪い**ので理由を返すようにした。下限は広げない ——
+    負の肩比は形の意味を持たない。
+    """
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    spec = next(s for s in comp.param_specs() if s.key == "shoulder_ratio")
+    assert spec.hard_min is None and spec.min == pytest.approx(0.02)
+    for v in (-1.0, -1.5):
+        p = dict(base, shoulder_ratio=v)
+        err = comp.params_error(p)                       # 例外ではなく理由
+        assert err is not None and "−1 以下" in err, (v, err)
+        assert math.isfinite(profiles.heel_z(p))         # 呼んでも落ちない
+    # 帯の下限そのものは通る
+    assert comp.params_error(dict(base, shoulder_ratio=spec.min)) is None
+
+
+def test_the_sweeper_says_when_the_band_edge_itself_fails():
+    """**掃引器が「効いていない」と「壁がある」を取り違えないこと（B-4a）。**
+
+    `_walk` は帯の端を起点に外へ歩くだけなので、初版は 2 つの別の話を同じ
+    「形が動かない ＝ この向きでは効いていない」にまとめていた:
+
+      (a) 1 段目で `params_error` に弾かれた（＝ すぐ外に壁がある）
+      (b) 歩けたのに指紋が変わらない（＝ 本当に効いていない）
+
+    さらに**帯の端そのもの**は一度も試していなかった。`shank_dia` の帯の
+    下端 14.0 はアルト（ボア 15.8）でその端自体が通らないのに、ログには
+    「1 段外で壁」としか出なかった。道具が測った理由を捨てるのは、測って
+    いないのと同じ。
+    """
+    sw = _sweeper()
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    specs = {s.key: s for s in comp.param_specs()}
+    grids = sw._grids(base)
+
+    # (a) 帯の端そのものが通らない
+    edge = dict(base, shank_dia=specs["shank_dia"].min)
+    assert sw._cheap_ok(comp, edge) is not None
+    # (b) 端が通る向きは歩けて、止まった理由が残る
+    top = dict(base, shank_dia=specs["shank_dia"].max)
+    assert sw._cheap_ok(comp, top) is None
+    last, why, live = sw._walk(comp, top, "shank_dia", 0.1, +1, grids, steps=40)
+    assert live is not None and last == pytest.approx(base["body_dia"], abs=0.1)
+    assert "最大径" in why, why
+    # (c) 1 段目で弾かれると `last` は起点のまま ＝ すぐ外が壁
+    near = dict(base, shank_dia=round(base["bore_dia"] + 0.1, 2))
+    last2, why2, live2 = sw._walk(comp, near, "shank_dia", 0.1, -1, grids,
+                                  steps=40)
+    assert live2 is None and last2 == pytest.approx(near["shank_dia"])
+    assert "ボア径" in why2, why2
+    # 注意の件数は**部品に聞く**（`cavity_warnings` を直に数えない）
+    thin = dict(base, shank_dia=round(base["bore_dia"] + 1.0, 2))
+    assert len(profiles.cavity_warnings(thin)) < len(comp.warnings(thin))
+
+
+def test_the_apex_is_a_claim_the_formula_can_never_check():
+    """**「最大径は踵」は主張であって計算結果ではない（Phase B-4b）。**
+
+    `heel_z` は (全長 − シャンク長)/(1 + 肩比) という**軸方向の式**なので、
+    形を歪める 2 本では定義上 1 ビットも動かない ——つまり `heel_z` を見張って
+    いる限り、この 2 本が頂点を壊しても**永久に検出できない**。
+    `cad/windycity/sweep_outer.py` の主張 (1) は B-4b までそれだった。
+
+    ここで固定するのは 3 つ:
+      1. 壁の内側では形の頂点（`outer_apex`）が踵と一致する
+      2. 壁の 1 段外では**一致しなくなる**（形が壊れている）
+      3. そのあいだ `heel_z` は**どちらでも動かない**（古い目が盲だった証拠）
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        heel = profiles.heel_z(base)
+        for key in ("body_waist", "shoulder_fullness"):
+            spec = specs[key]
+            for edge, out in ((spec.hard_min, spec.hard_min - spec.step),
+                              (spec.hard_max, spec.hard_max + spec.step)):
+                inside = dict(base, **{key: edge})
+                outside = dict(base, **{key: out})
+                # (3) 式はどちらでも動かない
+                assert profiles.heel_z(inside) == pytest.approx(heel)
+                assert profiles.heel_z(outside) == pytest.approx(heel)
+                # (1) 壁の内側では形が主張どおり
+                az, _ = profiles.outer_apex(inside)
+                _, dr = profiles.shoulder_dip(inside)
+                assert az == pytest.approx(heel, abs=1e-3), (tid, key, edge)
+                assert dr >= profiles.shank_radius(inside) - 1e-9, (tid, key)
+                assert profiles.body_dip(inside)[1] == pytest.approx(0.0)
+                assert profiles.shoulder_bulge(inside)[1] == pytest.approx(0.0)
+                # (2) 1 段外では壊れる。**壊れ方は 4 通りあって、どの目も
+                #     少なくとも 1 つを見落とす** ——頂点が移る（waist 上）、
+                #     胴が凹む（waist 下）、肩がえぐれる（fullness 下）、
+                #     肩が膨らむだけ（fullness 上。最大径は超えずシャンク径も
+                #     割らないので `outer_apex` も `shoulder_dip` も無言）。
+                #     主張そのものは 1 つ「母線は単調」で、それを見るのが
+                #     `body_dip` と `shoulder_bulge`。
+                az2, _ = profiles.outer_apex(outside)
+                _, dr2 = profiles.shoulder_dip(outside)
+                _, drop2 = profiles.body_dip(outside)
+                _, bulge2 = profiles.shoulder_bulge(outside)
+                broke = (abs(az2 - heel) > 1e-3
+                         or dr2 < profiles.shank_radius(outside) - 1e-9
+                         or drop2 > 1e-9 or bulge2 > 1e-9)
+                assert broke, (tid, key, out, az2, dr2, drop2, bulge2)
+                # 単調の 2 つは**必ず**どちらかが鳴る（症状の 2 つと違って）
+                assert drop2 > 1e-9 or bulge2 > 1e-9, (tid, key, out)
+
+
+def test_the_curve_walls_come_from_the_measured_profile_tables():
+    """**壁の数字はどこにも書いていない（実測表から解く）。**
+
+    `body_waist` / `shoulder_fullness` の限界は `r/r_max` に正規化した形の
+    性質なので **3 サイズ共通・他のパラメータに依らない**。だから
+    `profiles.*_limits()` が `_BODY_PROFILE` / `_SHOULDER_PROFILE` から解き、
+    `mouthpiece._inside` が刻みへ寄せるだけ ——数字を書き写すと、表を
+    差し替えたときに片方だけ古くなる（この設計で繰り返し出ている型）。
+
+    **主張は 1 つ「母線は単調」** ——胴は最大径へ太る一方、肩はシャンクへ細る
+    一方。肩では単調のほうが「値が [0,1] を出る」より先に破れる。
+    """
+    lo_w, hi_w = profiles.body_waist_limits()
+    lo_k, hi_k = profiles.shoulder_fullness_limits()
+
+    def apex_u(w):
+        n = 4000
+        best_u, best_r = 1.0, 1.0
+        for i in range(n + 1):
+            u = i / n
+            r = (profiles._pchip(profiles._BODY_PROFILE, u)
+                 * (1.0 + w * profiles._waist_bump(u)))
+            if r > best_r:
+                best_u, best_r = u, r
+        return best_u
+
+    # 別解法で答え合わせ（閉じた式ではなく素の走査）
+    assert apex_u(hi_w - 1e-4) == pytest.approx(1.0)
+    assert apex_u(hi_w + 1e-3) < 0.999
+    assert lo_w == pytest.approx(-0.161380, abs=1e-5)
+    assert hi_w == pytest.approx(0.072572, abs=1e-5)
+    assert lo_k == pytest.approx(-0.360730, abs=1e-5)
+    assert hi_k == pytest.approx(1.863339, abs=1e-5)
+
+    reg = get_registry().get("saxophone")
+    walls = set()
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_waist", "shoulder_fullness"):
+            sp = specs[key]
+            walls.add((key, sp.hard_min, sp.hard_max))
+            lo, hi = (lo_w, hi_w) if key == "body_waist" else (lo_k, hi_k)
+            assert lo < sp.hard_min and sp.hard_max < hi, (tid, key)
+    # 3 サイズで同じ壁（形の正規化量なのでサイズに依らない）
+    assert len(walls) == 2, sorted(walls)
+
+
+def test_the_shoulder_band_no_longer_crosses_its_own_wall():
+    """**帯の下端 −1.0 は壁の外にあった（B-4b で発覚）。**
+
+    B-4a の径 2 本は「相手で動く壁を静的な帯で表せない」ので端が届かなくて
+    よかったが、こちらは**相手がいない**（形の正規化量だけで決まる）ので、
+    帯が壁を跨いでいるのは端的に帯の欠陥。いまは 3 本とも帯の端が全部通る。
+
+    −1.0 が何をしていたかも固定する ——肩の中ほど（s≈0.73）がシャンク径を
+    下回る「えぐれ」で、しかも**えぐれは必ずボアの上に来る**ので
+    `shank_warnings` が言う肉厚（シャンク径 − ボア径）が最薄でなくなる。
+    """
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_waist", "shoulder_fullness", "beak_height"):
+            sp = specs[key]
+            assert sp.hard_min <= sp.min and sp.max <= sp.hard_max, (tid, key)
+            for edge in (sp.min, sp.max):
+                v, rep = sp.validate_report(edge)
+                assert v == pytest.approx(edge) and rep is None, (tid, key)
+                assert comp.params_error(dict(base, **{key: edge})) is None
+        # 旧下端 −1.0 が壊していたもの
+        old = dict(base, shoulder_fullness=-1.0)
+        dz, dr = profiles.shoulder_dip(old)
+        assert dr < profiles.shank_radius(old) - 1e-3, tid
+        assert dz >= profiles.bore_start_z(old), tid
+        # 壁の外なので、いまは丸められて**壁だと名乗る**
+        v, rep = specs["shoulder_fullness"].validate_report(-1.0)
+        assert v == pytest.approx(specs["shoulder_fullness"].hard_min)
+        assert rep is not None and rep["at"] == "wall"
+
+
+def test_the_beak_height_wall_is_where_the_number_stops_describing_the_part():
+    """**`beak_height` の壁は「壊れる点」ではなく「定義が壊れる点」（B-4b）。**
+
+    定義は「バイトポイントでのテーブル面からの高さ ＝ 口の開き量」。稜線が
+    そこで胴の頂点を越えると、上面は胴のままになって**与えた数字が部品の
+    どこにも現れない**。旧コメントはそこを「胴の全高 0.9·body_dia」と書いて
+    いたが、実測は 0.72〜0.75·body_dia で、**比は一定ですらない**
+    （旧レンジの上端 0.75 倍は 3 サイズとも壁の外だった）。
+
+    OCCT が割れるのは 0.5mm で、壁（4.5 / 5.5 / 6.0）のずっと下。
+    掃引器の「−21.2mm まで通る」は段 1〜2 の打ち切りで、そこを
+    「割れる点」と読むと嘘になる。
+    """
+    reg = get_registry().get("saxophone")
+    ratios = set()
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        base = {s.key: s.default for s in comp.param_specs()}
+        sp = next(s for s in comp.param_specs() if s.key == "beak_height")
+        z_bite = profiles._BEAK_BITE * base["overall_length"]
+        top = profiles.beak_height_at_body_top(base)
+        flat = profiles.beak_height_flat(base)
+        ratios.add(round(top / base["body_dia"], 3))
+        # 壁は両方とも landmark の内側、刻み 0.5 の格子に乗る
+        assert flat < sp.hard_min <= sp.min, tid
+        assert sp.max == sp.hard_max < top, tid
+        assert sp.hard_max % 0.5 == pytest.approx(0.0), tid
+        # 壁の内側では稜線が胴の中、1 段外では外へ出て切除が効かない
+        inside = dict(base, beak_height=sp.hard_max)
+        outside = dict(base, beak_height=sp.hard_max + sp.step)
+        assert (profiles.beak_y(inside, z_bite)
+                <= profiles.outer_radius(inside, z_bite) + 1e-9), tid
+        assert (profiles.beak_y(outside, z_bite)
+                > profiles.outer_radius(outside, z_bite)), tid
+        # 下側は「稜線が前下がり」——壁ではまだ上向き、下れば負になる
+        assert profiles.beak_angle(dict(base, beak_height=sp.hard_min)) > 0.0
+        below = dict(base, beak_height=sp.hard_min - 2.0 * sp.step)
+        assert profiles.beak_angle(below) < 0.0, tid
+        # 旧レンジの上端 0.75 倍は壁の外だった
+        assert round(0.75 * base["body_dia"], 1) > sp.hard_max, tid
+        # **この壁は「関係」**（B-3・B-4a と同じ型）——`hard_*` はテンプレート
+        # 値での掛け金でしかなく、相手を動かせば壁も動く。だから成立条件は
+        # `outer_layout_error` が 1 か所で持つ。
+        wide = dict(base, body_dia=base["body_dia"] + 6.0)
+        assert profiles.beak_height_at_body_top(wide) > top + 3.0, tid
+        assert comp.params_error(dict(base, beak_height=sp.hard_max + sp.step))
+        assert comp.params_error(dict(wide, beak_height=sp.hard_max
+                                      + sp.step)) is None, tid
+    # **比は一定ではない**（0.9 という単一の数字では書けない）
+    assert len(ratios) == 3, sorted(ratios)
+
+
+def test_the_beak_axis_measures_the_part_not_the_formula():
+    """**掃引器の `beak_y` 軸が式を測っていた（B-4b で直した）。**
+
+    `pf.beak_y` はビーク稜線の解析式で、稜線が胴の外へ出ても線形に伸び続ける。
+    部品の上面は `min(稜線, 外半径)` なので、そこから先は形が動かない。
+    直す前は `beak_height` を既定の 4 倍まで上げても「100% 生きている」と
+    報告していた。`sweep_outer.py` の主張 (1) と**同じ型の盲目**。
+
+    既定では稜線は胴の内側にあるので、この頭打ちは B-0〜B-4a の掃引には
+    掛からない（`tip_opening` を回し直して committed ログと一致を確認済み。
+    `docs/sweeps/b4b-outer-curves.txt` の §3）。
+    """
+    import importlib.util
+    spec_f = importlib.util.spec_from_file_location(
+        "sweep_limits", "cad/windycity/sweep_limits.py")
+    sw = importlib.util.module_from_spec(spec_f)
+    spec_f.loader.exec_module(sw)
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    grids = sw._grids(base)
+    lim = base["overall_length"] - 1e-6
+    # 既定では頭打ちは効かない（＝過去の掃引と比較できる）
+    axes = sw._axes(base, grids)
+    raw = tuple(profiles.beak_y(base, min(z, lim)) for z in grids["outer"])
+    assert axes["beak_y"] == raw
+    # 稜線が胴の外へ出る高さでは、式と形が食い違う
+    high = dict(base, beak_height=3.0 * base["body_dia"])
+    axes_h = sw._axes(high, grids)
+    raw_h = tuple(profiles.beak_y(high, min(z, lim)) for z in grids["outer"])
+    assert axes_h["beak_y"] != raw_h
+    assert all(a <= b + 1e-12 for a, b in zip(axes_h["beak_y"], raw_h))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4-E B-5 —— 相手で動く壁
+# ---------------------------------------------------------------------------
+
+#: 動的な壁を持つ 9 本。**8 本は「関係」**（B-3・B-4a・B-4b の測定）で、
+#: `baffle_plateau` だけは型で実効範囲が変わる（B-2）。
+_B5_MOVING = ("bore_dia", "bore_length", "body_dia", "shank_dia", "overall_length",
+              "shank_length", "shoulder_ratio", "beak_height", "baffle_plateau")
+
+#: 壁が本当に相手で動くかを見るための「別の組」。**既定だけで測ると、
+#: テンプレート値で作った掛け金と見分けが付かない。**
+_B5_COMBOS = (
+    {},
+    {"shank_dia": 20.0},
+    {"body_dia": 32.0},
+    {"overall_length": 80.0},
+    {"bore_length": 30.0},
+    {"shoulder_ratio": 0.9},
+    {"shank_length": 25.0},
+    {"baffle_type": "straight"},
+    {"baffle_type": "curve"},
+)
+
+
+def _flip_point(comp, base, key, wall, sign, step):
+    """`wall` から `sign` 方向へ歩いて `params_error` が立つ点を挟む。
+
+    返すのは**通る側の最後の値**。`None` は「16 刻み外まで歩いても立たない」
+    ＝ 壁が甘い（本当の交差点はもっと外）。
+    """
+    far = None
+    for n in (1, 2, 4, 8, 16):
+        if comp.params_error(dict(base, **{key: wall + sign * n * step})) is not None:
+            far = wall + sign * n * step
+            break
+    if far is None:
+        return None
+    lo, hi = wall, far
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if comp.params_error(dict(base, **{key: mid})) is None:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def test_the_moving_walls_land_exactly_where_params_error_flips():
+    """**`param_bounds` と `params_error` が同じ関係を 2 か所で述べている。**
+
+    それ自体は代理変数の型（片方だけ直る）なので、**ここが担保**になる ——
+    返した壁は「そこは通る」かつ「交差点は 1 刻み以内の外」でなければ
+    ならない。数字を散文へ焼かずテストへ落とす（`0718cc1` と同じ寄せ方）。
+
+    ちょうど 1 刻み外に交差点があるのは `bore_dia` の上と `shank_dia` の下
+    ——条件 (1) が**狭義の不等号**（ボア径 < シャンク径）なので、境界そのもの
+    は通らず 1 目盛り内側へ寄せてある。残りは交差点ちょうど。
+
+    **既定だけで測らない。** テンプレート値で作った `hard_*` の掛け金と
+    見分けが付かなくなるので、相手を動かした 9 通りの組で見る。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    checked = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        tmpl = dict(ParamSet(comp.param_specs(),
+                             comp.template.get("mouthpiece", {})).values)
+        for combo in _B5_COMBOS:
+            base = dict(tmpl, **combo)
+            if comp.params_error(base) is not None:
+                continue                       # その組自体が成立しない
+            for key, b in comp.param_bounds(base).items():
+                if key == "baffle_plateau":
+                    continue                   # 黙ったクランプ側。下のテストで見る
+                step = specs[key].step or 0.01
+                for side, sign in (("lo", -1), ("hi", +1)):
+                    wall = b.get(side)
+                    if wall is None:
+                        continue
+                    assert comp.params_error(
+                        dict(base, **{key: wall})) is None, (tid, key, side, wall)
+                    flip = _flip_point(comp, base, key, wall, sign, step)
+                    assert flip is not None, (tid, key, side, wall, "壁が甘い")
+                    assert abs(flip - wall) <= step * 1.0001, (tid, key, side, wall, flip)
+                    checked += 1
+    assert checked > 200, checked
+
+
+def test_a_relation_wall_moves_with_its_partner_instead_of_being_refused():
+    """**帯の端が壁の外へはみ出す 6 端を、相手を動かして取り戻す（B-5）。**
+
+    B-4a の実測: 径 2 本の帯は 3 サイズ共通の絶対レンジ（18〜34 / 14〜28）で、
+    **12 端のうち 6 端が既定の相手では弾かれる**（alto の `body_dia` は帯の
+    32% が死ぬ）。帯の数字が下手なのではなく、**相手で動く壁を静的な帯で
+    表せない**ということ。
+
+    B-5 で `ParamSet` が組から壁を引くようにしたので、
+
+    - 相手を一緒に動かせば**どの端にも立てる**
+    - 相手が届かせてくれないときは黙って丸めず、**相手の名前を言って**丸める
+
+    の 2 つになった。400 で断られるのは「どの値も置けない」組だけ。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    #: 文面に出る相手の名前 → そのパラメータ。**動かす向きは端の側で決まる**
+    #: （下端を塞いでいる相手は細く、上端を塞いでいる相手は太く）。
+    partner_key = {"シャンク径": "shank_dia", "ボア径": "bore_dia",
+                   "最大径": "body_dia"}
+    reg = get_registry().get("saxophone")
+    reached = clamped = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        for key in ("body_dia", "shank_dia"):
+            for edge in (specs[key].min, specs[key].max):
+                ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                              bounds_provider=comp.param_bounds)
+                got = ps.apply({key: edge})[key]
+                if got == pytest.approx(edge):
+                    reached += 1
+                    continue
+                clamped += 1
+                adj = next(a for a in ps.adjustments if a["key"] == key)
+                assert adj["at"] == "relation", (tid, key, adj)
+                assert adj["partner"] in partner_key, (tid, key, adj)
+                assert adj["partner"] in adj["message"]
+                # 相手を先に動かせば同じ端に立てる
+                pk = partner_key[adj["partner"]]
+                helper = edge - 0.2 if adj["edge"] == "min" else edge + 0.2
+                ps2 = ParamSet(comp.param_specs(),
+                               comp.template.get("mouthpiece", {}),
+                               bounds_provider=comp.param_bounds)
+                assert ps2.apply({pk: helper})[pk] == pytest.approx(helper), (tid, pk)
+                out = ps2.apply({key: edge})
+                assert out[key] == pytest.approx(edge), (tid, key, edge, out[key])
+                assert comp.params_error(out) is None
+    assert clamped == 6, clamped        # B-4a が数えた 6 端
+    assert reached == 6, reached
+
+
+def test_both_ends_of_the_heel_floor_pair_can_be_placed_at_their_wall():
+    """**踵の床で繋がった 2 本を、両方とも壁へ置いても 400 にならない（B-5）。**
+
+    床は `shank_length` と `shoulder_ratio` の**組**で決まるので、片方ずつの
+    静的な `hard_max` は同時には成り立たない ——B-4a はそれを「掛け金が
+    静的な数字である以上こうなる」と書いて閉じた（ブラウザで踏んだ）。
+
+    動的な壁は**頼まれた組**から引くので、両方を上限へ動かすと互いの壁が
+    内側へ寄り、成立する組に落ちる。**そして黙らない。**
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        specs = {s.key: s for s in comp.param_specs()}
+        ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                      bounds_provider=comp.param_bounds)
+        out = ps.apply({"shank_length": specs["shank_length"].hard_max,
+                        "shoulder_ratio": specs["shoulder_ratio"].hard_max})
+        assert comp.params_error(out) is None, (tid, comp.params_error(out))
+        keys = {a["key"] for a in ps.adjustments}
+        assert keys == {"shank_length", "shoulder_ratio"}, (tid, keys)
+        for a in ps.adjustments:
+            assert a["at"] == "relation" and a["partner"], (tid, a)
+        # 掛け金だけ（＝ B-4a のまま）なら弾かれていた組であること
+        old = dict(out)
+        old["shank_length"] = specs["shank_length"].hard_max
+        old["shoulder_ratio"] = specs["shoulder_ratio"].hard_max
+        assert comp.params_error(old) is not None, tid
+
+
+def test_the_baffle_plateau_slider_now_follows_the_baffle_type():
+    """**スライダの 86% が死んでいたのを型ごとの実効範囲へ（B-2 → B-5）。**
+
+    B-2 は「実効範囲は `_PLATEAU_RANGE` が型ごとに決めるのに、帯は 4 型の
+    **和集合**」と測ったうえで「`ParamSpec` が静的なのでこのスライスには
+    入れていない。**報告しただけでは直っていない**」と書いて閉じた。
+
+    動的な壁で閉じる。数字は写さず同じ 1 テーブルを引くので、
+    `_PLATEAU_RANGE` を書き換えればスライダも断面ハンドルも一緒に動く。
+    **型を切り替えた同じ apply で壁が入れ替わる**（`ParamSet.apply` が
+    型変換だけした組から壁を引くため）。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    spec = next(s for s in comp.param_specs() if s.key == "baffle_plateau")
+    base = {s.key: s.default for s in comp.param_specs()}
+    for bt in ("step", "rollover", "straight", "curve"):
+        lo, hi = profiles._PLATEAU_RANGE[bt]
+        b = comp.param_bounds(dict(base, baffle_type=bt))["baffle_plateau"]
+        assert (b["lo"], b["hi"]) == (lo, hi), bt
+        ps = ParamSet(comp.param_specs(), comp.template.get("mouthpiece", {}),
+                      bounds_provider=comp.param_bounds)
+        # 型と値を**同じ apply で**渡しても、新しい型の壁で丸まる
+        out = ps.apply({"baffle_type": bt, "baffle_plateau": spec.max})
+        assert out["baffle_plateau"] == pytest.approx(hi), bt
+        adj = next(a for a in ps.adjustments if a["key"] == "baffle_plateau")
+        assert adj["at"] == "relation" and adj["partner"] == "バッフル型"
+        # 帯の端は straight / curve では実効範囲の 6 倍以上外にある
+        if bt in ("straight", "curve"):
+            assert spec.max > hi * 6.0, bt
+
+
+def test_a_moving_wall_never_clamps_silently():
+    """**この方式そのものが黙ったクランプの 9 例目にならないこと。**
+
+    黙ったクランプは既知 8 例（`window_length` / `seat_offset` /
+    `baffle_plateau` / 踵の床 …）。動的な壁は帯より内側へ止めることがあるので、
+    **報告を落とすと最も見つけにくい種類の 9 例目**になる。壁で止めた回は
+    必ず `at: "relation"` と相手の名前が出る。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    seen = 0
+    for tid in SIZES:
+        comp = reg.make_component("mouthpiece", tid)
+        for key in _B5_MOVING:
+            for probe in (-1e4, 1e4):
+                ps = ParamSet(comp.param_specs(),
+                              comp.template.get("mouthpiece", {}),
+                              bounds_provider=comp.param_bounds)
+                before = ps.values[key]
+                after = ps.apply({key: probe})[key]
+                assert after != probe
+                if after == before:
+                    continue
+                adj = next(a for a in ps.adjustments if a["key"] == key)
+                assert adj["message"], (tid, key)
+                assert adj["at"] in ("relation", "wall", "band"), adj
+                if adj["at"] == "relation":
+                    assert adj["partner"] and adj["partner"] in adj["message"]
+                    seen += 1
+                # 止まった先は必ず成立する値
+                assert comp.params_error(ps.values) is None, (tid, key, probe)
+    assert seen >= 30, seen
+
+
+def test_components_without_moving_walls_are_unchanged():
+    """**入れていない部品の挙動は 1 ビットも変わらない。**
+
+    `Component.param_bounds` の既定は空 dict なので、リガチャー・ネック・
+    管体は掛け金と帯だけで動く（`limit_kind` も `unclassified` のまま）。
+    **分類も壁も、測ってから入れる。**
+
+    **リードは 1 本だけ入った**（2026-09-21、Phase 4-F 実測）: 踵の側端厚 ≤
+    中央厚 − 0.2。実物のアルト #1 の 1.65 が旧来の直値の上限 1.6 を越えたので、
+    直値が代理していた関係のほうを持たせた。テンプレート値は動かない。
+    """
+    from saxsketch.core.schema import ParamSet
+
+    reg = get_registry().get("saxophone")
+    for cid in ("reed", "ligature", "neck", "body"):
+        comp = reg.make_component(cid, "alto")
+        base = dict(ParamSet(comp.param_specs(), comp.template.get(cid, {})).values)
+        if cid == "reed":
+            assert set(comp.param_bounds(base)) <= {"heel_edge_thickness",
+                                                    "heel_thickness"}
+        else:
+            assert comp.param_bounds(base) == {}, cid
+        ps = ParamSet(comp.param_specs(), comp.template.get(cid, {}),
+                      bounds_provider=comp.param_bounds)
+        plain = ParamSet(comp.param_specs(), comp.template.get(cid, {}))
+        assert ps.values == plain.values, cid
+
+
+def test_the_moving_wall_reaches_the_browser_and_moves_there():
+    """**壁が動いたことが画面まで届くこと**（Phase 4-E B-5）。
+
+    サーバが組ごとに壁を引き直しても、フロントへ渡らなければスライダは
+    掛け金で止まったまま ——`shank_dia` を太くしても `bore_dia` はそこから
+    先へ動かせない。`/api/project` と `PUT /api/project/params` は
+    **スキーマではなく `bounds` だけ**を返す（帯は動かないので、動くものだけ）。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+
+    b0 = c.get("/api/project").json()["bounds"]
+    assert set(b0) == set(_B5_MOVING)
+    assert b0["bore_dia"]["hi"] == pytest.approx(23.15)   # 既定のシャンク径 −1 刻み
+    assert b0["bore_dia"]["hi_by"] == "シャンク径"
+
+    # 相手を太くすると、掛け金（23.15）の**外**まで壁が動く
+    r = c.put("/api/project/params", json={"params": {"shank_dia": 26.0}}).json()
+    assert r["bounds"]["bore_dia"]["hi"] == pytest.approx(25.95)
+    spec = next(s for s in c.get("/api/project").json()["schema"]
+                if s["key"] == "bore_dia")
+    assert spec["hard_max"] == pytest.approx(23.15)       # 掛け金は据え置き
+    # そこまで本当に置ける
+    r = c.put("/api/project/params", json={"params": {"bore_dia": 25.0}}).json()
+    assert r["params"]["bore_dia"] == pytest.approx(25.0)
+    assert r["adjustments"] == []
+
+    # 断面（ドラッグ中）も同じ壁で答える —— 指を離した瞬間に値が飛ばないこと
+    s = c.get("/api/section?shank_dia=27").json()
+    assert s["bounds"]["bore_dia"]["hi"] == pytest.approx(26.95)
+
+
+def test_changing_the_baffle_type_brings_its_plateau_along():
+    """**相手を動かした結果、触っていない値が壁の外に残らないこと**（B-5）。
+
+    `baffle_type` を切り替えると `baffle_plateau` の実効範囲そのものが
+    入れ替わる。`profiles.baffle_plateau()` は範囲外を**黙ってクランプして形を
+    作る**ので、値を置き去りにするとスライダ 0.36・形 0.12 になる ——
+    B-2 が測った死に帯が、今度は値の側で再現する。
+
+    連れて行く条件は「`params_error` が黙っていること」だけ。関係で決まる
+    8 本は壁の外へ出ればそちらが理由つきで断るので、ここへ来るのは
+    **誰も文句を言わないまま下流で丸められる値**だけ。
+    """
+    from saxsketch.server.state import STATE
+    STATE.new_project("saxophone", "alto", "mouthpiece")
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(0.36)
+
+    STATE.apply_params({"baffle_type": "straight"})
+    lo, hi = profiles._PLATEAU_RANGE["straight"]
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(hi)
+    adj = [a for a in STATE.adjustments if a["key"] == "baffle_plateau"]
+    assert len(adj) == 1 and adj[0]["at"] == "relation"
+    assert adj[0]["partner"] == "バッフル型"
+
+    # 形と値が一致していること（＝ 下流の黙ったクランプが効いていない）
+    p = dict(STATE.paramset.values)
+    assert profiles.baffle_plateau(p) == pytest.approx(p["baffle_plateau"])
+
+    # 触っていない値でも、壁の中にいるかぎり動かさない
+    STATE.apply_params({"baffle_type": "curve"})
+    assert STATE.paramset.values["baffle_plateau"] == pytest.approx(hi)
+    assert [a for a in STATE.adjustments if a["key"] == "baffle_plateau"] == []
+
+
+def test_every_consumer_of_the_wall_sees_the_moving_one():
+    """**壁を読む側が掛け金で止まっていないこと**（代理変数の型、7 例目）。
+
+    `min`/`max` を可動域の代理として読む型は Phase A で 4 か所、B-4b で
+    検品スクリプトの 1 か所を直した。**壁が増えるたびに増える**ので、
+    相手で動く壁を入れた B-5 では「掛け金で止まる読み手」が同じ型になる。
+
+    ここで押さえるのは 3 か所 ——断面ハンドル・採寸フォーム・感度表。
+    どれも `params` を渡せば実効の壁を見る（渡さなければ掛け金のまま ＝
+    後方互換）。ゴールシークは**帯のまま**なので対象外 ——頼まれてもいない
+    のに慣習の外へ出さないのが仕様（`test_goalseek_never_drags_...`）。
+    """
+    from saxsketch.acoustics import brightness as br
+    comp = get_registry().get("saxophone").make_component("mouthpiece", "alto")
+    base = {s.key: s.default for s in comp.param_specs()}
+    wide = dict(base, shank_dia=26.0)          # `bore_dia` の壁を掛け金の外へ
+    latch = next(s for s in comp.param_specs() if s.key == "bore_dia").hard_max
+    moved = comp.param_bounds(wide)["bore_dia"]["hi"]
+    assert moved > latch                        # 前提: 掛け金より外へ動いている
+
+    # ① 断面ハンドル
+    assert comp._handle_ranges()["bore_dia"][1] == pytest.approx(latch)
+    assert comp._handle_ranges(wide)["bore_dia"][1] == pytest.approx(moved)
+
+    # ② 採寸フォーム（実物をノギスで測った値の受け口）
+    tg = {d["key"]: d for d in comp.survey_targets(wide)["params"]}
+    assert tg["bore_dia"]["max"] == pytest.approx(moved)
+    old = {d["key"]: d for d in comp.survey_targets()["params"]}
+    assert old["bore_dia"]["max"] == pytest.approx(latch)
+
+    # ③ 感度表 —— 1 段の作り方が壁で決まる。上限に張り付いていると向きが
+    #    下へ反転するので、壁が違えば符号ごと変わる。
+    #
+    #    いまの `SENSITIVITY_KEYS` に動く 9 本は 1 つも入っていない（＝ この
+    #    経路はまだ実害が出ていない）。**それでも配線は通しておく** ——
+    #    出ていない実害を理由に配線を落とすと、キーが 1 つ増えた日に
+    #    「掛け金で止まる読み手」が黙って復活する。ここでは壁を渡せば
+    #    そちらが効くことを直接押さえる。
+    key = br.SENSITIVITY_KEYS[0]
+    spec = next(s for s in comp.param_specs() if s.key == key)
+    at_wall = dict(base, **{key: spec.bounds()[1]})
+    assert br.sensitivity(at_wall, comp.param_specs())["table"][key]["step"] < 0
+    roomy = {key: {"lo": None, "hi": spec.bounds()[1] + 10 * (spec.step or 0.1),
+                   "lo_by": "", "hi_by": "テスト"}}
+    assert br.sensitivity(at_wall, comp.param_specs(),
+                          roomy)["table"][key]["step"] > 0
+
+
 def test_reed_and_spec_use_the_window_that_exists():
     """リード適合と仕様書は**実際に開く窓**を見ること。
 
@@ -1010,12 +2640,24 @@ def test_impossible_params_are_not_saved():
     STATE.new_project("saxophone", "soprano", "mouthpiece")
     before = dict(STATE.paramset.values)
     specs = {s.key: s for s in STATE.component.param_specs()}
+    # **相手で動く壁が付いた 2 本ではもう起きない**（B-5）——全長とボア長は
+    # 互いの壁で丸まって成立する組に落ちる。弾く経路が残っているのは、
+    # 動的な壁を持たない拘束のほう。ここはウィンドウの前端（`tip_rail_width`）と
+    # チェンバー→ボアの遷移を両方とも壁ちょうどへ置いた組で、窓の長さが負になる。
     with pytest.raises(ValueError, match="成立しません"):
-        STATE.apply_params({"overall_length": specs["overall_length"].min,
-                            "bore_length": specs["bore_length"].max})
+        STATE.apply_params({"tip_rail_width": specs["tip_rail_width"].hard_max,
+                            "chamber_to_bore_mm": specs["chamber_to_bore_mm"].hard_max})
     assert dict(STATE.paramset.values) == before      # 1 つも動いていない
     assert STATE.project.params == before             # 保存側も動いていない
     STATE.simulate()                                   # まだ描ける
+
+    # 全長とボア長の組は、以前はここで弾かれていた（`f1e79e8` 以来）。
+    # いまは丸めて通るが、**黙ってはいない**（相手の名前つきで 2 件報告）。
+    out = STATE.apply_params({"overall_length": specs["overall_length"].min,
+                              "bore_length": specs["bore_length"].max})
+    assert STATE.component.params_error(out) is None
+    assert {a["key"] for a in STATE.adjustments} == {"overall_length", "bore_length"}
+    assert all(a["at"] == "relation" for a in STATE.adjustments)
 
 
 # ------------------------------------------------------------------ ファイルダイアログ
@@ -1396,6 +3038,10 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
     だから残す検出量は warn ではなく**終端の落ち込み**（借り物にすると 2.57mm
     手前に来る）にする。**warn が出なくなったこと自体も固定する** ——
     黙って消すと「昔から出ていなかった」と読めてしまう。
+
+    **2026-09-21: 予言どおり次の実測で裏返った。** リード 5 本の採寸で FIBRACELL
+    72.8 が入り、域の上端が 71.10 → 72.80 に伸びた。借り物の終端 71.30 は域の中
+    （軽微）に落ちて **warn がまた出る**。実測の終端 73.87 の余裕は 1.07mm。
     """
     from saxsketch.instruments.saxophone.components import reference_check
     si = _size_info("alto")
@@ -1414,11 +3060,12 @@ def test_alto_needed_both_measurements_to_stay_in_spec():
         ALTO_TABLE_END_BORROWED_MM, abs=0.1)
     assert profiles.table_cut_end_z(p) - profiles.table_cut_end_z(borrowed) ==         pytest.approx(ALTO_TABLE_END_MM - ALTO_TABLE_END_BORROWED_MM, abs=0.1)
 
-    # **検出器が沈黙したことを固定する。** 借り物でもリード上端をわずかに超えるので
-    # warn が出ない。余裕は 0.20mm しかなく、**次の実測でまた裏返りうる**。
-    assert profiles.table_cut_end_z(borrowed) > reed_hi
-    assert profiles.table_cut_end_z(borrowed) - reed_hi < 0.3
-    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "ok"
+    # **検出器がまた効く**（2026-09-21）。09-05 に沈黙したときは借り物でもリード
+    # 上端 71.10 を 0.20mm 超えていたが、上端が FIBRACELL の 72.80 へ伸びた。
+    reed_lo, _ = reference_check.reed_length_range(si)
+    assert reed_lo < profiles.table_cut_end_z(borrowed) < reed_hi
+    assert reference_check.mouthpiece_card(borrowed, si)["status"] == "warn"
+    assert profiles.table_cut_end_z(p) - reed_hi == pytest.approx(1.07, abs=0.05)
 
 
 def test_bore_clears_corked_tenon():
@@ -1476,12 +3123,14 @@ def test_undersized_bore_is_rejected_not_excused():
 #: Stage G でリード実測が入って**符号が反転する**ことがはっきりした:
 #:
 #:   - tenor  +1.0 … 座の後端が踵より 1.0mm 後ろ（実測マウスピース × 未実測リード）
-#:   - soprano −2.0（ケーン 59.1）〜 −4.9（樹脂 62.0）… **踵が座の後端より後ろへ出る**
-#:   - alto   −0.8〜+0.1 … **ほぼ 0**（マウスピースもリードも実測、2026-08-15）
+#:   - soprano −1.2（樹脂 58.3）〜 −4.9（樹脂 62.0）… **踵が座の後端より後ろへ出る**。
+#:     2 本の頃は −2.0（ケーン 59.1）〜 −4.9 で、5 本（2026-09-22）で樹脂が両端に来た
+#:   - alto   −2.5〜+0.1 … 2 本の頃は −0.8〜+0.1 で**ほぼ 0** に見えたが、5 本
+#:     （2026-09-21）で FIBRACELL 72.8 が入って上側が 1.7mm 伸びた
 #:
-#: **アルトだけが「実測マウスピース × 実測リード」の組**で、そこでは差がほぼ 0 に
-#: なる。ただしこれを設計則の証拠と読んではいけない —— ソプラノも同じく両方実測で、
-#: そちらは −2.0〜−4.9 と大きく外れる。正のままなのはテナーだけで、そのテナーは
+#: **アルトだけが「実測マウスピース × 実測リード」の組**で、2 本の頃は差がほぼ 0
+#: に見えた。これを設計則の証拠と読まなかったのは正しかった —— ソプラノも同じく
+#: 両方実測で −1.2〜−4.9 と大きく外れ、アルトも 3 本足すと −2.5 まで開いた。正のままなのはテナーだけで、そのテナーは
 #: リードが未実測の代表値。
 #:
 #: この行は途中で 2 度動いた。B.1 のスケール値（全長 98.54mm）では +0.9、Stage I で
@@ -1489,7 +3138,7 @@ def test_undersized_bore_is_rejected_not_excused():
 #: 動いて −0.8〜+0.1。**借り物の定数が入っているあいだは符号すら当てにならない。**
 #: 判定はこの等値では出さず、`reference_check` の 2 本（テーブル終端 vs 座の後端 /
 #: vs リード全長域）が持つ。後者はリード全長が実測のサイズでしか判定しない。
-SEAT_MINUS_REED_MM = {"soprano": (-4.9, -2.0), "alto": (-0.80, 0.10), "tenor": (1.02, 1.02)}
+SEAT_MINUS_REED_MM = {"soprano": (-4.9, -1.2), "alto": (-2.50, 0.10), "tenor": (1.02, 1.02)}
 
 #: 最大径の位置（シャンク端から）[mm]。**ノギスでの実測**。
 #: soprano ヤナギサワ刻印4（2026-08-10）/ alto Wood Stone PHROX（2026-08-15）。
@@ -1666,6 +3315,16 @@ def test_shoulder_can_be_an_exact_cone_to_the_shank_end():
         assert len(shoulder) == 2, (tid, [len(s) for s in profiles.body_segments(q)])
 
 
+#: 比 1.0 での「窓の後ろの最狭断面 / ボア断面」。既定は下限 0.95（形状係数の
+#: 移り変わりで数 % は上下する）。**ソプラノだけ値で留める** —— `side_rail_width`
+#: を窓の実測へ合わせて 0.89 → 1.55 にしたら（2026-09-22）、`profiles._RAIL_WEIGHT`
+#: の裾（窓の終端で 0.85、σ=0.94 で 0.3）が寄せをチェンバーへ持ち込み、z=30 に
+#: 0.926 のくびれが出た（0.89 の頃は 0.975。テナーを 1.55 にしても 0.942）。
+#: 窓の後ろの空洞幅は測れていないので、**消しも広げもせず**に記録する。レールが
+#: 太いのか空洞が狭いのか（リード面の外幅の実測）が決まったら見直す。
+CAVITY_NECK_PINNED = {"soprano": 0.926}
+
+
 def test_cavity_station_roles():
     """空洞は 窓→チェンバー→スロート→ボア の順に並び、比 1.0 では単調にボアへ開く。
 
@@ -1694,8 +3353,12 @@ def test_cavity_station_roles():
         # 横アーチ（`_TOP_ARCH`）が抜ける区間でも同じ程度の上下が出る。
         after = [s for s in st if s["role"] != "window"]
         a_bore = area(profiles.stations_by_role(st, "bore")[0])
-        assert min(area(s) for s in after) >= 0.95 * a_bore, (
-            tid, [(s["role"], round(area(s))) for s in after])
+        neck = min(area(s) for s in after) / a_bore
+        if tid in CAVITY_NECK_PINNED:
+            assert neck == pytest.approx(CAVITY_NECK_PINNED[tid], abs=0.01), (
+                tid, [(s["role"], round(area(s))) for s in after])
+        else:
+            assert neck >= 0.95, (tid, [(s["role"], round(area(s))) for s in after])
 
         # throat_ratio を絞ると本当にスロートが最狭部になる
         narrow = profiles.cavity_stations(dict(p, throat_ratio=0.70))
@@ -1743,12 +3406,22 @@ def test_reference_card_all_match():
         else:
             assert not minor and card["status"] == "ok", (tid, card["rows"])
 
-        # リード側は 3 サイズとも一致（ソプラノのテンプレートは実測 59.1 に置いてある）
+        # リード側は 3 サイズとも一致（ソプラノのテンプレートは実測 59.1 に置いてある）。
+        # **例外は実測したサイズの「先端から 20mm の幅」1 行だけ**: 直線のテーパーは
+        # 実物をアルト #1 で +0.12（#2 も +0.08、2026-09-21）、ソプラノ #2 で +0.07
+        # （#1 も +0.12、09-22）過小に読む。2 サイズとも同じ向きの実物の膨らみなので、
+        # 帯を広げて消さない。
         reed = reg.make_component("reed", tid)
         reed.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
         cards = reed.simulate({s.key: s.default for s in reed.param_specs()})["cards"]
         card = next(c for c in cards if "照合" in c["title"])
-        assert card["status"] == "ok", (tid, card["rows"])
+        off = [r[0] for r in card["rows"] if not r[1].endswith("一致")
+               and not r[0].startswith("（参考）")]
+        if tid in ("alto", "soprano"):
+            assert off == ["先端から 20mm の幅 実測/モデル"], (tid, card["rows"])
+            assert card["status"] == "warn", (tid, card["rows"])
+        else:
+            assert card["status"] == "ok", (tid, card["rows"])
 
 
 def test_reed_recommended_tip_matches_cane_reality(alto_reed):
@@ -1921,7 +3594,8 @@ def test_reed_cane_arc_is_the_original_tube(alto_reed):
     assert rp.cane_top(p, 0.0) == pytest.approx(p["heel_thickness"], abs=1e-9)
     assert rp.cane_top(p, hw) == pytest.approx(p["heel_edge_thickness"], abs=1e-9)
     # 半径は円の定義から一意。中央厚との差が小さいほど大きな管になる
-    thin = rp.cane_radius({**p, "heel_edge_thickness": 1.6})
+    # 浅い側の端は壁（中央厚 − 0.2。実物のアルト #1 の 1.65 は旧来の直値 1.6 の外）
+    thin = rp.cane_radius({**p, "heel_edge_thickness": p["heel_thickness"] - 0.2})
     thick = rp.cane_radius({**p, "heel_edge_thickness": 0.3})
     assert thin > rp.cane_radius(p) > thick
     # バーク側では厚み＝円弧そのもの（削り面が上に居ない）
@@ -1940,10 +3614,14 @@ def test_reed_blank_must_fit_in_the_cane_tube(alto_reed):
     """
     comp, p = alto_reed
     assert comp.params_error(p) is None
-    assert comp.params_error({**p, "tip_width": 18.0}) is not None
-    assert comp.params_error({**p, "heel_width": 9.0}) is not None
+    # 深い円弧（旧既定の踵 14.0×2.8・側端 0.9 ＝ 管 φ27.7）で見る。実物のアルト #1
+    # （踵厚 3.3・側端厚 1.65、2026-09-21）は管が φ31.4 と太く、先端幅 18 でも収まる。
+    deep = {**p, "heel_width": 14.0, "heel_thickness": 2.8, "heel_edge_thickness": 0.9}
+    assert comp.params_error({**p, "tip_width": 18.0}) is None
+    assert comp.params_error({**deep, "tip_width": 18.0}) is not None
+    assert comp.params_error({**deep, "heel_width": 9.0}) is not None
     # 側端厚を上げて円弧を浅くすれば**同じ幅のまま**成立する（幅だけの制限ではない）
-    assert comp.params_error({**p, "tip_width": 18.0,
+    assert comp.params_error({**deep, "tip_width": 18.0,
                               "heel_edge_thickness": 1.6}) is None
 
 
@@ -2006,9 +3684,22 @@ def test_reed_builds_for_all_templates():
         assert comp.build(p).is_valid
         sim = comp.simulate(p)
         assert sim["kind"] == "reed" and sim["cards"]
-        # 既定同士は適合しているはず（テンプレートの整合性テスト）
+        # 既定同士は適合しているはず（テンプレートの整合性テスト）。
+        #
+        # **テナーだけは合っていない**（Phase 4-F で測って分かった）—— 帯の前端の
+        # 直後 z=61.9 から踵まで 16mm、リードの縁がテーブルの外にある（最大
+        # +0.72mm）。ここに出てくる 2 つの値の出所が違う: マウスピースの
+        # `body_dia` 30.8 は実物 WindyCity の実測で、リードの `heel_width` 15.4 は
+        # **未実測の代表値**（`descriptor` のテナーは全長も先端幅も出所が無い）。
+        # どちらを動かすかは実物のリードを測ってから決める（`docs/reed-seat.md`）。
+        # それまで「合っている」と言い張らずに、食い違いの中身を固定しておく。
         fit = next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
-        assert fit["status"] == "ok", fit["advice"]
+        if tid == "tenor":
+            assert fit["status"] == "warn"
+            assert "縁がテーブルの外" in fit["advice"]
+            assert "0.72mm" in fit["advice"]
+        else:
+            assert fit["status"] == "ok", fit["advice"]
 
 
 def test_reed_sections_uniform_vertex_count():
@@ -2024,7 +3715,13 @@ def test_reed_sections_uniform_vertex_count():
 
 #: 前縁の円弧が参照マウスピースのティップ輪郭からどれだけ離れるか [mm]。
 #: **円弧では 0.1mm より近づけない** —— 実物の輪郭は真円ではないので、既定同士でも
-#: soprano 0.094 / alto 0.103 / tenor 0.118 残る。ここはその残差の上限。
+#: soprano 0.094 / tenor 0.118 残る。ここはその残差の上限。
+#: **アルトとソプラノは対象外**（先端カーブは輪郭に合わせた値ではなく実物の逆算。
+#: アルトはずれ +0.21 で、円弧のまま最も合わせても 0.18 までしか縮まない ——
+#: 実物の幅 16.4 では、輪郭が角の近くで急に落ちる区間まで比べることになる。
+#: ソプラノはずれ +0.86 で、**モデルの MP 輪郭のほうが外れている疑い**が強い ——
+#: 実物の刻印 4 と先端カーブの形がほぼ一致したのは #3（逆算 2.60）で、モデルの
+#: 輪郭に最も合うのは 1.7（2026-09-22）。MP の輪郭は未実測なので判定しない）。
 TIP_CONTOUR_ARC_RESIDUAL_MM = 0.15
 #: 前縁を直線にしたとき角がティップレールから前へ張り出す量 [mm]。
 #: 比べるのは**前縁アークが効く区間だけ**（角の丸みが効く所はリードが意図的に
@@ -2055,11 +3752,24 @@ def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
         comp = get_registry().get("saxophone").make_component("reed", tid)
         m = _template_params("mouthpiece", tid)
         p = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
-        hw = min(p["tip_width"], m["reed_width"]) / 2.0
+        hw = comp._corner_half_width(p, m)
         flat = {**p, "tip_curve_depth": 0.0}
 
-        assert abs(_tip_rail_gap(rp, p, m, min(rp.arc_end_x(p), hw))) \
-            < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
+        gap = _tip_rail_gap(rp, p, m, min(rp.arc_end_x(p), hw))
+        from saxsketch.instruments.saxophone.components.reed import TIP_CONTOUR_TOL
+        comp.set_refs({"mouthpiece": {"params": m}})
+        if tid == "alto":
+            # 実物の逆算値。カードの許容（0.3）には収まり、残差の大半は円弧の限界
+            assert abs(gap) < TIP_CONTOUR_TOL, gap
+            assert abs(comp._best_curve_depth(p, m)[1]) > TIP_CONTOUR_ARC_RESIDUAL_MM
+        elif tid == "soprano":
+            # 実物の逆算値 2.72 はモデルの輪郭から大きく後退する（＝モデルの MP
+            # 輪郭が浅い疑い）。MP の輪郭を実測して直したらここで気付く。
+            best_d, _ = comp._best_curve_depth(p, m)
+            assert gap > TIP_CONTOUR_TOL, gap
+            assert p["tip_curve_depth"] - best_d > 0.8, best_d
+        else:
+            assert abs(gap) < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
         # 直線の前縁は角でレールより前へ出る（負＝張り出し）
         assert _tip_rail_gap(rp, flat, m, min(rp.arc_end_x(flat), hw)) \
             < -TIP_STRAIGHT_OVERHANG_MM, tid
@@ -2099,27 +3809,59 @@ def test_reed_tip_curve_zero_is_the_old_shape(alto_reed):
         for z in rp.station_zs(flat)]
 
 
+def _reed_bases():
+    """3 サイズの既定と、**先端が広い**実物アルト（#1）の組。
+
+    旧既定は 3 サイズとも踵が先端より 0.6 広く、輪郭のテストはそれを暗黙に
+    仮定していた（「全長で単調非減少」）。実物のアルトは先端が 2.2 広い
+    （2026-09-21）ので、両方の向きを必ず回す。
+    """
+    from saxsketch.core.schema import ParamSet
+    reg = get_registry().get("saxophone")
+    out = []
+    for tid in ("soprano", "alto", "tenor"):
+        comp = reg.make_component("reed", tid)
+        out.append((tid, dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)))
+    alto = dict(out[1][1])
+    out.append(("widening", {**alto, "tip_width": 14.0, "heel_width": 14.6}))
+    return out
+
+
 def test_reed_outline_never_widens_toward_the_tip():
-    """平面視の輪郭が z について単調非減少であること。
+    """平面視の輪郭が**先端の輪郭（z_f まで）で**単調非減少で、そこから後ろは
+    側面テーパーそのものであること。
 
     4-C.2 は `if 0.0 < z < d` で **z=0 を円弧クランプから漏らして**いた。最先端の
     断面だけ全幅（soprano 11.5 / alto 11.8 / tenor 13.0）のまま残り、次の
     ステーションで 5.1〜5.9 まで絞られるので、前縁から厚さ 0.4mm の平たいヒレが
     前へ張り出していた（輪郭の垂直ずれ 2.31〜2.68mm）。**掃引もテストも
     `width(p, 0)` を depth>0 で評価していなかったので素通りした。**
+
+    以前は「全長で単調非減少」を見ていたが、それは**踵のほうが広い**という
+    未実測の仮定を固定していた。実物のアルトは先端が広い（Phase 4-F 実測）。
     """
-    from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
-    for tid in ("soprano", "alto", "tenor"):
-        comp = get_registry().get("saxophone").make_component("reed", tid)
-        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+    for tid, base in _reed_bases():
+        # **カーブ 0 の旧式だけは、狭まるリードで z_f の手前がわずかに細る。** 旧式は
+        # 角の丸みを局所テーパーに乗せる（ビット単位で据え置くため）ので、丸みの
+        # 傾きがテーパーより緩くなる最後の r·|テーパー| の区間で、最大 r·テーパー²
+        # （実物アルトで 0.0002mm）だけ下がる。ヒレ（mm 級）とは桁が違う。
+        taper = (base["heel_width"] - base["tip_width"]) / (2.0 * base["reed_length"])
         for d in (0.0, 0.4, base["tip_curve_depth"], 2.5):
             p = {**base, "tip_curve_depth": d}
-            prev = -1.0
-            for i in range(4001):
-                w = rp.width(p, base["reed_length"] * i / 4000.0)
-                assert w >= prev - 1e-12, (tid, d, i)
-                prev = w
+            dip = (p["tip_corner_r"] * taper * taper      # 全幅で r·a'²（半幅で半分）
+                   if d == 0.0 and taper < 0.0 else 0.0)
+            zf = rp.tip_full_width_z(p)
+            peak = -1.0
+            for i in range(2001):
+                z = zf * i / 2000.0
+                w = rp.width(p, z)
+                assert w >= peak - dip - 1e-12, (tid, d, z)
+                peak = max(peak, w)
+            for i in range(1, 201):
+                z = zf + (p["reed_length"] - zf) * i / 200.0
+                assert rp.width(p, z) == pytest.approx(
+                    2.0 * rp.taper_half_width(p, z), abs=1e-12), (tid, d, z)
             if d > 0.0:      # カーブがあれば最先端は下限まで細る
                 assert rp.width(p, 0.0) == 0.5, (tid, d)
 
@@ -2132,12 +3874,12 @@ def test_reed_outline_is_one_smooth_curve():
     （alto で dx/dz が 0.004 から 5.57 へ跳ぶ）。跳ね上がる量の実測は
     旧 +118〜+134 / 新 +0.0023〜+0.0044。上限は側面テーパー自身の傾き。
     """
-    from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     h = 1e-4
-    for tid in ("soprano", "alto", "tenor"):
-        comp = get_registry().get("saxophone").make_component("reed", tid)
-        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+    for tid, base in _reed_bases():
+        # 跳ね上がりの上限は側面テーパーの傾き。**狭まるテーパー（実物のアルト）では
+        # 負になる**ので 0 で下から押さえる —— フィレットは側面に z_f で垂直に
+        # 接するので、そこでの折れは |テーパー| ぶんの**下向き**の変化になる。
         taper = (base["heel_width"] - base["tip_width"]) / (2.0 * base["reed_length"])
         for d in (0.0, 0.4, base["tip_curve_depth"], 2.5):
             p = {**base, "tip_curve_depth": d}
@@ -2145,7 +3887,7 @@ def test_reed_outline_is_one_smooth_curve():
             slopes = [(rp.half_width(p, z + h) - rp.half_width(p, z)) / h for z in zs]
             jump = max((slopes[i] - slopes[i - 1] for i in range(1, len(slopes))),
                        default=0.0)
-            assert jump <= taper + 1e-3, (tid, d, jump)
+            assert jump <= max(taper, 0.0) + 1e-3, (tid, d, jump)
 
 
 def test_reed_front_edge_matches_the_solid_outline():
@@ -2156,21 +3898,48 @@ def test_reed_front_edge_matches_the_solid_outline():
     0.3mm より大きい）。カードはこの式で印刷される形を測るので、両者は同じ
     曲線でなければならない。
     """
-    from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
-    for tid in ("soprano", "alto", "tenor"):
-        comp = get_registry().get("saxophone").make_component("reed", tid)
-        base = dict(ParamSet(comp.param_specs(), comp.template["reed"]).values)
+    for tid, base in _reed_bases():
         for d in (0.0, base["tip_curve_depth"], 2.5):
             p = {**base, "tip_curve_depth": d}
+            # 引けるのはリードが実際に達する半幅まで（先端が広いリードでは
+            # 全幅の点 z_f が最も広く、`tip_width/2` には届かない）。
+            widest = max(rp.nose_half_width(p), p["heel_width"] / 2.0)
             for i in range(1, 200):
-                x = rp.taper_half_width(p, 0.0) * i / 200.0
+                x = widest * i / 200.0
                 z = rp.front_edge_z(p, x)
                 # その z ではもう幅が足りている
                 assert rp.half_width(p, z) >= x - 1e-9, (tid, d, x)
                 # かつ、それより前では足りていない（＝最小の z）
                 if z > 1e-9:
                     assert rp.half_width(p, z - 1e-4) < x, (tid, d, x)
+
+
+def test_a_reed_wider_at_the_tip_has_its_corner_at_the_tip():
+    """**先端が広いリードで角の位置がリード全長にならないこと**（Phase 4-F 実測）。
+
+    `front_edge_z` の二分法は区間を踵まで取り、「幅は z で単調非減少」を
+    仮定していた。旧既定は 3 サイズとも踵が 0.6 広く、その仮定が**一度も
+    測られないまま**成り立っていた。実物のアルト #1（先端 16.4 / 踵 14.2）を
+    入れると、踵の端で幅が足りず、適合カードの「角の位置」が **71.10mm**
+    （＝リード全長）と出た。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("reed", "alto")
+    p = _template_params("reed", "alto")
+    m = _template_params("mouthpiece", "alto")
+    assert p["tip_width"] > p["heel_width"]            # 実物の向き
+    zf = rp.tip_full_width_z(p)
+    hw = comp._corner_half_width(p, m)
+    assert hw <= rp.nose_half_width(p) + 1e-12
+    assert rp.front_edge_z(p, hw) == pytest.approx(zf, abs=1e-6)
+    # 届かない幅は「届かない」（＝全長）で、途中の z を返さない
+    assert rp.front_edge_z(p, rp.nose_half_width(p) + 0.01) == p["reed_length"]
+    comp.set_refs({"mouthpiece": {"params": m}})
+    rows = dict(comp._fit_card(p)["rows"])
+    corner = float(rows["角の位置（リード / MP）"].split("/")[0])
+    assert corner == pytest.approx(zf, abs=0.01)
 
 
 def test_reed_stiffness_does_not_depend_on_the_tip_curve(alto_reed):
@@ -2732,7 +4501,7 @@ def test_ligature_contacts_actually_touch_the_reed():
                 rows = lp.contact_rows(m, p)
                 z0, z1 = lp.seat_range(m, p)
                 zc = rows[0] if rows else (z0 + z1) / 2.0
-                hw = lp.flat_half_width(m, p)
+                hw = lp.flat_half_width(m, p, r)
                 floor = lp.tab_floor_y(m, p, r, zc)
                 # 断面の先頭がタブ床の折れ線（残りは上側＝ビーク側の円弧）
                 nb = len(lp.tab_bottom_pts(m, p, r, hw, zc))
@@ -2821,7 +4590,7 @@ def test_ligature_band_width_always_changes_the_shape():
         # 上限いっぱいでもタブは収まり、窓にも掛からない（実測: 前端 29.1/42.3/51.0
         # に対し窓の後端 27.8/35.8/41.9）
         wide = {**base, "band_width": 28.0}
-        assert lp.flat_half_width(m, wide) >= lp.requested_tab_half_width(m, wide)
+        assert lp.flat_half_width(m, wide, r) >= lp.requested_tab_half_width(wide, r)
         assert lp.seat_range(m, wide)[0] > profiles.window_end_z(m), tid
 
 
@@ -3155,7 +4924,8 @@ def test_ligature_tab_matches_plate(alto_ligature):
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     comp, p = alto_ligature
     m = comp.ref_params()
-    assert lp.flat_half_width(m, p) <= lp.requested_tab_half_width(m, p) + 1e-9
+    r = comp.reed_params()
+    assert lp.flat_half_width(m, p, r) <= lp.requested_tab_half_width(p, r) + 1e-9
 
     def fit(mp):
         comp.set_refs({"mouthpiece": {"params": mp}})
@@ -3166,11 +4936,13 @@ def test_ligature_tab_matches_plate(alto_ligature):
         assert fit(m)["status"] == "ok"
         # ボディ径を外形径 < リード幅まで絞るとタブが張り出しきれずリードが入らない
         # → 黙って切り詰めず警告する。タブは円の外へ出られるので、しきい値は
-        # 「テーブル面の弦」ではなく**外形径そのもの**（アルトのリード 13.4mm に対し
-        # 座の外形は 0.974·body_dia なので body_dia < 14.2mm で入らなくなる）。
+        # 「テーブル面の弦」ではなく**外形径そのもの**。**相手はリードの踵幅**
+        # （Phase 4-F。以前はマウスピースの `reed_width` 13.4mm を見ていた）で、
+        # アルトの踵 14.0mm に対し座の外形は 0.974·body_dia なので
+        # body_dia < 14.8mm で入らなくなる。
         narrow = {**m, "body_dia": 13.0}
-        assert lp.flat_half_width(narrow, p) \
-            < lp.requested_tab_half_width(narrow, p)
+        assert lp.flat_half_width(narrow, p, r) \
+            < lp.requested_tab_half_width(p, r)
         card = fit(narrow)
         assert card["status"] == "warn" and "収納幅" in card["advice"]
     finally:
@@ -3246,7 +5018,7 @@ def test_ligature_sections_never_self_intersect():
             z0, z1 = lp.seat_range(m, p)
             zm = (z0 + z1) / 2.0
             r_in = profiles.outer_radius(m, zm) + cl
-            if lp.requested_tab_half_width(m, p) < lp._shelf_half_width(
+            if lp.requested_tab_half_width(p, r) < lp._shelf_half_width(
                     r_in, profiles.table_plane_y(m, zm)):
                 shelf_cases += 1
             check(lp.inner_sections(m, p, r), (tid, bd, cl, rc, rt, "内周"))
@@ -3867,8 +5639,19 @@ def test_impedance_param_sensitivity(alto):
     # 占めないので第1共鳴はほとんど動かず、上位共鳴ほど大きく動く（実物と同じ振る舞い）。
     # Phase 2 では throat_ratio が本体の円錐テーパーまで書き換えていたため
     # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
-    base = ob.impedance(p, si)["peaks"]
-    narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
+    #
+    # **エンジンは TMM に固定する**（Tier1 の `first_resonance_cents` と同じ理由）。
+    # 下の数字（12 本・1.372・06e67ab の 8 本 / 2.588）は**全部 TMM でしか出ない**。
+    # `impedance()` は OpenWind が入っていればそちらへ行き、alto 既定で 10 本 / 1.665 に
+    # なる（11・12 本目の prominence が最大の 1.85 / 1.76% で、`_analyze` の下限 2% を割る）。
+    # 本数を足した 5fb0bf4 から 7210bcb までの実行は「8 skipped」＝ OpenWind の無い
+    # Windows の venv で、**WSL（OpenWind 0.12.4）では足した日から一度も通っていなかった**
+    # （2026-09-22 に 15 コミットを測って、どれも 10 本。退行ではない）。
+    # OpenWind 側では本数を張れない: 窓の実測前の c14a24c で base 11 / narrow 12 と、
+    # 下限の縁に乗っていて形を少し変えるだけで揺れる。特異点の検出器としては
+    # どちらのエンジンでも効く（TMM 12 → 8、OpenWind 10 → 7）。
+    base = ob.impedance(p, si, use_openwind=False)["peaks"]
+    narrow = ob.impedance(dict(p, throat_ratio=0.7), si, use_openwind=False)["peaks"]
     # 単一ピークで見ない: 個々の移動量は 0.5〜0.8Hz と小さく、上位共鳴の総和で
     # 見るほうが「ノブが効いているか」の判定として安定する。
     #
@@ -4891,14 +6674,14 @@ def test_set_card_rows_and_source():
     rows = dict(card["rows"])
     assert "このセットのリード" in rows["想定リード"]
     assert "リード全長 / 帯の後端" in rows
-    assert "リード踵幅 / テーブル実幅（帯の中央）" in rows
+    assert "帯までのはみ出し 最大" in rows
     assert card["status"] == "ok"
 
     # 踵をテーブルからはみ出させると乖離が出る（マウスピース側の実幅で判定する）
     c.put("/api/project/params", json={"params": {"heel_width": 18.0}})
     bad = c.get("/api/project").json()["set_card"]
     assert bad["status"] == "bad"
-    assert "乖離" in dict(bad["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
+    assert "乖離" in dict(bad["rows"])["帯までのはみ出し 最大"]
 
     # 単体プロジェクトでは出さない（部品が 1 つでは決まらない）
     c.post("/api/project/new", json={"instrument_id": "saxophone",
@@ -4908,30 +6691,37 @@ def test_set_card_rows_and_source():
     assert STATE.set_card() is None
 
 
-def test_set_card_table_width_not_reed_width():
-    """テーブル幅の判定に `reed_width` を使っていないこと。
+def test_set_card_measures_the_seat_over_the_whole_length():
+    """裏面の密着を**全長で**見ていること、相手が `reed_width` でないこと。
 
     `reed_width` は窓幅の公称値で、マウスピースの面を 1 つも決めていない
-    （`profiles.table_flat_width` の注記）。実幅は z で変わる。
+    （`profiles.table_flat_width` の注記）。実幅は z で変わる ——
+    **帯の中央 1 点で測っていた頃はテナーの 16mm を「軽微」と言っていた**
+    （Phase 4-F）。
     """
-    from saxsketch.instruments.saxophone.components import profiles, set_check
+    from saxsketch.instruments.saxophone.components import set_check, reed_seat
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     reg = get_registry().get("saxophone")
-    lig = reg.make_component("ligature", "alto")
-    m = _template_params("mouthpiece", "alto")
-    p = _template_params("ligature", "alto")
-    reed = _template_params("reed", "alto")
-    lig.set_refs({"mouthpiece": {"params": m}, "reed": {"params": reed}})
-
-    card = set_check.set_card(lig.size_info, {
-        "mouthpiece": {"params": m, "component": reg.make_component("mouthpiece", "alto")},
-        "ligature": {"params": p, "component": lig},
-        "reed": {"params": reed, "component": reg.make_component("reed", "alto")},
-    })
-    z_mid = sum(lp.seat_range(m, p)) / 2.0
-    flat = profiles.table_flat_width(m, z_mid)
-    assert f"{flat:.2f}" in dict(card["rows"])["リード踵幅 / テーブル実幅（帯の中央）"]
-    assert abs(flat - m["reed_width"]) > 0.5      # 公称と実幅は別物
+    for tid in SIZES:
+        lig = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        p = _template_params("ligature", tid)
+        reed = _template_params("reed", tid)
+        lig.set_refs({"mouthpiece": {"params": m}, "reed": {"params": reed}})
+        card = set_check.set_card(lig.size_info, {
+            "mouthpiece": {"params": m, "component": reg.make_component("mouthpiece", tid)},
+            "ligature": {"params": p, "component": lig},
+            "reed": {"params": reed, "component": reg.make_component("reed", tid)},
+        })
+        rows = dict(card["rows"])
+        band1 = lp.seat_range(m, p)[1]
+        seat = reed_seat.seat_summary(m, reed, band1)
+        assert f"{seat['table']['mm']:+.2f}" in rows["帯までのはみ出し 最大"]
+        # 公称ではなく実幅・実開口が相手
+        assert f"{m['reed_width']:.1f} /" not in rows["帯までのはみ出し 最大"]
+        # 帯より後ろは参考（判定の語を出さない）
+        tail = rows["（参考）帯より後ろのはみ出し 最大"]
+        assert "一致" not in tail and "乖離" not in tail
 
 
 def test_reed_assembly_placement_lies_on_table():
@@ -6848,3 +8638,470 @@ def test_how_many_holes_fit_in_two_hands():
         # カードにも出る
         rows = dict(tuple(r) for r in comp._reach_card(base)["rows"])
         assert f"{fit} 本" in rows[f"{bpf.HAND_SPAN_MM:.0f}mm に収まる本数"], tid
+
+
+# ---------------------------------------------------------------------------
+# Phase 4-F —— リードが載るか（面で測る）
+# ---------------------------------------------------------------------------
+
+#: 既定値で測った 3 区間の最悪点 [mm]。**ソプラノ・アルトのはみ出しは全部
+#: 「帯より後ろ」に落ち、テナーだけ締める区間に残る** —— 同じ +2.5mm でも
+#: 意味が逆になるので、量だけ見ても判定できないことの回帰ピン。
+#:
+#: **アルトは実物のリード #1 を入れた値**（2026-09-21）。旧値 (−0.84, −0.34, +0.39)
+#: の窓のかかり代の負は、規格リード先端幅の借り物 13.4 のせいだった（実物 16.4）。
+#: **ソプラノは実物のリード #2 と、実物の窓へ合わせた `side_rail_width` 1.55 の値**
+#: （2026-09-22）。旧値 (−0.19, −0.13, +3.00) の負は半分が窓の側だった。最小点
+#: z=1.7 は深い先端カーブ（2.72）のせいで、**実物の窓幅を測っていない区間**（実測は
+#: z=5 から）。テナーは借り物のまま（判定は参考、`reed_seat.cover_row`）。
+_F_SEAT = {
+    #          窓のかかり代 min   窓終端〜帯後端 はみ出し max   帯後端〜踵（参考）
+    "soprano": (+0.12,            -0.54,                        +2.55),
+    "alto":    (+0.58,            -0.22,                        +0.49),
+    "tenor":   (-0.64,            +0.72,                        None),
+}
+
+
+def _seat(size):
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    m = _template_params("mouthpiece", size)
+    r = _template_params("reed", size)
+    l = _template_params("ligature", size)
+    return m, r, rs.seat_summary(m, r, lp.seat_range(m, l)[1])
+
+
+def test_the_window_opening_is_the_law_not_the_nominal():
+    """**窓の実開口を法則側で引けること**（Phase 4-F）。
+
+    いままで法則側にあったのは `window_width = reed_width − 2·side_rail_width`
+    の**公称値だけ**で、実際の開口はメッシュへ下からレイを打つ検品スクリプト
+    （`cad/windycity/align_reference.window_outline`）でしか出せなかった。
+    リードが載るかはこの縁とリードの縁の関係で決まるので、法則側に置く。
+
+    公称は 1 つの数で、実開口は z で 2mm 以上動く ——「`reed_width` はソリッドの
+    上に存在しない」（`profiles.table_flat_width` の注記）が、窓の側でも数字で出る。
+    （以前は「公称と最大開口が 2mm 以上食い違う」を見ていたが、その差の大半は
+    アルトの `reed_width` が借り物の 13.4 だったせいで、実測の 16.4 では 0.7mm。）
+    """
+    for size in SIZES:
+        m = _template_params("mouthpiece", size)
+        with profiles.params_scope(m):
+            # 開き始め・閉じ終わりが既存の z の法則と一致する（別々に述べていない）
+            lo, hi = 0.0, profiles.window_open_z(m) + 2.0
+            for _ in range(60):
+                mid = (lo + hi) / 2.0
+                lo, hi = (lo, mid) if profiles.window_open_half_width(m, mid) > 0 else (mid, hi)
+            assert hi == pytest.approx(profiles.window_open_z(m), abs=0.05)
+            a, b = profiles.window_end_z(m) - 3.0, profiles.window_end_z(m) + 3.0
+            for _ in range(60):
+                mid = (a + b) / 2.0
+                a, b = (mid, b) if profiles.window_open_half_width(m, mid) > 0 else (a, mid)
+            assert a == pytest.approx(profiles.window_end_z(m), abs=0.05)
+
+            # 閉じている所は 0（ロフト前端の蓋がリード面より下に沈む区間を含む）
+            assert profiles.window_open_half_width(m, 0.3) == 0.0
+            assert profiles.window_open_half_width(m, profiles.window_end_z(m) + 2.0) == 0.0
+
+            # 公称は形ではない（1 つの数に対し、実開口は窓の中で 2mm 以上動く）
+            z0, z1 = profiles.window_open_z(m) + 1.5, profiles.window_end_z(m) - 2.0
+            opens = [2.0 * profiles.window_open_half_width(m, z0 + (z1 - z0) * i / 40.0)
+                     for i in range(41)]
+            assert max(opens) - min(opens) > 2.0, size
+            # 外殻でも切られる（弦をはみ出さない）
+            for z in (1.0, 5.0, 20.0):
+                assert (profiles.window_open_half_width(m, z)
+                        <= profiles.reed_chord(m, z) / 2.0 + 1e-9)
+
+
+def test_the_reed_seat_is_measured_over_the_whole_length_not_at_one_point():
+    """**「載る」は 1 点では決まらないこと**（Phase 4-F）。
+
+    `set_check` は帯の中央 1 点で幅を比べていた。その 1 点はテナーで
+    「軽微」を返すが、実際は帯の前端の直後から踵まで **16mm ぜんぶ**
+    リードの縁がテーブルの外にある。
+    """
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    for size in SIZES:
+        m, r, s = _seat(size)
+        want_w, want_t, want_tail = _F_SEAT[size]
+        assert s["window"]["mm"] == pytest.approx(want_w, abs=0.05)
+        assert s["table"]["mm"] == pytest.approx(want_t, abs=0.05)
+        if want_tail is None:
+            assert s["tail"] is None          # リードが帯の後端より短い
+        else:
+            assert s["tail"]["mm"] == pytest.approx(want_tail, abs=0.05)
+
+    # テナー: 帯の中央 1 点は最悪点より 0.5mm 以上甘い（＝ 1 点では見えない）
+    m, r, s = _seat("tenor")
+    band0, band1 = profiles.ligature_seat_range(m)
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    z_mid = (band0 + band1) / 2.0
+    at_mid = (rp.width(r, z_mid) - profiles.table_flat_width(m, z_mid)) / 2.0
+    assert at_mid < s["table"]["mm"] - 0.25
+    # そして最悪点は帯の中にある（＝「後ろだから無害」では済まない）
+    assert band0 <= s["table"]["z"] <= band1
+
+    # 窓より前（ティップレール）は判定に入れない。入れると先端の面取りで
+    # 胴が細るぶん、3 サイズとも +0.9mm 以上の偽のはみ出しが出る。
+    prof = rs.seat_profile(m, r)
+    nose = [d for d in prof if d["band"] == rs.NOSE]
+    assert nose and max(d["over"] for d in nose) > 0.9
+    assert max(d["z"] for d in nose) < min(d["z"] for d in prof
+                                           if d["band"] == rs.WINDOW)
+
+
+def test_the_harmless_overhang_is_the_one_behind_the_band():
+    """**害の有無を決めているのは量ではなく区間**（Phase 4-F）。
+
+    後方へはみ出しても締めないので害が無い。同じリード・同じマウスピースでも、
+    リガチャーの座が前へ寄れば同じはみ出しが「締める区間で浮く」に変わる。
+    区間の切り方は `reed_seat` の 1 か所だけが持っている。
+    """
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    m = _template_params("mouthpiece", "tenor")
+    r = _template_params("reed", "tenor")
+
+    late = rs.seat_summary(m, r, seat_end=79.0)      # 座が踵まで伸びている
+    early = rs.seat_summary(m, r, seat_end=61.0)     # 座が前寄り
+    assert late["table"]["mm"] > 0.5 and late["tail"] is None
+    assert early["tail"] is not None
+    assert early["tail"]["mm"] == pytest.approx(late["table"]["mm"], abs=1e-9)
+    assert early["table"]["mm"] < 0.0                # 締める区間は浮いていない
+
+
+def test_the_ligature_tab_is_cut_for_the_reed_not_for_a_nominal():
+    """**タブ幅がリードの踵を見ること**（Phase 4-F）。
+
+    当たり面（`contact_top_y`）はリードのカマボコをなぞるのに、幅だけ
+    マウスピースの `reed_width` を見ていた。3 か所が「`reed_width` は面を 1 つも
+    決めていない」と書いているのに、**タブの幅だけは本当に決めていた**。
+    既定では片側 0.05mm 足りないだけだったが（踵＝先端＋0.6、`clearance`＝0.25 で
+    ほぼ相殺）、**踵テーパーを動かすと任意にずれる**のがこの型の怖い所。
+    """
+    from saxsketch.instruments.saxophone.components import ligature_profiles as lp
+    reg = get_registry().get("saxophone")
+    for tid in SIZES:
+        lig = reg.make_component("ligature", tid)
+        m = _template_params("mouthpiece", tid)
+        lig.set_refs({"mouthpiece": {"params": m}})
+        p = {s.key: s.default for s in lig.param_specs()}
+        r = lig.reed_params()
+        # 収まる: 踵の半幅 ＋ はめあい隙間ちょうど
+        assert lp.requested_tab_half_width(p, r) == pytest.approx(
+            r["heel_width"] / 2.0 + p["clearance"])
+        assert lp.flat_half_width(m, p, r) >= r["heel_width"] / 2.0
+
+        # **リードを太くすればタブも太る。** 旧実装はマウスピースの公称値だけを
+        # 見ていたので、ここが動かなかった。
+        wide = dict(r, heel_width=r["heel_width"] + 2.0)
+        assert (lp.flat_half_width(m, p, wide)
+                > lp.flat_half_width(m, p, r) + 0.9), tid
+        # 断面の実体も動く（報告だけが動いて形が同じ、にならないこと）。
+        # 断面の最大 |x| は帯の外周（円）なので、そこを見ても差が出ない ——
+        # 動いたのはタブの床の幅。
+        floor_hw = lambda rp_: max(  # noqa: E731
+            abs(x) for sec in lp.inner_sections(m, p, rp_)
+            for x, y in sec["pts"]
+            if y < profiles.table_plane_y(m, lp.ref_z(p, sec["z"])))
+        assert floor_hw(wide) > floor_hw(r) + 0.9, tid
+
+
+def test_the_reed_can_finally_be_surveyed():
+    """**リードの採寸フォームに欄が出ること**（Phase 4-F）。
+
+    `survey_targets` が未実装だったので、リードを選ぶと入力欄が 1 つも無かった
+    （`registry.Component` の既定は空 dict）。サーバもフロントも部品を選ばない
+    造りなので、部品側の 2 メソッドだけでワークフローが通る。
+    """
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    from saxsketch.server.state import STATE
+    c = TestClient(app)
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+    assert c.post("/api/set/member/add", json={"component_id": "reed"}).status_code == 200
+
+    st = c.get("/api/survey").json()
+    keys = [f["key"] for f in st["targets"]["params"]]
+    assert {"tip_width", "heel_width", "heel_edge_thickness", "vamp_length"} <= set(keys)
+    # 比率と choice は測れないので出さない
+    assert "spine_ratio" not in keys and "file_cut" not in keys
+    # 範囲は帯ではなく壁（実測は慣習の外に出る）
+    spec = {s.key: s for s in STATE.component.param_specs()}["reed_length"]
+    row = next(f for f in st["targets"]["params"] if f["key"] == "reed_length")
+    assert (row["min"], row["max"]) == spec.bounds()
+
+    before = STATE.paramset.values["heel_width"]
+    r = c.post("/api/survey/commit", json={
+        "measured": {"heel_width": before + 0.4}, "measured_size": {}, "note": "3 本"})
+    assert r.status_code == 200
+    card = r.json()["survey"]["card"]
+    assert card is not None and "踵幅 実測/設計" in dict(card["rows"])
+    assert STATE.paramset.values["heel_width"] == pytest.approx(before + 0.4)
+    assert c.post("/api/survey/revert").status_code == 200
+
+    # 先端カーブは仮想キーで受けて逆算する（パラメータでない欄も現在値を持つ）
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    tip = next(f for f in c.get("/api/survey").json()["targets"]["params"]
+               if f["key"] == "tip_full_width_z")
+    assert tip["current"] == pytest.approx(rp.tip_full_width_z(STATE.paramset.values),
+                                           abs=0.005)
+    # 2.4 は #4 Wood Stone の実測（逆算 1.91 で壁の内側。#2・#3 の 3.0 は逆算
+    # 2.61 で `tip_curve_depth` の壁 2.5 を越える —— 壁の段で扱う、記録だけ）
+    r = c.post("/api/survey/commit", json={
+        "measured": {"tip_full_width_z": 2.4}, "measured_size": {}, "note": "3 本"})
+    assert r.status_code == 200
+    assert rp.tip_full_width_z(STATE.paramset.values) == pytest.approx(2.4, abs=1e-6)
+    assert c.post("/api/survey/revert").status_code == 200
+
+
+def test_measuring_the_taper_can_falsify_the_straight_line():
+    """**幅のテーパーが直線かを測れること**（Phase 4-F）。
+
+    `reed_profiles.taper_half_width` は先端幅→踵幅の線形を仮定していて 1 度も
+    測っていない。かかり代はティップ側で決まるので、ここが曲がっていれば
+    「リードが載るか」の結論ごと変わる。中間 1 点で決まる。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    reg = get_registry().get("saxophone")
+    comp = reg.make_component("reed", "alto")
+    p = _template_params("reed", "alto")
+    unmeasured = {k: v for k, v in comp.size_info.items() if k != "reed_width_at20_mm"}
+
+    plain = reference_check.reed_card(p, unmeasured)
+    assert "未実測" in dict(plain["rows"])["（参考）先端から 20mm の幅"]
+
+    # 線形どおりなら一致、外れれば乖離（＝この欄が仮定を反証できる）
+    model = rp.width(p, 20.0)
+    ok = reference_check.reed_card(p, {**unmeasured, "reed_width_at20_mm": model})
+    assert ok["status"] == "ok"
+    bent = reference_check.reed_card(p, {**unmeasured,
+                                         "reed_width_at20_mm": model + 0.5})
+    assert bent["status"] == "bad"
+
+
+def test_the_measured_alto_reed_is_nearly_straight_and_narrows_to_the_heel():
+    """**実物のアルトで測った**（2026-09-21）: 直線はほぼ成立、外れていたのは向き。
+
+    テンプレートのリードは #1 D'Addario Select Jazz の実測（先端 16.4 / 踵 14.2）。
+    旧既定は 3 サイズとも「踵＝先端＋0.6」で、実物とテーパーの向きが逆だった。
+    z=20 の実測 15.9 に対し直線は 15.78 ＝ **+0.12 で「軽微」**（刻み 0.1 の 0.6 段を
+    超える）。0.1mm 級の膨らみは実在する（#2 も同じ向きに +0.08）ので、帯を
+    広げて「一致」にしない。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    p = _template_params("reed", "alto")
+    si = comp.size_info
+    assert p["tip_width"] - p["heel_width"] == pytest.approx(2.2)
+    assert reference_check.reed_tip_width_range(si) == (15.85, 16.4)
+    assert si["reed_width_at20_mm"] - rp.width(p, 20.0) == pytest.approx(0.12, abs=0.01)
+    rows = dict(reference_check.reed_card(p, si)["rows"])
+    assert rows["先端から 20mm の幅 実測/モデル"].endswith("軽微")
+    assert rows["先端幅 / 規格域"].endswith("一致")
+
+
+#: ソプラノの基準マウスピース（ヤナギサワ 刻印 4 ＝ テンプレートの校正基準）の
+#: 窓の実開口 [mm]。2026-09-22、内側ジョウ。**記録の正本は**
+#: `cad/inspection/inspection_values.py` の `WINDOW_WIDTH_AT_Z["soprano"]["hr4"]`。
+SOPRANO_BASE_WINDOW_MM = {5.0: 12.00, 10.0: 11.20, 20.0: 9.65}
+
+
+def test_the_measured_soprano_reed_is_nearly_straight_and_narrows_to_the_heel():
+    """**実物のソプラノでも同じだった**（2026-09-22）: 直線はほぼ成立、向きは逆。
+
+    テンプレートのリードは #2 Vandoren Traditional の実測（先端 14.0 / 踵 12.6）。
+    旧既定の「踵＝先端＋0.6」に対し実物は先端が 1.0〜1.4 広い（5 本）。z=20 の実測
+    13.6 に対し直線は 13.53 ＝ +0.07 で、アルト（+0.12）と同じく外へわずかに膨らむ側。
+    先端幅の借り物 12.9 は実物 13.9〜14.15 より 1.0〜1.25mm 狭かった。
+    """
+    from saxsketch.instruments.saxophone.components import reference_check
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "soprano")
+    p = _template_params("reed", "soprano")
+    si = comp.size_info
+    assert p["tip_width"] - p["heel_width"] == pytest.approx(1.4)
+    assert reference_check.reed_tip_width_range(si) == (13.9, 14.15)
+    assert reference_check.reed_length_range(si) == (58.3, 62.0)
+    assert si["reed_width_at20_mm"] - rp.width(p, 20.0) == pytest.approx(0.07, abs=0.01)
+    rows = dict(reference_check.reed_card(p, si)["rows"])
+    assert rows["先端幅 / 規格域"].endswith("一致")
+    # 先端カーブは「側面がまっすぐになる所」3.0 の逆算
+    assert rp.tip_full_width_z(p) == pytest.approx(3.0, abs=0.01)
+
+
+def test_the_soprano_window_was_fit_to_its_base_mouthpiece():
+    """**ソプラノの窓は基準個体へ合わせた**（2026-09-22）。
+
+    `side_rail_width` 0.89（テナーの 1.1 をボア比で縮めた借り物）のとき、窓は
+    刻印 4 より z=5/10/20 で一様に 1.28 / 1.35 / 1.33 広かった。窓の区間では
+    `side_rail_width` の重みが 1 なので、一様なずれはこの 1 本で消える（片側の
+    平均 0.66 を足して 1.55）。**レールの実幅ではない**（窓幅だけでは「レールが
+    太い」と「空洞が狭い」を分けられない。`survey_sheet.py` の 3 枚目）。
+
+    かかり代の負の半分はこちらだった: z=5 の外れ 1.17 のうち窓 0.64・リード 0.53。
+    """
+    m = _template_params("mouthpiece", "soprano")
+    assert m["side_rail_width"] == pytest.approx(1.55)
+    with profiles.params_scope(m):
+        dev = [2.0 * profiles.window_open_half_width(m, z) - w
+               for z, w in SOPRANO_BASE_WINDOW_MM.items()]
+    assert all(0.0 < d < 0.2 for d in dev), dev
+    # 借り物の 0.89 に戻すと一様に 1.3mm 広い
+    old = dict(m, side_rail_width=0.89)
+    with profiles.params_scope(old):
+        dev0 = [2.0 * profiles.window_open_half_width(old, z) - w
+                for z, w in SOPRANO_BASE_WINDOW_MM.items()]
+    assert all(1.25 < d < 1.4 for d in dev0), dev0
+    # 形が変わったので零点も引き直してある（`cork_depth` は導出値）
+    from saxsketch.acoustics import openwind_bridge as ob
+    t = ob.tuning_position(m, _size_info("soprano"), exact=True)
+    assert m["cork_depth"] == pytest.approx(t["in_tune_mm"], abs=0.05), t
+
+
+def test_every_measured_reed_fits_inside_the_tip_curve_wall():
+    """**先端カーブの壁は実物のリードを 1 本も締め出さない**（2026-09-22）。
+
+    以前の上限 2.5 には出所が無く、実物 10 本の逆算 1.91〜2.72 のうち 6 本
+    （アルト 2・ソプラノ 4）を締め出していた。ソプラノの採寸で「側面が
+    まっすぐになる所」3.0 を入れると 2.72 に逆算され、壁で黙って 2.5 に
+    丸まるところだった。
+    """
+    from saxsketch.core.schema import ParamSet
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "soprano")
+    p = _template_params("reed", "soprano")
+    lo, hi = {s.key: s for s in comp.param_specs()}["tip_curve_depth"].bounds()
+    # ソプラノ 5 本（先端幅・踵幅・全長ごと）の「側面がまっすぐになる所」
+    for tw, hw, L, z in ((14.1, 13.1, 61.95, 3.0), (14.0, 12.6, 59.1, 3.0),
+                         (14.15, 12.8, 59.8, 2.9), (13.9, 12.55, 59.0, 2.9),
+                         (14.15, 13.1, 58.3, 2.8)):
+        d = rp.curve_depth_for_full_width_z(
+            dict(p, tip_width=tw, heel_width=hw, reed_length=L), z)
+        assert lo <= d <= hi, (tw, z, d)
+    # 採寸フォーム → 逆算 → 取り込みで丸まらない
+    got = comp.survey_params({comp.SURVEY_TIP_KEY: 3.0}, p)
+    ps = ParamSet(comp.param_specs(), dict(p, **got), bounds_provider=comp.param_bounds)
+    assert ps.adjustments == []
+    assert ps.values["tip_curve_depth"] == pytest.approx(got["tip_curve_depth"])
+    field = next(f for f in comp.survey_targets(p)["params"]
+                 if f["key"] == comp.SURVEY_TIP_KEY)
+    assert field["min"] <= 3.0 <= field["max"], field
+
+
+def test_the_tip_contour_is_reference_until_the_mouthpiece_contour_is_measured():
+    """**MP のティップ輪郭との比較は、MP 側を測るまで判定しない**（2026-09-22）。
+
+    MP の輪郭は胴の外形から解いた借り物（ソプラノの最大径 25.0 もボア比）。
+    実物の刻印 4 と先端カーブの形がほぼ一致したのは #3（逆算 2.60）で、モデルの
+    輪郭に最も合うのは 1.7 ——実測を入れたテンプレート（2.72）でモデルは
+    「前縁が 0.86mm 後退」と言うが、所見はその逆。かかり代と同じく片方だけの
+    実測で判定しない。数字の行は残す。MP の輪郭（リード面の外幅 z=1〜3）が
+    入ったサイズでは警告が戻る。
+    """
+    import copy
+    from saxsketch.instruments.saxophone.components.reed import TIP_CONTOUR_TOL
+    comp = get_registry().get("saxophone").make_component("reed", "soprano")
+    m = _template_params("mouthpiece", "soprano")
+    comp.set_refs({"mouthpiece": {"params": m}})
+    p = _template_params("reed", "soprano")
+    assert comp._tip_contour_gap(p, m) > TIP_CONTOUR_TOL
+    card = comp._fit_card(p)
+    row = next(r for r in card["rows"] if r[0].startswith("先端カーブ"))
+    assert "未実測" in row[1], row
+    assert card["status"] == "ok", card
+    # MP の輪郭を実測したサイズでは同じずれで警告する
+    comp.size_info = copy.deepcopy(comp.size_info)
+    comp.size_info["mp_face_width_at_z_mm"] = {"1": 0.0}
+    card = comp._fit_card(p)
+    assert card["status"] == "warn" and "ティップ輪郭" in card["advice"], card
+
+
+def test_the_window_cover_is_judged_only_where_the_reed_was_measured():
+    """**窓へのかかり代は、規格リードの先端幅を測ったサイズでだけ判定する。**
+
+    参考に留めていた理由は「実物テナーでも負に出る」だったが、あれは**実物の窓 ×
+    未実測の規格リード幅**の比較だった。アルトで両方を測ると 16 組すべて
+    +0.40〜+1.33、光の試験も 10 組すべて縁がレールの上。ソプラノも翌日測って
+    12 組すべて +0.90〜+2.12（窓の法則も実物へ合わせてから判定へ上げた）。
+    テナーは同じ出所の借り物のままなので参考のまま。判定は `reed_seat.cover_row` の
+    1 か所で、3 枚のカード（MP の「載るか」・リードの適合・セット）が同じ行を出す。
+    """
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    reg = get_registry().get("saxophone")
+    for size in SIZES:
+        m, r, s = _seat(size)
+        si = reg.make_component("reed", size).size_info
+        cover = rs.cover_row(s["window"], si)
+        mp_card = rs.seat_card(m, r, si)
+        assert cover["row"] in mp_card["rows"], size
+        if size in ("alto", "soprano"):
+            assert cover["verdict"] == "一致" and s["window"]["mm"] > 0.0, size
+        else:
+            assert cover["verdict"] is None, size
+            assert "未実測" in cover["row"][1], size
+
+    # 同じ判定幅ではみ出しと対称（新しい数字を作っていない）
+    si = reg.make_component("reed", "alto").size_info
+    for mm, want in ((-0.29, "一致"), (-0.5, "軽微"), (-0.9, "乖離")):
+        assert rs.cover_row({"mm": mm, "z": 4.0}, si)["verdict"] == want, mm
+
+    # 狭いリードを設計すると、リードの適合カードが止める（アルトは判定する）
+    comp = reg.make_component("reed", "alto")
+    comp.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", "alto")}})
+    narrow = dict(_template_params("reed", "alto"), tip_width=13.4, heel_width=14.0)
+    card = comp._fit_card(narrow)
+    assert card["status"] == "warn" and "窓の上" in card["advice"]
+
+
+def test_the_heel_edge_wall_is_a_relation_not_a_number():
+    """**側端厚の壁は「中央厚 − 0.2」という関係**（Phase 4-F 実測）。
+
+    以前は上限 1.6 を中央厚の下限 1.8 より小さく置いて、2 本の直値で関係を
+    代理していた。実物のアルト #1 の 1.65 を締め出していた（読み込みで黙って
+    1.6 に丸まる）。
+    """
+    from saxsketch.core.schema import ParamSet
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    tpl = comp.template["reed"]
+    ps = ParamSet(comp.param_specs(), tpl, bounds_provider=comp.param_bounds)
+    assert ps.adjustments == []
+    assert ps.values["heel_edge_thickness"] == pytest.approx(1.65)
+
+    # 中央厚 − 0.2 で止まり、相手の名前を言う
+    ps.apply({"heel_edge_thickness": 3.25})
+    assert ps.values["heel_edge_thickness"] == pytest.approx(tpl["heel_thickness"] - 0.2)
+    msg = ps.adjustments[-1]["message"]
+    assert "踵厚" in msg, msg
+    # 逆向き: 側端厚を上げてある組では中央厚が下がらない
+    ps.apply({"heel_thickness": 1.8})
+    assert ps.values["heel_thickness"] >= ps.values["heel_edge_thickness"] + 0.2 - 1e-9
+
+
+def test_the_tip_curve_is_surveyed_where_the_side_turns_straight():
+    """**先端カーブは測れる量で受けて、パラメータへ逆算する**（Phase 4-F 実測）。
+
+    直定規で測れるのは「側面がまっすぐになる所」（`tip_full_width_z`）で、
+    `tip_curve_depth`（丸みを無視した見かけの角）ではない（実測者に確認）。
+    以前の欄はこの値をそのままパラメータへ入れていたので、#1 の 2.7 を
+    0.44mm 深く取り込むところだった。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    comp = get_registry().get("saxophone").make_component("reed", "alto")
+    p = _template_params("reed", "alto")
+    # テンプレートの 2.26 は #1 の実測 2.70 の逆算
+    assert rp.tip_full_width_z(p) == pytest.approx(2.70, abs=0.005)
+    for z in (1.5, 2.4, 2.7, 3.0):
+        d = rp.curve_depth_for_full_width_z(p, z)
+        assert rp.tip_full_width_z({**p, "tip_curve_depth": d}) == pytest.approx(z, abs=1e-6)
+
+    keys = [f["key"] for f in comp.survey_targets(p)["params"]]
+    assert "tip_curve_depth" not in keys and comp.SURVEY_TIP_KEY in keys
+    # 同じ採寸で入った幅で解く（古い幅で解くと別のリードの深さになる）
+    got = comp.survey_params({"tip_width": 16.1, comp.SURVEY_TIP_KEY: 3.0}, p)
+    assert set(got) == {"tip_width", "tip_curve_depth"}
+    assert rp.tip_full_width_z({**p, **got}) == pytest.approx(3.0, abs=1e-6)

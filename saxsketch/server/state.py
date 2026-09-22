@@ -225,7 +225,8 @@ class AppState:
         inst = self.registry.get(self.project.instrument_id)
         component = inst.make_component(component_id, self.project.template_id)
         ps = ParamSet(component.param_specs(),
-                      component.template.get(component_id, {}))
+                      component.template.get(component_id, {}),
+                      bounds_provider=component.param_bounds)
         tmpl_label = inst.templates[self.project.template_id].get(
             "label", self.project.template_id)
         return Member(component_id=component_id,
@@ -241,7 +242,8 @@ class AppState:
         inst = self.registry.get(self.project.instrument_id)
         component = inst.make_component(member.component_id, self.project.template_id)
         paramset = ParamSet(component.param_specs(),
-                            component.template.get(member.component_id, {}))
+                            component.template.get(member.component_id, {}),
+                            bounds_provider=component.param_bounds)
         values, notices = component.migrate_params(dict(member.params))
         paramset.apply(values)
         member.params = dict(paramset.values)
@@ -648,7 +650,8 @@ class AppState:
         inst = self.registry.get(self.project.instrument_id)
         ref_comp = inst.make_component(ref_id, self.project.template_id)
         ps = ParamSet(ref_comp.param_specs(),
-                      ref_comp.template.get(ref_id, {}))
+                      ref_comp.template.get(ref_id, {}),
+                      bounds_provider=ref_comp.param_bounds)
         tmpl_label = inst.templates[self.project.template_id].get(
             "label", self.project.template_id)
         return {
@@ -741,7 +744,8 @@ class AppState:
             inst = self.registry.get(src.instrument_id)
             ref_comp = inst.make_component(ref_id, src.template_id)
             ps = ParamSet(ref_comp.param_specs(),
-                          ref_comp.template.get(ref_id, {}))
+                          ref_comp.template.get(ref_id, {}),
+                          bounds_provider=ref_comp.param_bounds)
             ps.apply(src.params)
             self.project.refs[ref_id] = {
                 "source": path, "label": src.name, "params": dict(ps.values)}
@@ -788,6 +792,7 @@ class AppState:
             self.paramset.apply(keep)
             self.adjustments = []
             raise ValueError(bad)
+        applied = self._follow_moved_walls(values, applied)
         self.project.params = dict(applied)
         # 従属する部品（リガチャー・リード）の参照を追従させる。dict のコピーだけで
         # CAD は走らない。ここを飛ばすと、マウスピースを動かしても従属側の形と
@@ -795,6 +800,50 @@ class AppState:
         self._bind_all_refs()
         self.notices = []      # 利用者が値を触った時点で変換報告は役目を終える
         return applied
+
+    def param_bounds(self, values: dict | None = None) -> dict:
+        """いまの組での**実効の壁**（`Component.param_bounds`）。
+
+        フロントはこれでスライダの端を決める ——`hard_*` はテンプレート値で
+        作った掛け金でしかないので、相手を動かすと内側にも外側にもずれる。
+        **スキーマは返さない**（帯は動かないので、動くものだけ返す）。
+        """
+        assert self.paramset is not None
+        return self.paramset.bounds_for(values)
+
+    def _follow_moved_walls(self, asked: dict, applied: dict) -> dict:
+        """**相手を動かした結果、触っていない値が壁の外に残った**ぶんを連れて行く。
+
+        `ParamSet.apply` は頼まれたキーしか丸めない（触っていない値が勝手に
+        動くのは「黙って設計が変わる」側の壊れ方だから）。ところが
+        `baffle_type` を切り替えると `baffle_plateau` の実効範囲そのものが
+        入れ替わり、古い値が範囲の外に残る ——そして
+        `profiles.baffle_plateau()` は**それを黙ってクランプして形を作る**ので、
+        スライダは 0.36 のまま形は 0.12 で出る（B-2 が測った 86% の死に帯が、
+        今度は値の側で再現する）。
+
+        連れて行く条件は 1 つ ——**`params_error` が黙っていること**。
+        関係で決まる 8 本は壁の外へ出ればそちらが理由つきで断る（そのことは
+        二分法テストが押さえている）ので、ここに来るのは
+        「誰も文句を言わないまま下流で丸められる」値だけ。
+        **連れて行った回も必ず報告する**（`adjustments` に積む）。
+        """
+        assert self.paramset is not None
+        follow = {}
+        for key, b in self.paramset.bounds_for(applied).items():
+            if key in asked:
+                continue
+            v = applied.get(key)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                continue
+            lo, hi = b.get("lo"), b.get("hi")
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                follow[key] = v
+        if not follow:
+            return applied
+        out = self.paramset.apply(follow)
+        self.adjustments = self.adjustments + list(self.paramset.adjustments)
+        return out
 
     # ---------------------------------------------------------- 形状
 
@@ -954,6 +1003,15 @@ class AppState:
         if cached is not None:
             return cached
         res = ms.component.simulate(dict(ms.paramset.values))
+        # 警告は**ここで足す**。各コンポーネントの `simulate()` に書かせると、
+        # 部品が増えるたびに書き足し忘れる経路ができる（`/api/section` が
+        # `dimensions()` をルート側で足しているのと同じ理由）。
+        #
+        # この便に載せるのが要点 —— 右パネルは `GET /api/project` と
+        # `PUT /api/project/params` の 2 経路しか見ていないので、載せれば
+        # **スライダ 1 目盛ごとに更新される**。以前は `section()` の戻り値に
+        # だけ入っていて、断面タブを開いた人にしか届かなかった。
+        res["warnings"] = ms.component.warnings(dict(ms.paramset.values))
         if len(ms.sim_cache) > 4:
             ms.sim_cache.clear()
         ms.sim_cache[key] = res
@@ -1232,9 +1290,12 @@ class AppState:
                  "surveyed_at": None, "note": ""}
         if self.project is None or self.component is None:
             return empty
-        targets = self.component.survey_targets()
+        targets = self.component.survey_targets(dict(self.paramset.values))
         for f in targets["params"]:
-            f["current"] = self.paramset.values.get(f["key"])
+            # パラメータでない欄（`Component.survey_params` で変換する量）は
+            # 部品が自分で現在値を入れてくる。
+            if "current" not in f:
+                f["current"] = self.paramset.values.get(f["key"])
         for f in targets["size"]:
             f["current"] = self.component.size_info.get(f["key"])
         s = self.project.survey or {}
@@ -1266,7 +1327,7 @@ class AppState:
         """採寸値を反映し、復元点（チェックポイント）を記録する。"""
         from datetime import datetime, timezone
         assert self.project is not None and self.component is not None
-        targets = self.component.survey_targets()
+        targets = self.component.survey_targets(dict(self.paramset.values))
         param_keys = {f["key"] for f in targets["params"]}
         size_keys = {f["key"] for f in targets["size"]}
 
@@ -1275,7 +1336,8 @@ class AppState:
         before_size = dict(self.component.size_info)
 
         # 系統A: 設計パラ（ParamSet でクランプ・型変換される）
-        m_params = self._clean_measures(measured, param_keys)
+        m_params = self.component.survey_params(
+            self._clean_measures(measured, param_keys), dict(self.paramset.values))
         if m_params:
             self.apply_params(m_params)
         applied_params = {k: self.paramset.values[k] for k in m_params}

@@ -95,6 +95,29 @@ class Component(ABC):
         """
         return None
 
+    def param_bounds(self, params: dict) -> dict:
+        """**相手で動く壁**。`{key: {"lo","hi","lo_by","hi_by"}}`。既定は空 dict。
+
+        `params_error` と同じ形のフック ——コアは楽器を知らないまま、返るのは
+        境界の数字と「動かしている相手の名前」だけ。`ParamSet` がこれで
+        `ParamSpec.hard_*`（テンプレート値で作った**掛け金**）を上書きする。
+
+        要るのは、Phase 4-E B-5 で**壁の 9 本が「数字」ではなく「関係」だと
+        測定で分かった**から。`ParamSpec` は 1 本ずつしか見ない静的な器なので、
+        相手が動くと掛け金は内側にも外側にもずれる ——実際、径 2 本は帯の
+        12 端のうち 6 端に立てず、踵の床で繋がった 2 本は両方を壁へ置くと
+        400 になり、`baffle_plateau` はバッフル型ごとにスライダの 18〜86% が
+        死んでいた。
+
+        入れなければ挙動は現行のまま（**リード・リガチャー・ネック・管体は
+        まだ入れていない**）。片側だけ返してもよい（`lo` だけ / `hi` だけ）。
+
+        `*_by` は**利用者に見せる相手の名前**（「シャンク径」）で、丸めたときに
+        文面へ入る ——「越えられない壁」とだけ言うと、相手を動かせば届くことが
+        伝わらない。
+        """
+        return {}
+
     def migrate_params(self, values: dict) -> tuple[dict, list[str]]:
         """保存済みプロジェクトのパラメータを現行のキーへ移す。既定は恒等。
 
@@ -146,6 +169,23 @@ class Component(ABC):
         """
         return []
 
+    def warnings(self, params: dict) -> list[str]:
+        """いまのパラメータについての注意。**CAD ビルドを伴わないこと**。
+
+        `params_error` と違い、値は**適用されている**（弾いてはいない）。
+        「形が法則どおり出ていない」「形は指定どおりだが吹けない」を伝える経路。
+
+        空リストなら UI は警告カードを出さない。**「どの部品が警告を持つか」を
+        UI に書かない**（`GET /api/section` の 404 で断面タブを出し分けるのと
+        同じ約束）。
+
+        **便に載せるのはコア側**（`AppState.simulate` が `simulate()` の結果へ
+        足す）。各コンポーネントの `simulate()` に書き足させると、部品が増えた
+        ときに書き忘れる経路ができる —— `/api/section` が `dimensions()` を
+        ルート側で足しているのと同じ理由。
+        """
+        return []
+
     def assembly_placement(self, params: dict) -> dict | None:
         """組み合わせたときの置き場所。**土台部品のモデル座標**で返す。
 
@@ -180,9 +220,12 @@ class Component(ABC):
              "curves":  {name: [[z, y], …]},
              "handles": [{key, label, axis, z, y, value, min, max, span,
                           unit, step, active}, …],
-             "warnings": [str, …],
              "title": str}
             対応しないコンポーネントは None（UI は断面タブを出さない）。
+
+        `warnings` と `dimensions` は**ルート側が足す**（`GET /api/section`）ので
+        ここでは返さない。どちらも `warnings()` / `dimensions()` の 1 か所が
+        出所で、断面を持つ部品が増えたときに書き写し忘れる経路を作らない。
 
         **CAD ビルドを伴わないこと**が要件。ドラッグ中に毎回叩かれるので、
         形状法則の数値計算だけで組み立てる。
@@ -191,7 +234,7 @@ class Component(ABC):
 
     # --- 採寸ワークフロー（Phase 4-A）。対応コンポーネントだけがオーバーライドする ---
 
-    def survey_targets(self) -> dict:
+    def survey_targets(self, values: dict | None = None) -> dict:
         """採寸で入力できるフィールド。
 
         Returns:
@@ -200,6 +243,15 @@ class Component(ABC):
         既定は対象なし。
         """
         return {"params": [], "size": []}
+
+    def survey_params(self, measured: dict, values: dict) -> dict:
+        """採寸欄の値 → 設計パラ。既定は素通し。
+
+        **測れる量とパラメータが同じとは限らない**ので部品に変換の口を持たせる
+        （リードの先端カーブ: 直定規が測るのは「側面がまっすぐになる所」で、
+        パラメータは丸みを無視した見かけの角）。`values` は採寸前の現在値。
+        """
+        return measured
 
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:

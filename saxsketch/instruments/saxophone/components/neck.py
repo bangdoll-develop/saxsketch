@@ -252,7 +252,7 @@ class NeckComponent(Component):
 
     _SURVEY_PARAM_KEYS = ["neck_length", "bore_small_id", "bore_large_id", "tenon_od"]
 
-    def survey_targets(self) -> dict:
+    def survey_targets(self, values: dict | None = None) -> dict:
         specs = {s.key: s for s in self.param_specs()}
         params = [
             {"key": k, "label": specs[k].label, "unit": specs[k].unit,

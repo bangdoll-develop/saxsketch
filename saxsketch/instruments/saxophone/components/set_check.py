@@ -19,7 +19,8 @@ from __future__ import annotations
 from . import ligature_profiles as lp
 from . import profiles
 from . import reed_profiles as rp
-from .reference_check import SEAT_REACH_TOL, _finish
+from . import reed_seat
+from .reference_check import SEAT_REACH_TOL, _finish, _verdict
 
 #: 帯の前端がリードの削り始め（バーク端）より前へ出てよい量 [mm]。
 #: 削った部分を締めると、リードは厚みが足りないぶん動く（鳴りが死ぬ）。
@@ -86,26 +87,53 @@ def set_card(size_info: dict, members: dict) -> dict | None:
                  f"{length:.1f} / {band1:.1f} mm  {v}"])
     verdicts.append(v)
 
-    # (2) 帯が削った部分を締めていないか。バーク端より前に帯の前端が来ると、
-    #     厚みの薄い所を掴むことになる。
+    # (2) 帯が削った部分を締めていないか。バーク端より前に**接触が当たる**と、
+    #     厚みの薄い所を掴むことになる。**帯の呼び範囲ではなく接触の位置で見る**
+    #     （Phase 4-F）—— 点接触は帯の 1/4 と 3/4 に立つので、前端に余裕が無くても
+    #     当たっていないことがあるし、その逆は無い。
     vamp = rp.vamp_start_z(reed_p)
-    bite = vamp - band0          # 正 = 帯が削り部へ食い込んでいる
+    touch = lp.contact_front_z(m, p)
+    bite = vamp - touch          # 正 = 接触が削り部へ食い込んでいる
     v = "一致" if bite <= VAMP_CLEAR_TOL else (
         "軽微" if bite <= VAMP_CLEAR_TOL_MINOR else "乖離")
-    rows.append(["帯の前端 / リードの削り始め",
-                 f"{band0:.1f} / {vamp:.1f} mm  {v}"])
+    rows.append(["接触が当たる最前 / リードの削り始め",
+                 f"{touch:.1f} / {vamp:.1f} mm  {v}"
+                 + ("" if abs(touch - band0) < 1e-9 else f"（帯の前端は {band0:.1f}）")])
     verdicts.append(v)
 
-    # (3) 踵がテーブルの平坦部からはみ出していないか。**`reed_width` とは比べない**
-    #     —— あれは窓幅の公称値で、マウスピースの面を 1 つも決めていない
-    #     （`profiles.table_flat_width` の注記）。実幅は z で変わるので帯の位置で測る。
+    # (3) 裏面が密着するか。**1 点では決まらない**（Phase 4-F）—— 以前はここで
+    #     帯の中央 1 点の幅を比べていて、テナーの「帯の前端の直後から踵まで
+    #     16mm ぜんぶ縁がテーブルの外」を「軽微」と言っていた。
+    #
+    #     判定するのは**窓へのかかり代**（規格リードの先端幅が実測されたサイズ
+    #     だけ。判定は `reed_seat.cover_row` の 1 か所）と、**締める区間
+    #     （窓の終端〜帯の後端）のはみ出し**。後ろへはみ出すのは締めないので
+    #     害が無く参考（`reed_seat.seat_card` と同じ分担）。
+    seat = reed_seat.seat_summary(m, reed_p, band1)
+    cover = reed_seat.cover_row(seat["window"], size_info)
+    rows.append(cover["row"])
+    if cover["verdict"]:
+        verdicts.append(cover["verdict"])
+    t = seat["table"]
+    if t is None:
+        rows.append(["帯までのはみ出し 最大", "区間がありません"])
+    else:
+        v = _verdict(max(t["mm"], 0.0), reed_seat.OVER_TOL, reed_seat.OVER_TOL_MINOR)
+        rows.append(["帯までのはみ出し 最大",
+                     f"{t['mm']:+.2f} mm（z={t['z']:.1f}）  {v}"])
+        verdicts.append(v)
+    tl = seat["tail"]
+    rows.append(["（参考）帯より後ろのはみ出し 最大",
+                 "リードが帯の後端より短い" if tl is None else
+                 f"{tl['mm']:+.2f} mm（z={tl['z']:.1f}）"])
+
+    # (3b) タブがこのリードを収められるか。**判定はリガチャーのカードが持つ**
+    #      （切り詰めの警告は `ligature._fit_card`）。ここは「どのリードで
+    #      タブを切ったか」を出すだけ —— しきい値を 2 か所に置かない。
     z_mid = (band0 + band1) / 2.0
-    flat = profiles.table_flat_width(m, z_mid)
-    over = float(reed_p["heel_width"]) - flat
-    v = "一致" if over <= 0.0 else ("軽微" if over <= 1.0 else "乖離")
-    rows.append(["リード踵幅 / テーブル実幅（帯の中央）",
-                 f"{reed_p['heel_width']:.1f} / {flat:.2f} mm  {v}"])
-    verdicts.append(v)
+    rows.append(["リード踵幅 / タブ幅",
+                 f"{reed_p['heel_width']:.1f} / "
+                 f"{lp.flat_half_width(m, p, assumed) * 2.0:.1f} mm"])
 
     # (4) 帯の下の実際のリード厚と、リガチャーが想定した厚み。**普通は一致する**
     #     （帯はバークの上に載るので厚みは一定）。ずれるのはヴァンプが帯の下まで
@@ -124,4 +152,9 @@ def set_card(size_info: dict, members: dict) -> dict | None:
         "（帯の位置はマウスピースの座・リガチャーの幅と座位置・リードの全長で"
         "決まります）。各部品ごとの規格照合はそれぞれのカードにあります。"
         "リードの z はマウスピースと同じく先端が 0 で、組んだときティップレールに"
-        "合わせる前提です —— ティップ輪郭の落ち込み（0.1mm 級）は無視しています。")
+        "合わせる前提です —— ティップ輪郭の落ち込み（0.1mm 級）は無視しています。"
+        "**裏面の密着は 1 点ではなく全長で見ています**（`reed_seat`）—— 判定するのは"
+        "窓へのかかり代とリガチャーが締める区間で、後ろへはみ出すぶんは害が無いので"
+        "参考値です。かかり代は規格リードの先端幅が実測されたサイズでだけ判定します"
+        "（実物のアルトで +0.40〜+1.33mm、光にかざして 10 組とも縁がレールの上）。"
+        "マウスピース単体のカードは**規格リード**で同じことを見ています。")

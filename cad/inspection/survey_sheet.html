@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>SaxSketch 採寸シート（マウスピース・リード）</title>
+<style>
+@page { size: A4 portrait; margin: 9mm 8mm 8mm; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #000; background: #fff;
+       font: 9pt/1.4 "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; }
+.page { page-break-after: always; }
+.page:last-child { page-break-after: auto; }
+h1 { font-size: 13pt; margin: 0 0 1mm; }
+h1 small { font-size: 8pt; font-weight: normal; }
+h2 { font-size: 9.5pt; margin: 3mm 0 1mm; padding-left: 2mm;
+     border-left: 3px solid #000; }
+h2 span { font-weight: normal; font-size: 7.6pt; }
+table { border-collapse: collapse; width: 100%; font-size: 8.2pt;
+        table-layout: fixed; }
+th, td { border: 0.4pt solid #555; padding: 0.6mm 1.1mm;
+         text-align: left; vertical-align: middle; overflow-wrap: anywhere; }
+th { font-weight: 600; background: none; }
+td.fill, th.fill { height: 7.5mm; }
+.tall td.fill, .tall th.fill { height: 10mm; }
+.memo div { border-bottom: 0.4pt solid #555; height: 8mm; }
+.num { text-align: right; font-variant-numeric: tabular-nums;
+       white-space: nowrap; }
+.k { font-family: ui-monospace, Consolas, monospace; font-size: 7.2pt;
+     color: #333; }
+.note { font-size: 7.2pt; line-height: 1.35; margin: 1mm 0 0; }
+.claim { font-size: 7.8pt; border: 0.4pt solid #555; padding: 1.2mm 1.6mm;
+         margin: 1mm 0 0; }
+.foot { font-size: 7.2pt; line-height: 1.4; margin-top: 2.5mm;
+        border-top: 0.4pt solid #555; padding-top: 1.2mm; }
+.hdr { display: flex; justify-content: space-between; align-items: flex-end;
+       border-bottom: 1pt solid #000; padding-bottom: 1mm; }
+.hdr .who { font-size: 7.6pt; text-align: right; white-space: nowrap; }
+ul { margin: 0.6mm 0 0 4mm; padding: 0; }
+li { margin: 0.3mm 0; }
+@media screen {
+  body { background: #e9e9e9; padding: 6mm 0; }
+  .page { width: 210mm; min-height: 297mm; margin: 0 auto 6mm; padding: 9mm 8mm;
+          background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+}
+</style></head><body>
+<section class="page"><div class="hdr"><h1>採寸シート — ソプラノサクソフォン<br><small>① 個体の同定 / リードの採寸 ／ 設計値の出所: テンプレート soprano 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<p class="claim"><b>モデルの言い分</b>　窓へのかかり代 最小 <b>+0.12 mm</b>（z=1.7）　／　帯までのはみ出し 最大 -0.54 mm（z=57.1）　／　帯より後ろ +2.55 mm。かかり代が負＝<b>リードの縁がサイドレールに載らず窓の上に浮く</b>（脇から漏れる）。このサイズは規格リードの先端幅を実測済みなので<b>判定</b>している（2026-09-22 に 5 本）。実物は 2 MP × 2 リードの全組が正だった（アルト・ソプラノ）—— 測り直すなら、<b>別の銘柄で符号が変わらないか</b>を見る。</p>
+<h2>0　個体の同定　<span>先に埋める。<b>1 本だけ測って入れない</b>（銘柄・カット・材質で寸法は動く）</span></h2>
+<table><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>リード</th><th>銘柄</th><th>カット</th><th>材質</th><th>硬さ</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<table style="margin-top:1mm"><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>マウスピース</th><th>銘柄</th><th>刻印/開き</th><th>材質</th><th>実測/印刷</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<h2>A　リードの採寸　<span>欄名・並び順は採寸フォームと同じ（そのまま移せる）。帯は刻み由来</span></h2>
+<table><colgroup><col style="width:31mm"><col style="width:35mm"><col style="width:12mm"><col style="width:23mm"><col><col><col><col><col></colgroup>
+<tr><th>欄</th><th>どこを測るか</th><th class="num">設計値</th><th class="num">一致/軽微</th><th class="num">#1</th><th class="num">#2</th><th class="num">#3</th><th class="num">#4</th><th class="num">#5</th></tr>
+<tr><th>リード全長<br><span class="k">reed_length</span></th><td class="note">先端〜踵の端面。銘柄で 1〜3mm 動く</td><td class="num">59.10</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端幅<br><span class="k">tip_width</span></th><td class="note">先端の最も広い所（角の丸みの内側）。<b>かかり代を決める</b></td><td class="num">14.00</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵幅<br><span class="k">heel_width</span></th><td class="note">踵の端面。<b>リガチャーのタブ幅を決める</b></td><td class="num">12.60</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端厚（中央）<br><span class="k">tip_thickness</span></th><td class="note">先端の中央。当て圧に注意（潰れる）<br><span class="k">設計値は印刷側の強度下限から置いた値（実物はアルト・ソプラノとも 0.2〜0.3）</span></td><td class="num">0.38</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵厚<br><span class="k">heel_thickness</span></th><td class="note">踵の端面の中央（バークの上）</td><td class="num">2.80</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵の側端厚<br><span class="k">heel_edge_thickness</span></th><td class="note">踵の端面の<b>側の端</b>。リガチャーの当たり面</td><td class="num">1.20</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>ヴァンプ長<br><span class="k">vamp_length</span></th><td class="note">先端〜バークの段差（指で触れば分かる）</td><td class="num">29.40</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端カーブ（側面がまっすぐになる所まで）<br><span class="k">tip_full_width_z</span></th><td class="note">角の丸みが終わって<b>側面がまっすぐになる所</b>に直定規を渡し、中央との隙間（丸みを無視した見かけの角ではない）</td><td class="num">3.00</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">規格の全長 <b>59.1 mm</b>（域 58.3〜62.0） ／ 規格の先端幅 <b>14.0 mm</b>（域 13.90〜14.15）<br>全長の出所: 実測 5 本（2026-09-22、ノギス。採寸シート cad/inspection/survey_sheet.html、値は cad/inspection/inspection_values.py の REED_SURVEY の soprano）。#1 レジェール American（樹脂・ファイルド・2.5）61.95 / #2 Va…<br>先端幅の出所: 実測 5 本（2026-09-22、ノギス、先端の最も広い所）。#1 レジェール American 14.1 / #2 Vandoren 14.0 / #3 Wood Stone 14.15 / #4 Vandoren 13.9 / #5 レジェール Signature 14.15。代表値は全長と同じ規則でケーンの #2＝14.0。以前…</p>
+<div class="foot"><b>測る前に</b><ul><li><b>0.1mm 未満の差を「差がある」と言わない。</b>ノギス 1 回の読みの不確かさは ±0.05mm 級。</li><li><b>空欄と「未測」は違う。</b>測らなかった欄には「未測」と書く ——空欄だと「測り忘れ」か「記録し忘れ」か後で分けられない。</li><li><b>1 本だけ入れない。</b>同じサイズを複数本まとめて測ってから設計へ返す（1 本は域の端かもしれない）。</li><li>この用紙は <span class="k">cad/inspection/survey_sheet.py</span> が生成する。設計やテンプレートを変えたら刷り直す（数字を手で写さないため）。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — ソプラノサクソフォン<br><small>② 窓とリードの幅 / 光にかざす ／ 設計値の出所: テンプレート soprano 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<h2>B　窓とリードの幅（同じ z で並べる）　<span><b>これが本体。</b>かかり代 =（リード幅 − 窓幅）/ 2。z はティップ端から（硬いランドマーク）</span></h2>
+<table class="tall"><colgroup><col style="width:11mm"><col style="width:17mm"><col style="width:17mm"><col style="width:23mm"><col><col><col><col></colgroup>
+<tr><th rowspan="2" class="num">z<br>[mm]</th><th colspan="3">モデルの予測</th><th colspan="2">実測 窓幅（内側ジョウ）</th><th colspan="2">実測 リード幅（外側ジョウ）</th></tr><tr><th class="num">窓幅</th><th class="num">リード幅</th><th class="num">かかり代/片側</th><th class="num">MP#1</th><th class="num">MP#2</th><th class="num">リード#1</th><th class="num">リード#2</th></tr>
+<tr><th class="num fill">5</th><td class="num">12.04</td><td class="num">13.88</td><td class="num">+0.92</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">10</th><td class="num">11.31</td><td class="num">13.76</td><td class="num">+1.23</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">20 ★</th><td class="num">9.84</td><td class="num">13.53</td><td class="num">+1.84</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">★ <b>z=20 の行は「先端から 20mm の幅」そのもの</b>（基準定数 <span class="k">reed_width_at20_mm</span>）。リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定している。アルト・ソプラノの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが 1〜2mm 広かった</b>（旧既定は踵のほうを広く置いていた）。先端幅・踵幅（節 A）と合わせれば、手元のリードでも直線かどうかが言える。</p>
+<h2>C　リードを載せて光にかざす　<span><b>かかり代の physical な正解。</b>道具が要らないのに、いちばん効く</span></h2>
+<table class="tall"><colgroup><col style="width:16mm"><col><col><col style="width:40%"></colgroup>
+<tr><th>リード＼MP</th><th>#1</th><th>#2</th><th>気づいたこと（左右差・浮く位置 z）</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note"><b>○</b> = リードの縁がサイドレールの上に載っている（光が漏れない）／<b>×</b> = 縁が窓の上に浮いている（脇に光の筋）／<b>△</b> = 判別できない。<b>見るのはティップ寄り</b>（モデルのかかり代が最小になるのは z≈2mm）。左右で違えば、それも書く（テーブルの平面度の話になる）。</p>
+<h2>D　そのほか気づいたこと　<span>欄が無いものを書く（片減り・反り・リガチャーの当たり・吹いた感じ）</span></h2>
+<div class="memo"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="foot"><b>当てる場所</b><ul><li><b>z はティップ端から。</b>ティップ端は硬いランドマークで位置決めできる（窓の前縁は 1mm 弱しかなくノギスが当たらない）。深さバーで z を出してテーブル面に印を付け、その位置で幅を読む。</li><li><b>窓幅は内側ジョウ</b>（窓は貫通した開口なので内測が入る）、<b>リード幅は外側ジョウ</b>。同じ z で読むこと —— 違う z の 2 つを引き算してもかかり代にならない。</li><li>節 C は道具が要らない。<b>いちばん安い決着</b>なので、時間が無ければここだけでも埋める。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — ソプラノサクソフォン<br><small>③ マウスピースの外形（窓を直した根拠の確かめ） ／ 設計値の出所: テンプレート soprano 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<p class="claim"><b>なぜ測るか</b>　窓がテンプレートの基準（刻印 4）より一様に 1.3mm 広かったので、<span class="k">side_rail_width</span> を 0.89 → 1.55 にして合わせた（2026-09-22）。<b>窓幅だけでは「レールが太い」と「空洞が狭い」を分けられない</b> —— リード面の外幅を同じ z で測れば、レールの実幅 ＝（外幅 − 窓幅）/ 2 が決まる。最大径 25.0 もボア比で縮めた未実測値。モデルのかかり代が最小になるのは z=1.7（節 B の実測より手前）。</p>
+<h2>E　リード面の外幅と窓幅　<span><b>外幅は外側ジョウをリードが載る面に沿わせて</b>、その z で面の端から端。窓幅は内側ジョウ（z=5 以降は節 B）</span></h2>
+<table class="tall"><colgroup><col style="width:11mm"><col style="width:17mm"><col style="width:17mm"><col style="width:17mm"><col><col><col><col></colgroup>
+<tr><th rowspan="2" class="num">z<br>[mm]</th><th colspan="3">モデルの予測</th><th colspan="2">実測 外幅（外側ジョウ）</th><th colspan="2">実測 窓幅（内側ジョウ）</th></tr><tr><th class="num">外幅</th><th class="num">窓幅</th><th class="num">レール/片側</th><th class="num">MP#1</th><th class="num">MP#2</th><th class="num">MP#1</th><th class="num">MP#2</th></tr>
+<tr><th class="num fill">1</th><td class="num">10.84</td><td class="num">6.94</td><td class="num">1.95</td><td class="fill"></td><td class="fill"></td><td class="num" colspan="2">—</td></tr>
+<tr><th class="num fill">2</th><td class="num">13.59</td><td class="num">11.66</td><td class="num">0.97</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">3</th><td class="num">14.21</td><td class="num">12.14</td><td class="num">1.04</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">5</th><td class="num">14.41</td><td class="num">12.04</td><td class="num">1.18</td><td class="fill"></td><td class="fill"></td><td class="num" colspan="2">節 B</td></tr>
+<tr><th class="num fill">10</th><td class="num">14.56</td><td class="num">11.31</td><td class="num">1.63</td><td class="fill"></td><td class="fill"></td><td class="num" colspan="2">節 B</td></tr>
+<tr><th class="num fill">20</th><td class="num">14.53</td><td class="num">9.84</td><td class="num">2.34</td><td class="fill"></td><td class="fill"></td><td class="num" colspan="2">節 B</td></tr>
+</table>
+<p class="note"><b>z=1〜3 の外幅はティップの輪郭そのもの</b>（外幅の半分の x で前縁がその z に来る）。z=1 は丸みの上なので深さバーで z を出してから印を付ける。</p>
+<h2>F　1 点ずつ　<span>どちらも硬いランドマークから</span></h2>
+<table class="tall"><colgroup><col style="width:36mm"><col><col style="width:17mm"><col style="width:22mm"><col style="width:22mm"></colgroup>
+<tr><th>量</th><th>どこを測るか</th><th class="num">モデル</th><th class="num">MP#1</th><th class="num">MP#2</th></tr>
+<tr><th class="fill">最大径<br><span class="k">body_dia</span></th><td class="note"><b>テーブルと平行に</b>挟む（テーブル面から反対側へ当てると小さく出る）</td><td class="num">25.00</td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">ティップ端 → 窓の後縁</th><td class="note">ティップ端に深さバー（<span class="k">docs/print-inspection.md</span> §5.2 と同じ手順）</td><td class="num">27.83</td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">最大径と窓の後縁は<b>このサイズでは未実測</b>（最大径はテナーをボア比で縮めた値、窓の長さはテナーを軸比で縮めた値）。アルトでは同じ 2 量の実測で、比で引く考え方そのものが壊れた。</p>
+<h2>G　そのほか気づいたこと</h2>
+<div class="memo"><div></div><div></div><div></div><div></div></div>
+<div class="foot"><b>当てる場所</b><ul><li><b>z はティップ端から。</b>ティップ端は硬いランドマークで位置決めできる（窓の前縁は 1mm 弱しかなくノギスが当たらない）。深さバーで z を出してテーブル面に印を付け、その位置で幅を読む。</li><li><b>窓幅は内側ジョウ</b>（窓は貫通した開口なので内測が入る）、<b>リード幅は外側ジョウ</b>。同じ z で読むこと —— 違う z の 2 つを引き算してもかかり代にならない。</li><li>節 C は道具が要らない。<b>いちばん安い決着</b>なので、時間が無ければここだけでも埋める。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — アルトサクソフォン<br><small>① 個体の同定 / リードの採寸 ／ 設計値の出所: テンプレート alto 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<p class="claim"><b>モデルの言い分</b>　窓へのかかり代 最小 <b>+0.58 mm</b>（z=3.9）　／　帯までのはみ出し 最大 -0.22 mm（z=70.3）　／　帯より後ろ +0.49 mm。かかり代が負＝<b>リードの縁がサイドレールに載らず窓の上に浮く</b>（脇から漏れる）。このサイズは規格リードの先端幅を実測済みなので<b>判定</b>している（2026-09-21 に 5 本）。実物は 2 MP × 2 リードの全組が正だった（アルト・ソプラノ）—— 測り直すなら、<b>別の銘柄で符号が変わらないか</b>を見る。</p>
+<h2>0　個体の同定　<span>先に埋める。<b>1 本だけ測って入れない</b>（銘柄・カット・材質で寸法は動く）</span></h2>
+<table><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>リード</th><th>銘柄</th><th>カット</th><th>材質</th><th>硬さ</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<table style="margin-top:1mm"><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>マウスピース</th><th>銘柄</th><th>刻印/開き</th><th>材質</th><th>実測/印刷</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<h2>A　リードの採寸　<span>欄名・並び順は採寸フォームと同じ（そのまま移せる）。帯は刻み由来</span></h2>
+<table><colgroup><col style="width:31mm"><col style="width:35mm"><col style="width:12mm"><col style="width:23mm"><col><col><col><col><col></colgroup>
+<tr><th>欄</th><th>どこを測るか</th><th class="num">設計値</th><th class="num">一致/軽微</th><th class="num">#1</th><th class="num">#2</th><th class="num">#3</th><th class="num">#4</th><th class="num">#5</th></tr>
+<tr><th>リード全長<br><span class="k">reed_length</span></th><td class="note">先端〜踵の端面。銘柄で 1〜3mm 動く</td><td class="num">71.10</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端幅<br><span class="k">tip_width</span></th><td class="note">先端の最も広い所（角の丸みの内側）。<b>かかり代を決める</b></td><td class="num">16.40</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵幅<br><span class="k">heel_width</span></th><td class="note">踵の端面。<b>リガチャーのタブ幅を決める</b></td><td class="num">14.20</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端厚（中央）<br><span class="k">tip_thickness</span></th><td class="note">先端の中央。当て圧に注意（潰れる）<br><span class="k">設計値は印刷側の強度下限から置いた値（実物はアルト・ソプラノとも 0.2〜0.3）</span></td><td class="num">0.40</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵厚<br><span class="k">heel_thickness</span></th><td class="note">踵の端面の中央（バークの上）</td><td class="num">3.30</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵の側端厚<br><span class="k">heel_edge_thickness</span></th><td class="note">踵の端面の<b>側の端</b>。リガチャーの当たり面</td><td class="num">1.65</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>ヴァンプ長<br><span class="k">vamp_length</span></th><td class="note">先端〜バークの段差（指で触れば分かる）</td><td class="num">36.75</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端カーブ（側面がまっすぐになる所まで）<br><span class="k">tip_full_width_z</span></th><td class="note">角の丸みが終わって<b>側面がまっすぐになる所</b>に直定規を渡し、中央との隙間（丸みを無視した見かけの角ではない）</td><td class="num">2.70</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">規格の全長 <b>71.1 mm</b>（域 70.2〜72.8） ／ 規格の先端幅 <b>16.4 mm</b>（域 15.85〜16.40）<br>全長の出所: 実測 5 本（2026-09-21、ノギス。採寸シート cad/inspection/survey_sheet.html、値は cad/inspection/inspection_values.py の REED_SURVEY の alto）。#1 D'Addario Select Jazz（ケーン・アンファイルド・2H）71.1 / …<br>先端幅の出所: 実測 5 本（2026-09-21、ノギス、先端の最も広い所）。#1 D'Addario 16.4 / #2 Rico 16.1 / #3 レジェール 16.2 / #4 Wood Stone 16.2 / #5 FIBRACELL 15.85。代表値は全長と同じ規則でケーンの #1＝16.4（域の上端）。以前の 13.4 は出所の記録…</p>
+<div class="foot"><b>測る前に</b><ul><li><b>0.1mm 未満の差を「差がある」と言わない。</b>ノギス 1 回の読みの不確かさは ±0.05mm 級。</li><li><b>空欄と「未測」は違う。</b>測らなかった欄には「未測」と書く ——空欄だと「測り忘れ」か「記録し忘れ」か後で分けられない。</li><li><b>1 本だけ入れない。</b>同じサイズを複数本まとめて測ってから設計へ返す（1 本は域の端かもしれない）。</li><li>この用紙は <span class="k">cad/inspection/survey_sheet.py</span> が生成する。設計やテンプレートを変えたら刷り直す（数字を手で写さないため）。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — アルトサクソフォン<br><small>② 窓とリードの幅 / 光にかざす ／ 設計値の出所: テンプレート alto 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<h2>B　窓とリードの幅（同じ z で並べる）　<span><b>これが本体。</b>かかり代 =（リード幅 − 窓幅）/ 2。z はティップ端から（硬いランドマーク）</span></h2>
+<table class="tall"><colgroup><col style="width:11mm"><col style="width:17mm"><col style="width:17mm"><col style="width:23mm"><col><col><col><col></colgroup>
+<tr><th rowspan="2" class="num">z<br>[mm]</th><th colspan="3">モデルの予測</th><th colspan="2">実測 窓幅（内側ジョウ）</th><th colspan="2">実測 リード幅（外側ジョウ）</th></tr><tr><th class="num">窓幅</th><th class="num">リード幅</th><th class="num">かかり代/片側</th><th class="num">MP#1</th><th class="num">MP#2</th><th class="num">リード#1</th><th class="num">リード#2</th></tr>
+<tr><th class="num fill">5</th><td class="num">15.02</td><td class="num">16.25</td><td class="num">+0.61</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">10</th><td class="num">14.43</td><td class="num">16.09</td><td class="num">+0.83</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">20 ★</th><td class="num">13.05</td><td class="num">15.78</td><td class="num">+1.36</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">30</th><td class="num">12.19</td><td class="num">15.47</td><td class="num">+1.64</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">★ <b>z=20 の行は「先端から 20mm の幅」そのもの</b>（基準定数 <span class="k">reed_width_at20_mm</span>）。リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定している。アルト・ソプラノの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが 1〜2mm 広かった</b>（旧既定は踵のほうを広く置いていた）。先端幅・踵幅（節 A）と合わせれば、手元のリードでも直線かどうかが言える。</p>
+<h2>C　リードを載せて光にかざす　<span><b>かかり代の physical な正解。</b>道具が要らないのに、いちばん効く</span></h2>
+<table class="tall"><colgroup><col style="width:16mm"><col><col><col style="width:40%"></colgroup>
+<tr><th>リード＼MP</th><th>#1</th><th>#2</th><th>気づいたこと（左右差・浮く位置 z）</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note"><b>○</b> = リードの縁がサイドレールの上に載っている（光が漏れない）／<b>×</b> = 縁が窓の上に浮いている（脇に光の筋）／<b>△</b> = 判別できない。<b>見るのはティップ寄り</b>（モデルのかかり代が最小になるのは z≈4mm）。左右で違えば、それも書く（テーブルの平面度の話になる）。</p>
+<h2>D　そのほか気づいたこと　<span>欄が無いものを書く（片減り・反り・リガチャーの当たり・吹いた感じ）</span></h2>
+<div class="memo"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="foot"><b>当てる場所</b><ul><li><b>z はティップ端から。</b>ティップ端は硬いランドマークで位置決めできる（窓の前縁は 1mm 弱しかなくノギスが当たらない）。深さバーで z を出してテーブル面に印を付け、その位置で幅を読む。</li><li><b>窓幅は内側ジョウ</b>（窓は貫通した開口なので内測が入る）、<b>リード幅は外側ジョウ</b>。同じ z で読むこと —— 違う z の 2 つを引き算してもかかり代にならない。</li><li>節 C は道具が要らない。<b>いちばん安い決着</b>なので、時間が無ければここだけでも埋める。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — テナーサクソフォン<br><small>① 個体の同定 / リードの採寸 ／ 設計値の出所: テンプレート tenor 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<p class="claim"><b>モデルの言い分</b>　窓へのかかり代 最小 <b>-0.64 mm</b>（z=4.2）　／　帯までのはみ出し 最大 +0.72 mm（z=78.0）　／　帯より後ろ 区間なし。かかり代が負＝<b>リードの縁がサイドレールに載らず窓の上に浮く</b>（脇から漏れる）。このサイズは<b>規格リードの先端幅が未実測</b>（出所の記録なし）なので参考値。同じ出所の値はアルト・ソプラノで 1〜3mm 狭く、負のかかり代はその借り物のせいだった —— <b>このシートはそれを実物で決めるためのもの。</b></p>
+<h2>0　個体の同定　<span>先に埋める。<b>1 本だけ測って入れない</b>（銘柄・カット・材質で寸法は動く）</span></h2>
+<table><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>リード</th><th>銘柄</th><th>カット</th><th>材質</th><th>硬さ</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<table style="margin-top:1mm"><colgroup><col style="width:13mm"><col style="width:26%"><col><col><col style="width:18mm"><col style="width:22mm"></colgroup><tr><th>マウスピース</th><th>銘柄</th><th>刻印/開き</th><th>材質</th><th>実測/印刷</th><th>入手/備考</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<h2>A　リードの採寸　<span>欄名・並び順は採寸フォームと同じ（そのまま移せる）。帯は刻み由来</span></h2>
+<table><colgroup><col style="width:31mm"><col style="width:35mm"><col style="width:12mm"><col style="width:23mm"><col><col><col><col><col></colgroup>
+<tr><th>欄</th><th>どこを測るか</th><th class="num">設計値</th><th class="num">一致/軽微</th><th class="num">#1</th><th class="num">#2</th><th class="num">#3</th><th class="num">#4</th><th class="num">#5</th></tr>
+<tr><th>リード全長<br><span class="k">reed_length</span></th><td class="note">先端〜踵の端面。銘柄で 1〜3mm 動く</td><td class="num">78.00</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端幅<br><span class="k">tip_width</span></th><td class="note">先端の最も広い所（角の丸みの内側）。<b>かかり代を決める</b></td><td class="num">14.80</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵幅<br><span class="k">heel_width</span></th><td class="note">踵の端面。<b>リガチャーのタブ幅を決める</b></td><td class="num">15.40</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端厚（中央）<br><span class="k">tip_thickness</span></th><td class="note">先端の中央。当て圧に注意（潰れる）<br><span class="k">設計値は印刷側の強度下限から置いた値（実物はアルト・ソプラノとも 0.2〜0.3）</span></td><td class="num">0.42</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵厚<br><span class="k">heel_thickness</span></th><td class="note">踵の端面の中央（バークの上）</td><td class="num">3.00</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>踵の側端厚<br><span class="k">heel_edge_thickness</span></th><td class="note">踵の端面の<b>側の端</b>。リガチャーの当たり面<br><span class="k">未実測（テンプレートの `reed_note`）</span></td><td class="num">0.90</td><td class="num">±0.05 / ±0.20</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>ヴァンプ長<br><span class="k">vamp_length</span></th><td class="note">先端〜バークの段差（指で触れば分かる）</td><td class="num">35.00</td><td class="num">±0.30 / ±1.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th>先端カーブ（側面がまっすぐになる所まで）<br><span class="k">tip_full_width_z</span></th><td class="note">角の丸みが終わって<b>側面がまっすぐになる所</b>に直定規を渡し、中央との隙間（丸みを無視した見かけの角ではない）<br><span class="k">未実測（参照マウスピースの輪郭から逆算した値）</span></td><td class="num">2.19</td><td class="num">±0.06 / ±0.25</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">規格の全長 <b>78.0 mm</b>（域なし） ／ 規格の先端幅 <b>14.8 mm</b>（域なし）<br>全長の出所: 未実測。市販ケーンリードの代表値。マウスピース側（WindyCity 107.5mm）は実測なので、座の後端 79.02 との差 +1.02mm は「実測 × 代表値」の比較であって実測どうしではない。ソプラノで同じ出所の値が 4.4mm 外れた以上、この一致を設計則の証拠として重く見ないこと。<br>先端幅の出所: 未実測・出所の記録なし。同じ出所の値はアルト 13.4・ソプラノ 12.9 とも実物（15.85〜16.4 / 13.9〜14.15、各 5 本）より 2.5〜3.0 / 1.0〜1.25mm 狭かった（2026-09-21 / 22）。docs/reed-seat.md で「実物テナーのスキャンでもかかり代が負（z=5.1 で −0.…</p>
+<div class="foot"><b>測る前に</b><ul><li><b>0.1mm 未満の差を「差がある」と言わない。</b>ノギス 1 回の読みの不確かさは ±0.05mm 級。</li><li><b>空欄と「未測」は違う。</b>測らなかった欄には「未測」と書く ——空欄だと「測り忘れ」か「記録し忘れ」か後で分けられない。</li><li><b>1 本だけ入れない。</b>同じサイズを複数本まとめて測ってから設計へ返す（1 本は域の端かもしれない）。</li><li>この用紙は <span class="k">cad/inspection/survey_sheet.py</span> が生成する。設計やテンプレートを変えたら刷り直す（数字を手で写さないため）。</li></ul></div>
+</section>
+<section class="page"><div class="hdr"><h1>採寸シート — テナーサクソフォン<br><small>② 窓とリードの幅 / 光にかざす ／ 設計値の出所: テンプレート tenor 素 ／ 生成 2026-09-22 (1ac3994)</small></h1><div class="who">記入者 ______________　記入日 ____ / ____ / ____<br>ノギス ____________（分解能 ______ mm）</div></div>
+<h2>B　窓とリードの幅（同じ z で並べる）　<span><b>これが本体。</b>かかり代 =（リード幅 − 窓幅）/ 2。z はティップ端から（硬いランドマーク）</span></h2>
+<table class="tall"><colgroup><col style="width:11mm"><col style="width:17mm"><col style="width:17mm"><col style="width:23mm"><col><col><col><col></colgroup>
+<tr><th rowspan="2" class="num">z<br>[mm]</th><th colspan="3">モデルの予測</th><th colspan="2">実測 窓幅（内側ジョウ）</th><th colspan="2">実測 リード幅（外側ジョウ）</th></tr><tr><th class="num">窓幅</th><th class="num">リード幅</th><th class="num">かかり代/片側</th><th class="num">MP#1</th><th class="num">MP#2</th><th class="num">リード#1</th><th class="num">リード#2</th></tr>
+<tr><th class="num fill">5</th><td class="num">16.07</td><td class="num">14.84</td><td class="num">-0.62</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">10</th><td class="num">15.66</td><td class="num">14.88</td><td class="num">-0.39</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">20 ★</th><td class="num">14.52</td><td class="num">14.95</td><td class="num">+0.22</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="num fill">30</th><td class="num">13.37</td><td class="num">15.03</td><td class="num">+0.83</td><td class="fill"></td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note">★ <b>z=20 の行は「先端から 20mm の幅」そのもの</b>（基準定数 <span class="k">reed_width_at20_mm</span>）。リードの幅テーパーはモデルが<b>先端幅→踵幅の直線</b>と仮定している。アルト・ソプラノの実物では直線はほぼ成立（残差 +0.1 前後）し、<b>先端のほうが 1〜2mm 広かった</b>（旧既定は踵のほうを広く置いていた）。先端幅・踵幅（節 A）と合わせれば、手元のリードでも直線かどうかが言える。</p>
+<h2>C　リードを載せて光にかざす　<span><b>かかり代の physical な正解。</b>道具が要らないのに、いちばん効く</span></h2>
+<table class="tall"><colgroup><col style="width:16mm"><col><col><col style="width:40%"></colgroup>
+<tr><th>リード＼MP</th><th>#1</th><th>#2</th><th>気づいたこと（左右差・浮く位置 z）</th></tr>
+<tr><th class="fill">#1</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#2</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#3</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#4</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+<tr><th class="fill">#5</th><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>
+</table>
+<p class="note"><b>○</b> = リードの縁がサイドレールの上に載っている（光が漏れない）／<b>×</b> = 縁が窓の上に浮いている（脇に光の筋）／<b>△</b> = 判別できない。<b>見るのはティップ寄り</b>（モデルのかかり代が最小になるのは z≈4mm）。左右で違えば、それも書く（テーブルの平面度の話になる）。</p>
+<h2>D　そのほか気づいたこと　<span>欄が無いものを書く（片減り・反り・リガチャーの当たり・吹いた感じ）</span></h2>
+<div class="memo"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="foot"><b>当てる場所</b><ul><li><b>z はティップ端から。</b>ティップ端は硬いランドマークで位置決めできる（窓の前縁は 1mm 弱しかなくノギスが当たらない）。深さバーで z を出してテーブル面に印を付け、その位置で幅を読む。</li><li><b>窓幅は内側ジョウ</b>（窓は貫通した開口なので内測が入る）、<b>リード幅は外側ジョウ</b>。同じ z で読むこと —— 違う z の 2 つを引き算してもかかり代にならない。</li><li>節 C は道具が要らない。<b>いちばん安い決着</b>なので、時間が無ければここだけでも埋める。</li></ul></div>
+</section>
+</body></html>
