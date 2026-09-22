@@ -5639,8 +5639,19 @@ def test_impedance_param_sensitivity(alto):
     # 占めないので第1共鳴はほとんど動かず、上位共鳴ほど大きく動く（実物と同じ振る舞い）。
     # Phase 2 では throat_ratio が本体の円錐テーパーまで書き換えていたため
     # 第1ピークが大きく動いていた。それは欠損円錐を体積定数から逆算していた副作用。
-    base = ob.impedance(p, si)["peaks"]
-    narrow = ob.impedance(dict(p, throat_ratio=0.7), si)["peaks"]
+    #
+    # **エンジンは TMM に固定する**（Tier1 の `first_resonance_cents` と同じ理由）。
+    # 下の数字（12 本・1.372・06e67ab の 8 本 / 2.588）は**全部 TMM でしか出ない**。
+    # `impedance()` は OpenWind が入っていればそちらへ行き、alto 既定で 10 本 / 1.665 に
+    # なる（11・12 本目の prominence が最大の 1.85 / 1.76% で、`_analyze` の下限 2% を割る）。
+    # 本数を足した 5fb0bf4 から 7210bcb までの実行は「8 skipped」＝ OpenWind の無い
+    # Windows の venv で、**WSL（OpenWind 0.12.4）では足した日から一度も通っていなかった**
+    # （2026-09-22 に 15 コミットを測って、どれも 10 本。退行ではない）。
+    # OpenWind 側では本数を張れない: 窓の実測前の c14a24c で base 11 / narrow 12 と、
+    # 下限の縁に乗っていて形を少し変えるだけで揺れる。特異点の検出器としては
+    # どちらのエンジンでも効く（TMM 12 → 8、OpenWind 10 → 7）。
+    base = ob.impedance(p, si, use_openwind=False)["peaks"]
+    narrow = ob.impedance(dict(p, throat_ratio=0.7), si, use_openwind=False)["peaks"]
     # 単一ピークで見ない: 個々の移動量は 0.5〜0.8Hz と小さく、上位共鳴の総和で
     # 見るほうが「ノブが効いているか」の判定として安定する。
     #

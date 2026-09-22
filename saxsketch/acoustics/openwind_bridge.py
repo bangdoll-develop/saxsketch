@@ -965,12 +965,18 @@ def hole_scale(geometry: list[list[float]], holes, f_low: float,
 
 def impedance(params: dict | None, size_info: dict,
               fmin: float = 50.0, fmax: float = 2000.0, n: int = 800,
-              geometry: list[list[float]] | None = None, holes=()) -> dict:
+              geometry: list[list[float]] | None = None, holes=(),
+              use_openwind: bool | None = None) -> dict:
     """入力インピーダンス Z(f) とピーク解析を返す。
 
     `geometry` を渡すと `params` からは組み立てない（管体は「理想マウスピース」の
     物差し円錐＋側孔で評価するので、マウスピースのパラメータを持たない）。
     `holes` を渡すと側孔つきで解く（運指は全閉）。
+
+    `use_openwind` は `build_resonator` と同じ意味（None ＝ 入っている方）。
+    記録値を張るテストは False で固定する。**ピークの本数はエンジンで違う** ——
+    alto 既定で TMM 12 本 / OpenWind 10 本（OpenWind は高次の損失が大きく、11・12 本目の
+    prominence が最大の 1.85 / 1.76% で `_analyze` の下限 2% を割る。TMM では 2.85 / 2.66%）。
 
     格子は**対数等間隔**。線形等間隔だと 1 目盛りの音程幅が ΔF/f で効き、
     50–2000Hz を 800 点で張ると低音側が 41 セント刻み・高音側が 4 セント刻みという
@@ -978,10 +984,11 @@ def impedance(params: dict | None, size_info: dict,
     計算時間も変わらない。`_interp_peak` の放物線補間もここが等間隔である前提。
     """
     freqs = np.geomspace(fmin, fmax, n)
+    want_ow = HAS_OPENWIND if use_openwind is None else use_openwind
     if geometry is None:
-        geometry = build_resonator(params or {}, size_info)
+        geometry = build_resonator(params or {}, size_info, use_openwind=want_ow)
     holes = list(holes)
-    if HAS_OPENWIND:
+    if want_ow:
         try:  # pragma: no cover
             return _openwind_impedance(geometry, freqs, size_info, holes)
         except Exception:
