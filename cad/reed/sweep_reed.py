@@ -25,10 +25,17 @@ bbox は幅が正しい側の値を拾うので、形の破綻を bbox で見張
 `side_rail_thin` の下限 0.20 と重ねると側端が 0.016mm まで薄くなる（いままでの
 最薄は 0.030mm）ので、その組を 1 本足してある。
 
+**4-F（2026-09-23）で先端カーブの壁が関係になった**（前縁アークが側面へ届く深さ、
+`rp.nose_depth_limit`）。壁は帯 2.8 よりずっと深い（既定の組で 6.78〜8.2）ので、壁そのものと、
+壁がいちばん浅くなる隅（先端狭×踵広×短×丸み大）を 1 本ずつビルドする。
+`outline` は OCCT を使わず、先端幅・踵幅・丸み・全長の格子で輪郭だけを壁まで見る
+—— 壁の内側で折れ 0、壁の 1 刻み外は `nose_error` が断ること。
+
 実行（WSL2 の SaxSketch 環境。リポジトリ直下で）:
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto
   PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py alto 8 6
+  PYTHONPATH=. ~/mp_design/.venv/bin/python cad/reed/sweep_reed.py outline
 
 リードのビルドはマウスピースや管体よりずっと軽い（**ロフト 1 回だけ**。4-C.2c で
 ファイルドがブーリアンでなくなった）ので、3 サイズ通しでも VM は落ちない。それでも
@@ -78,7 +85,18 @@ def _cases(comp, base: dict) -> list[tuple[str, dict]]:
         # 4-C.2d で先端厚の下限が 0.08 に下がった。側端の薄化と重なると
         # 側端厚が 0.08 × 0.20 = 0.016mm になる（従来の最薄 0.030 の半分）。
         ("薄い先端×薄い側端", dict(base, tip_thickness=0.08, side_rail_thin=0.20)),
+        # 先端カーブの壁は関係（4-F）。既定の組では soprano 7.0 / alto 8.2 は半円、
+        # 踵が 0.6 広い tenor は 6.78。
+        ("先端カーブ＝関係の壁", dict(base, tip_curve_depth=rp.nose_depth_limit(base))),
     ]
+    # 壁がいちばん浅くなる隅（先端狭 × 踵広 × 短 × 丸み大）。数字を書かずに
+    # スキーマの壁から引く —— 帯や壁を動かした日に組がそこへ付いてこない。
+    corner = dict(base, tip_width=specs["tip_width"].bounds()[0],
+                  heel_width=specs["heel_width"].bounds()[1],
+                  reed_length=specs["reed_length"].bounds()[0],
+                  tip_corner_r=specs["tip_corner_r"].bounds()[1])
+    out.append(("先端狭×踵広×短×関係の壁",
+                dict(corner, tip_curve_depth=rp.nose_depth_limit(corner))))
     for k in SWEEP_KEYS:
         s = specs.get(k)
         if s is None or s.min is None or s.max is None:
@@ -102,8 +120,12 @@ def _outline_defect(p: dict) -> str | None:
     全部通るのに、最先端の断面だけ全幅のまま残って前へ板が張り出していた
     （`width()` の円弧クランプが z=0 を含んでいなかった）。bbox は幅が正しい側の
     値を拾うので気づけない。**輪郭そのものを見る検査を足す。**
+
+    **傾きは隣り合うサンプルの差で取る**（4-F、2026-09-23）。以前は幅 1e-4 の窓を
+    1e-3 おきに置いていて、**窓と窓の間にある段は見えなかった** —— 前縁アークが
+    側面に届かない 546 通りのうち、捕まえたのは 52 通りだけ。窓を空けなければ
+    1e-6mm 級の段から傾きの跳びとして出る。
     """
-    h = 1e-4
     z_hi = rp.tip_full_width_z(p) + 0.5
     taper = (p["heel_width"] - p["tip_width"]) / (2.0 * p["reed_length"])
     # 先端は 1µm 刻み、その先はテーパーの直線なので 0.5mm 刻みで足りる。
@@ -113,7 +135,7 @@ def _outline_defect(p: dict) -> str | None:
     z_f = rp.tip_full_width_z(p)
     dip = (p["tip_corner_r"] * taper * taper
            if rp.tip_curve_depth(p) <= 0.0 and taper < 0.0 else 0.0)
-    peak, prev_slope, worst = -1.0, None, None
+    peak, prev, prev_slope, worst = -1.0, None, None, None
     for z in zs:
         w = rp.width(p, z)
         if z <= z_f:
@@ -124,11 +146,69 @@ def _outline_defect(p: dict) -> str | None:
             return (f"*** NG 輪郭が z={z:.3f} で側面テーパーから外れる"
                     f"（{w:.3f} vs {2.0 * rp.taper_half_width(p, z):.3f}）")
         if 0.02 <= z <= z_hi:
-            slope = (rp.half_width(p, z + h) - rp.half_width(p, z)) / h
-            if prev_slope is not None and slope - prev_slope > max(taper, 0.0) + 1e-3:
-                worst = f"*** NG 輪郭の傾きが z={z:.3f} で {slope - prev_slope:+.3f} 跳ぶ"
-            prev_slope = slope
+            hw = rp.half_width(p, z)
+            if prev is not None and z > prev[0]:     # z_hi は密と疎の両方に入りうる
+                slope = (hw - prev[1]) / (z - prev[0])
+                if prev_slope is not None and slope - prev_slope > max(taper, 0.0) + 1e-3:
+                    worst = (f"*** NG 輪郭の傾きが z={z:.3f} で "
+                             f"{slope - prev_slope:+.3f} 跳ぶ")
+                prev_slope = slope
+            prev = (z, hw)
     return worst
+
+
+#: `outline` の格子。2026-09-23 に折れを見つけた走査と同じ組 —— 先端幅・踵幅は
+#: 壁の両端と途中（アルトの実物 16.4 を含む）、丸みと全長は壁の両端と途中。
+#: 踵が先端より広い組ほど先端カーブの壁が浅くなる。
+OUTLINE_TIP_WIDTHS = (9.0, 10.5, 12.0, 14.0, 16.4, 18.0)
+OUTLINE_HEEL_WIDTHS = (9.0, 12.6, 15.4, 18.0)
+OUTLINE_CORNER_RS = (0.3, 0.7, 1.2, 2.0)
+OUTLINE_LENGTHS = (55.0, 70.0, 90.0)
+
+
+def outline_grid():
+    """(先端幅, 踵幅, 丸み, 全長) の全組。"""
+    return [(tw, hw, r, L) for tw in OUTLINE_TIP_WIDTHS for hw in OUTLINE_HEEL_WIDTHS
+            for r in OUTLINE_CORNER_RS for L in OUTLINE_LENGTHS]
+
+
+def outline_main() -> int:
+    """輪郭だけを格子で壁まで見る（OCCT なし）。
+
+    各組で先端カーブを 0.1 刻みに壁まで、それと壁ちょうど。壁の 1 刻み外は
+    `nose_error` が断ること（断らなければ壁が甘い）。壁の外で輪郭検査が折れを
+    見た数も出す —— **壁が形の壊れる所にある**ことの裏付けで、判定には使わない。
+    見えるのは踵が広がる組と平行な組（09-23: 288 通り中 144）で、狭まる組の壁
+    （半円）の外は前縁が半円を越える別の壊れ方なので、段としては出ない。
+    """
+    bad: list[str] = []
+    n_in = n_out = seen_out = 0
+    for tw, hw, r, L in outline_grid():
+        p = dict(tip_width=tw, heel_width=hw, tip_corner_r=r, reed_length=L)
+        wall = rp.nose_depth_limit(p)
+        ds = [round(0.1 * i, 6) for i in range(1, int(wall / 0.1 + 1e-9) + 1)] + [wall]
+        for d in ds:
+            q = dict(p, tip_curve_depth=d)
+            n_in += 1
+            err = rp.nose_error(q)
+            defect = _outline_defect(q)
+            if err is not None or defect is not None:
+                bad.append(f"{tw}/{hw}/{r}/{L} d={d:.4f}: {err or defect}")
+        q = dict(p, tip_curve_depth=wall + 0.1)
+        n_out += 1
+        if rp.nose_error(q) is None:
+            bad.append(f"{tw}/{hw}/{r}/{L} d={wall + 0.1:.4f}: 壁の外を断らない")
+        seen_out += _outline_defect(q) is not None
+    print(f"壁の内側 {n_in} 通り / 壁の 1 刻み外 {n_out} 通り"
+          f"（うち輪郭検査が折れを見たもの {seen_out}）")
+    if bad:
+        print("壊れた組合せ:")
+        for b in bad[:50]:
+            print("  -", b)
+        print(f"SOME_FAIL（{len(bad)} 通り）")
+        return 1
+    print("ALL_PASS")
+    return 0
 
 
 def _check(comp, p: dict, tmp: Path) -> tuple[bool, str]:
@@ -155,6 +235,8 @@ def _check(comp, p: dict, tmp: Path) -> tuple[bool, str]:
 
 
 def main(argv: list[str]) -> int:
+    if "outline" in argv:
+        return outline_main()
     reg = get_registry()
     bad: list[str] = []
     skipped = 0

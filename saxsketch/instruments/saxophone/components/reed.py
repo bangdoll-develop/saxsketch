@@ -97,19 +97,22 @@ def _specs(t: dict) -> list[ParamSpec]:
           "側端厚 ÷ 中央厚。小さいほど柔軟で鳴りやすいが耐久が落ちる"),
         f("tip_corner_r", "先端角の丸み", "レール", "mm", 0.3, 2.0, 0.1,
           "平面視の先端角。マウスピースのティップレール形状に合わせる", advanced=True),
-        # 上限 2.5 には出所が無く、実物 10 本の逆算 1.91〜2.72 のうち 6 本
-        # （アルト 2・ソプラノ 4）を締め出していた（2026-09-22）。**実測の最大が
-        # 入るぶんだけ**広げて 2.8。**関係「半幅 − 丸み」にはしなかった** ——
-        # 先端幅・踵幅・丸み・全長を振り、その際（0 / 0.1 / 1.0 手前）を 1440
-        # 通り見ると 45 通り前縁の輪郭が折れた（踵が先端より大きく広い組と、
-        # 先端が大きく広い組の深い所）。0.1 刻みで全域を見ると 2.8 以下で折れる
-        # のは先端 9.0 × 踵 ≥ 15.4 の 5 通りで、うち 1 通り（踵 18.0・丸み 1.2・
-        # 全長 55）は旧来の 2.5 でも折れていた。
+        # **帯は実測、壁は関係**（`param_bounds`）。帯の上限 2.8 は実物 10 本の
+        # 逆算 1.91〜2.72 が入るぶん（出所の無い 2.5 が 6 本を締め出していた、
+        # 2026-09-22）。壁は前縁アークが側面へ届く深さ `rp.nose_depth_limit`
+        # （踵が広がらなければ半円）で、帯 2.8 はどの組でもその内側（最小 2.976）。
+        # 2.8 以下で輪郭が折れて見えた 5 通り（先端 9.0 × 踵 ≥ 15.4）は、形では
+        # なく `_nose_geometry` の反復の打ち切りだった（2026-09-23）。以前に見送った
+        # 関係「半幅 − 丸み」は、踵が大きく広がる組では本当の壁より外にあった
+        # （先端 9.0 × 踵 18.0 × 丸み 1.2 で 3.3 に対し 2.98）。掛け金は先端幅の
+        # 上限の半分（半円）。
         f("tip_curve_depth", "先端カーブ", "レール", "mm", 0.0, 2.8, 0.1,
           "前縁の落ち込み。角が中央よりどれだけ後ろに来るか。0 にすると前縁が"
           "直線になり、角がティップレールより前へ出る。実物（逆算）はアルト 5 本で"
           " 1.91〜2.61、ソプラノ 5 本で 2.48〜2.72",
-          source="上限は実物 10 本の逆算の最大 2.72 を入れるぶん（2026-09-21 / 22）"),
+          source="帯の上限は実物 10 本の逆算の最大 2.72 を入れるぶん（2026-09-21 / 22）。"
+                 "壁は前縁の円弧が側面に届く深さ（踵が広がらなければ先端幅の半分）",
+          hard_max=18.0 / 2.0),
         # --- カット ---
         ParamSpec(key="file_cut", label="カット種別", category="カット",
                   type="choice", default=t["file_cut"],
@@ -146,19 +149,21 @@ class ReedComponent(Component):
         return _specs(self.template["reed"])
 
     def params_error(self, params: dict) -> str | None:
-        return rp.cane_layout_error(params)
+        return rp.cane_layout_error(params) or rp.nose_error(params)
 
     def param_bounds(self, params: dict) -> dict:
-        """**相手で動く壁**: 踵の中央厚と側端厚の 1 本（Phase 4-F 実測）。
+        """**相手で動く壁**: 踵の中央厚と側端厚、先端カーブ（Phase 4-F 実測）。
 
-        どちらを動かしても `cane_radius` の分母 `中央厚 − 側端厚` が
-        `rp.MIN_CROWN_MM` を割らないようにする。以前はこの関係を 2 本の直値
-        （側端厚 ≤ 1.6・中央厚 ≥ 1.8）に分けて持っていたので、実物の 1.65 が
-        入らなかった。中央厚の側は**静的な下限 1.8 より緩めない**（あちらの
-        出所は別で、ここで広げる理由が無い）。
+        - 踵: どちらを動かしても `cane_radius` の分母 `中央厚 − 側端厚` が
+          `rp.MIN_CROWN_MM` を割らないようにする。以前はこの関係を 2 本の直値
+          （側端厚 ≤ 1.6・中央厚 ≥ 1.8）に分けて持っていたので、実物の 1.65 が
+          入らなかった。中央厚の側は**静的な下限 1.8 より緩めない**（あちらの
+          出所は別で、ここで広げる理由が無い）。
+        - 先端カーブ: 前縁アークが側面へ届く深さ（`rp.nose_bounds`）。相手は
+          先端幅・踵幅・全長・丸みで、静的な端で届かないときだけ返る。
 
-        先端カーブは関係にしなかった（`_specs` の注記。「半幅 − 丸み」は
-        走査で 45 通り輪郭が折れた）。
+        判定は `rp.nose_bounds` / `params_error` の持ち主（`rp`）に書き、ここは
+        繋ぐだけ（2 か所に書くと片方だけ直る）。
         """
         spec = {s.key: s for s in self.param_specs()}
         crown = rp.MIN_CROWN_MM
@@ -169,6 +174,9 @@ class ReedComponent(Component):
         if need > lo_h:
             out["heel_thickness"] = {"lo": need,
                                      "lo_by": spec["heel_edge_thickness"].label}
+        out.update(rp.nose_bounds(params, {k: spec[k].bounds() for k in
+                                           ("tip_width", "heel_width",
+                                            "reed_length", "tip_corner_r")}))
         return out
 
     # ------------------------------------------------------------ 参照
@@ -229,8 +237,11 @@ class ReedComponent(Component):
         かえって広げる向きを勧めていた。
         """
         sp = {s.key: s for s in self.param_specs()}["tip_curve_depth"]
-        lo, hi = sp.bounds()
-        n = int(round((hi - lo) / sp.step))
+        # 探すのは**帯**（B-5 の「ゴールシークは帯のまま」）。壁は関係になって
+        # 半円（掛け金 9.0）まで開いたので、`bounds()` を刻むと 3 倍の手間で
+        # 勧めもしない深さを探し、先端が狭いと壁の外まで評価してしまう。
+        lo, hi = sp.min, min(sp.max, rp.nose_depth_limit(p))
+        n = int((hi - lo) / sp.step + 1e-9)       # 壁が刻みの間に来ても越えない
         # **輪郭は表にして補間する。** `tip_contour_z` は 1 点 0.4ms の二分法で、
         # 刻みごとに 41 点ずつ引くと `simulate` が 110 → 590ms になった（実測）。
         # 比べる幅の端は深さで動くが、`tip_width/2` と規格の角を越えない。
@@ -335,9 +346,12 @@ class ReedComponent(Component):
                            "step": specs[k].step})
         if "tip_curve_depth" in specs:
             # 範囲は `tip_curve_depth` の壁を全幅の位置へ写したもの（他の欄に
-            # 合わせてテンプレート値の組で引く）。
+            # 合わせてテンプレート値の組で引く）。**壁は関係**なので組から引く ——
+            # 掛け金（半円 9.0）のまま写すと、先端が狭い組では前縁が側面に届かない
+            # 深さで `tip_full_width_z` を読むことになる。
             base = dict(self.template["reed"], **(values or {}))
-            lo, hi = specs["tip_curve_depth"].bounds()
+            lo, _ = specs["tip_curve_depth"].bounds()
+            hi = self.param_bounds(base)["tip_curve_depth"]["hi"]
             params.append({
                 "key": self.SURVEY_TIP_KEY,
                 "label": "先端カーブ（側面がまっすぐになる所まで）", "unit": "mm",
