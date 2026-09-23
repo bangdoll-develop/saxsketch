@@ -212,7 +212,8 @@ REED_TEMPLATE_ID: dict[str, str] = {"alto": "#1", "soprano": "#2", "tenor": "#2"
 #: マウスピース 2 本ずつ。アルトとソプラノは**先頭がそのサイズのテンプレートの校正基準
 #: そのもの**（PHROX / ヤナギサワ 刻印 4）で、もう 1 本は金属で基準ではない
 #: （形の法則を当てる相手ではなく、「かかり代は正か」の 2 例目）。
-#: **テナーは 2 本とも基準ではない** —— 基準は WindyCity で、手元に無いので測っていない。
+#: **テナーは 2 本とも基準ではない** —— 基準 WindyCity は配布 3mf であって物が無く、
+#: ノギスを当て直すことが**できない**（`MP_TEMPLATE_REF`）。
 MP_SURVEY: dict[str, dict[str, str]] = {
     "alto": {
         "phrox": "Wood Stone PHROX 6（ハードラバー）",
@@ -228,11 +229,19 @@ MP_SURVEY: dict[str, dict[str, str]] = {
     },
 }
 
-#: そのサイズのテンプレートの校正基準にあたる個体の `MP_SURVEY` のキー。**無いサイズが
-#: ある。** 窓の法則を実物へ合わせてよいのは基準個体と比べたときだけなので（ソプラノで
-#: `side_rail_width` を動かせたのはそれが理由）、ここが None のサイズでは「モデル −
-#: 実物」は法則の誤差ではなく**個体差**として読む。テナーの基準 WindyCity は
-#: `cad/windycity` の STEP/スキャンとしてだけ在る。
+#: そのサイズのテンプレートの校正基準にあたる個体の `MP_SURVEY` のキー。
+#: **「手元にあって、ノギスを当て直せる個体」だけがここに載る。** 窓の法則を実物へ
+#: 合わせてよいのは基準個体と比べたときだけなので（ソプラノで `side_rail_width` を
+#: 動かせたのはそれが理由）、ここが None のサイズでは「モデル − 実物」は法則の誤差では
+#: なく**個体差**として読む。
+#:
+#: **テナーが None なのは「まだ測っていない」からではなく、測れる物が無いから。**
+#: テナーのテンプレートの基準 WindyCity Tenor .100" LS は**配布 3mf**として在り
+#: （`cad/windycity/align_reference.py` の `SRC_DEFAULT`）、物としてのマウスピースは
+#: 手元に無い（2026-09-23 に確認）。メッシュは残っているので法則は再現できるが、
+#: **ノギスを当て直すことは永久にできない** —— だからテナーだけは、新しい相手を
+#: 基準に据えるか（手持ちの Jody を密に測って、差が一様なら `side_rail_width`、
+#: 形なら `_CAVITY_W`）、基準なしのまま行くかの選択になる。
 MP_TEMPLATE_REF: dict[str, str | None] = {
     "alto": "phrox", "soprano": "hr4", "tenor": None,
 }
@@ -269,6 +278,19 @@ REED_WIDTH_AT_Z: dict[str, dict[str, dict[float, float]]] = {
         "#2": {5.0: 16.90, 10.0: 16.80, 20.0: 16.60, 30.0: 16.40},
     },
 }
+
+#: マウスピースのテーブルの実幅 [mm]（外側ジョウ。リードを外して面の端から端）。
+#: z はティップ端から、測る点は採寸シートの節 C（`survey_sheet.table_z_grid` が
+#: 窓の終端〜リガチャー座の後端から引く）。
+#:
+#: **3 サイズとも空。値を入れて埋めない。** ここが埋まるまで、
+#: 「リガチャーが締める区間で縁がテーブルの外へ出る」（テナーの既定で最大 +0.61mm、
+#: z=55.8〜79.0）は**モデルの主張のまま**で、`reed_seat` の TABLE 帯は参考どまり。
+#: 実物のリード幅を測ったのは z≤30 まで、光にかざす試験が見ているのは窓の区間だけ
+#: なので、この区間を外から確かめている実測はいま 1 つも無い。
+#: 埋まったら `reed_seat.seat_card` の「帯までのはみ出し」を判定へ上げられる
+#: （窓のかかり代を `reed_tip_width_is_measured` で分岐させたのと同じ形）。
+TABLE_WIDTH_AT_Z: dict[str, dict[str, dict[float, float]]] = {}
 
 #: リードを載せて光にかざす。○ ＝ 縁がサイドレールの上（光が漏れない）。
 #: **3 サイズとも 10 組すべて ○。** 所見（実測者の記述の要約）:
@@ -308,13 +330,14 @@ LIGHT_TEST: dict[str, dict[str, dict[str, str]]] = {
 
 #: 窓の形についての所見（サイズごと）。`reed_seat_report` がそのまま出す。
 WINDOW_NOTE: dict[str, str] = {
-    "alto": ("**ティップ側は合い、後ろ半分で 0.7mm 狭い** —— 窓の形は実物テナー"
-             "（WindyCity）をボア径で割った表 `_CAVITY_W` から引いている。"
+    "alto": ("**ティップ側は合い、後ろ半分で 0.7mm 狭い** —— 窓の形はテナーの基準"
+             "（WindyCity の配布 3mf）をボア径で割った表 `_CAVITY_W` から引いている。"
              "PHROX 1 本・4 点なので、ここでは直さない"),
     "tenor": ("**モデルは直していない。今回の 2 本はどちらも基準ではない** "
-              "（`MP_TEMPLATE_REF` が None）—— テナーの窓の法則は基準機 WindyCity から"
-              "起こしたもので、その WindyCity のスキャン値 16.00 / 14.90 / 11.40 "
+              "（`MP_TEMPLATE_REF` が None）—— テナーの窓の法則は WindyCity の"
+              "**配布 3mf** から起こしたもので、その 3mf の実測値 16.00 / 14.90 / 11.40 "
               "（z=5.1 / 14.1 / 38.1）とは +0.06 / +0.17 / −0.05 で合っている。"
+              "**その基準は物として手元に無いので、ノギスで測り直すことはできない。**"
               "Jody・Lebayle との差は一様でもない（+0.52〜−0.73 / +0.66〜−0.13）ので、"
               "これは法則の誤差ではなく**個体差**。ソプラノで `side_rail_width` を"
               "動かせたのは比べた相手が基準個体そのものだったから"),
@@ -444,7 +467,8 @@ def reed_seat_report(inst, size: str) -> None:
     実物どうしのかかり代・実物とモデルの窓・リード幅が直線から外れる量を出す。
     モデルの側はテンプレート素（リードは `REED_TEMPLATE_ID` の実測）。
     **窓を比べる相手が基準個体かどうかはサイズで違う**（`MP_TEMPLATE_REF`）——
-    テナーは基準の WindyCity を測っていないので、差は法則の誤差ではなく個体差。
+    テナーの基準 WindyCity は物として存在しない（配布 3mf）ので測りようがなく、
+    差は法則の誤差ではなく個体差として読む。
     """
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     from saxsketch.instruments.saxophone.components import reed_seat
@@ -457,12 +481,19 @@ def reed_seat_report(inst, size: str) -> None:
     wins, widths, survey = WINDOW_WIDTH_AT_Z[size], REED_WIDTH_AT_Z[size], REED_SURVEY[size]
     ref = MP_TEMPLATE_REF.get(size)
     base = ref or next(iter(MP_SURVEY[size]))
-    zs = sorted(wins[base])
+    # **z の集合が揃っている前提を置かない。** 採寸シートは窓を 10 点まで測れる
+    # ように増えた（2026-09-23）が、リードの幅は 4 点のままのことがある ——
+    # 揃っていると決めて添字を引くと、増やした日に KeyError で落ちる。
+    zs = sorted(set().union(*(set(w) for w in wins.values())))
+    zs_cov = sorted(set(zs).intersection(*(set(w) for w in wins.values()),
+                                         *(set(w) for w in widths.values())))
+    if not zs_cov:
+        raise SystemExit(f"{size}: 窓とリードに共通の z が無く、かかり代を出せない")
 
     print(f"\n# リードが載るか —— {size}")
     print("  MP: " + " / ".join(f"{k} = {v}" for k, v in MP_SURVEY[size].items())
           + (f"（{base} がテンプレートの基準）" if ref else
-             "（**どちらもテンプレートの基準ではない**。基準は測っていないので、"
+             "（**どちらもテンプレートの基準ではない**。基準は物が無く測れないので、"
              "下の差は法則の誤差ではなく個体差）"))
     print("\n## 窓の実開口 [mm]（モデル＝テンプレート素の法則 vs 実物）")
     print(f"  {'z':>4}{'モデル':>8}" + "".join(f"{k:>9}" for k in wins)
@@ -470,8 +501,11 @@ def reed_seat_report(inst, size: str) -> None:
     with profiles.params_scope(m):
         model_w = {z: 2.0 * profiles.window_open_half_width(m, z) for z in zs}
     for z in zs:
-        print(f"  {z:4.0f}{model_w[z]:8.2f}" + "".join(f"{w[z]:9.2f}" for w in wins.values())
-              + f"{model_w[z] - wins[base][z]:+14.2f}")
+        d = (f"{model_w[z] - wins[base][z]:+14.2f}" if z in wins[base]
+             else f"{'—':>14}")
+        print(f"  {z:4.1f}{model_w[z]:8.2f}"
+              + "".join(f"{w[z]:9.2f}" if z in w else f"{'—':>9}" for w in wins.values())
+              + d)
     print(f"  side_rail_width {m['side_rail_width']:.2f}。" + WINDOW_NOTE[size])
 
     taper = [x["tip_width"] - x["heel_width"] for x in survey]
@@ -480,20 +514,23 @@ def reed_seat_report(inst, size: str) -> None:
     res = []
     for rid, ws in widths.items():
         s = next(x for x in survey if x["id"] == rid)
-        for z in zs:
+        for z in sorted(ws):
             line = s["tip_width"] + (s["heel_width"] - s["tip_width"]) * z / s["reed_length"]
             res.append(ws[z] - line)
-            print(f"  {rid:4}{z:4.0f}{ws[z]:8.2f}{line:8.2f}{ws[z] - line:+8.2f}")
+            print(f"  {rid:4}{z:4.1f}{ws[z]:8.2f}{line:8.2f}{ws[z] - line:+8.2f}")
     print(f"  **直線はほぼ成立**（残差 {min(res):+.2f}〜{max(res):+.2f}、外へわずかに"
           f"膨らむ側）。外れていたのは向き: 旧既定は 3 サイズとも踵が 0.6 広く、"
           f"実物は先端が {min(taper):.2f}〜{max(taper):.2f} 広い")
 
     print("\n## かかり代 [mm/片側] ＝（リード幅 − 窓幅）/ 2 —— 実物どうし")
-    print(f"  {'MP':9}{'リード':6}" + "".join(f"{f'z={z:.0f}':>8}" for z in zs))
+    if len(zs_cov) < len(zs):
+        print(f"  （窓は {len(zs)} 点あるが、リード幅と両方ある z は {len(zs_cov)} 点。"
+              "**片方しか無い z はかかり代を出せない**ので落とす）")
+    print(f"  {'MP':9}{'リード':6}" + "".join(f"{f'z={z:g}':>8}" for z in zs_cov))
     covers = []
     for mp, win in wins.items():
         for rid, ws in widths.items():
-            row = [(ws[z] - win[z]) / 2.0 for z in zs]
+            row = [(ws[z] - win[z]) / 2.0 for z in zs_cov]
             covers += row
             print(f"  {mp:9}{rid:6}" + "".join(f"{c:+8.2f}" for c in row))
     print(f"  **{len(covers)} 組すべて {min(covers):+.2f}〜{max(covers):+.2f}** "
@@ -507,11 +544,34 @@ def reed_seat_report(inst, size: str) -> None:
     w = s["window"]
     print(f"\n  モデル（テンプレート素）の窓へのかかり代 最小 {w['mm']:+.2f}（z={w['z']:.1f}）")
     tid = REED_TEMPLATE_ID[size]
+    # 比べる z は**両方が持っている最も前の点**（5.0 と決め打たない。シートの
+    # 候補を増やした日に、無い z を引いて落ちる）。
+    z0 = zs_cov[0]
     with profiles.params_scope(m):
-        z5 = (rp.width(r, 5.0) - 2.0 * profiles.window_open_half_width(m, 5.0)) / 2.0
-    real5 = (widths[tid][5.0] - wins[base][5.0]) / 2.0
-    print(f"  z=5 で モデル {z5:+.2f} / 実物（{base} × {tid}）{real5:+.2f}"
+        zm = (rp.width(r, z0) - 2.0 * profiles.window_open_half_width(m, z0)) / 2.0
+    real = (widths[tid][z0] - wins[base][z0]) / 2.0
+    print(f"  z={z0:g} で モデル {zm:+.2f} / 実物（{base} × {tid}）{real:+.2f}"
           + ("" if ref else "　※ この MP は基準ではない"))
+
+    tw = TABLE_WIDTH_AT_Z.get(size) or {}
+    t = s["table"]
+    # **符号で言い方を変える。** 負を「はみ出し −0.54」と書くと、出ているのか
+    # 出ていないのか読み手が数えることになる（帯の中で外へ出るのはテナーだけ）。
+    if not t:
+        print("\n  モデルの帯の区間なし")
+    elif t["mm"] > 0.0:
+        print(f"\n  モデルは帯の中で縁が**テーブルの外**へ出ると言う"
+              f"（最大 {t['mm']:+.2f} @ z={t['z']:.1f}）")
+    else:
+        print(f"\n  モデルは帯の中では縁がテーブルの内側と言う"
+              f"（最も外でも {t['mm']:+.2f} @ z={t['z']:.1f}）")
+    if tw:
+        print("  テーブルの実幅 [mm]: " + " / ".join(
+            f"{mp} " + " ".join(f"z={z:g}:{v:.2f}" for z, v in sorted(d.items()))
+            for mp, d in tw.items()))
+    else:
+        print("  **テーブルの実幅は未実測**（3 サイズとも）—— この区間だけは"
+              "モデルの主張しか無い。採寸シートの節 C がその欄")
 
 
 def main() -> None:

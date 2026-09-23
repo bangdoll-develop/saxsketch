@@ -1,7 +1,7 @@
 {
  "label": "テナーサクソフォン",
  "size": "tenor",
- "note": "寸法は実在マウスピース WindyCity Tenor .100\" Long Shank をボア軸基準で実測して起こした値（テーブル傾斜4.2°・ビーク18°・最大径→シャンク肩→平行シャンク）。",
+ "note": "寸法は実在マウスピース WindyCity Tenor .100\" Long Shank の**配布 3mf**をボア軸基準で実測して起こした値（テーブル傾斜4.2°・ビーク18°・最大径→シャンク肩→平行シャンク）。**物としてのマウスピースは手元に無い**（2026-09-23 に確認）ので、3 サイズで唯一、基準にノギスを当て直すことができないのがテナー。窓の法則を実物で直せないのも、リガチャーの適合を確かめられないのもこれが理由（cad/windycity/README.md 冒頭、inspection_values.MP_TEMPLATE_REF）。",
  "mouthpiece": {
   "tip_opening": 2.65,
   "facing_length": 27.5,
