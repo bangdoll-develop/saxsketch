@@ -33,7 +33,7 @@ python cad/inspection/survey_sheet.py \
 `profiles.window_open_half_width` / `reed_profiles.width`。設計やテンプレートを
 変えたら刷り直す。生成物 `survey_sheet.html` も追跡する（`verify_report.md` と同じ扱い）。
 
-**実測値は `inspection_values.py` にだけ書く**（印刷品の検品は `MEASURED`、リードが載るかの採寸は `REED_SURVEY` / `MP_SURVEY` / `WINDOW_WIDTH_AT_Z` / `REED_WIDTH_AT_Z` / `LIGHT_TEST` をサイズ別に、アルト 2026-09-21・ソプラノ 09-22）。`--reed-seat` はそちらだけを出す（同じ z の窓幅とリード幅、実物どうしのかかり代、直線からの残差）。 判定・差・比の
+**実測値は `inspection_values.py` にだけ書く**（印刷品の検品は `MEASURED`、リードが載るかの採寸は `REED_SURVEY` / `MP_SURVEY` / `WINDOW_WIDTH_AT_Z` / `REED_WIDTH_AT_Z` / `LIGHT_TEST` をサイズ別に、アルト 2026-09-21・ソプラノ 09-22・テナー 09-23）。`--reed-seat` はそちらだけを出す（同じ z の窓幅とリード幅、実物どうしのかかり代、直線からの残差）。 判定・差・比の
 一覧はそこと `.wproj` から計算する。シートに手写しの数字を置かないため。
 
 **判定は「印刷した個体の `.wproj`」に対して回す**（`PRINTED_FROM`）。

@@ -3123,7 +3123,9 @@ def test_undersized_bore_is_rejected_not_excused():
 #: 全長を作った。Stage F でソプラノの実物が 71.4mm（18% 短い）と分かって崩れ、
 #: Stage G でリード実測が入って**符号が反転する**ことがはっきりした:
 #:
-#:   - tenor  +1.0 … 座の後端が踵より 1.0mm 後ろ（実測マウスピース × 未実測リード）
+#:   - tenor  −3.7（ケーン 82.7）〜 −2.0（ケーン 81.05）… 09-23 に 5 本測って
+#:     **符号が反転した**。未実測の代表値 78.0 の頃は +1.0（座の後端が踵より
+#:     1.0mm 後ろ）だった
 #:   - soprano −1.2（樹脂 58.3）〜 −4.9（樹脂 62.0）… **踵が座の後端より後ろへ出る**。
 #:     2 本の頃は −2.0（ケーン 59.1）〜 −4.9 で、5 本（2026-09-22）で樹脂が両端に来た
 #:   - alto   −2.5〜+0.1 … 2 本の頃は −0.8〜+0.1 で**ほぼ 0** に見えたが、5 本
@@ -3131,15 +3133,18 @@ def test_undersized_bore_is_rejected_not_excused():
 #:
 #: **アルトだけが「実測マウスピース × 実測リード」の組**で、2 本の頃は差がほぼ 0
 #: に見えた。これを設計則の証拠と読まなかったのは正しかった —— ソプラノも同じく
-#: 両方実測で −1.2〜−4.9 と大きく外れ、アルトも 3 本足すと −2.5 まで開いた。正のままなのはテナーだけで、そのテナーは
-#: リードが未実測の代表値。
+#: 両方実測で −1.2〜−4.9 と大きく外れ、アルトも 3 本足すと −2.5 まで開いた。
+#: **「正のままなのはテナーだけで、そのテナーはリードが未実測の代表値」と書いてあった
+#: のは当たった** —— 09-23 に測ると 78.0 → 81.05〜82.7 で、テナーも負の側へ回った。
+#: **3 サイズとも踵が座の後端より後ろへ出る。**
 #:
 #: この行は途中で 2 度動いた。B.1 のスケール値（全長 98.54mm）では +0.9、Stage I で
 #: 実物 PHROX（91.7mm）に替えて −4.1、最大径の位置を実測して踵が 2.9mm 後ろへ
 #: 動いて −0.8〜+0.1。**借り物の定数が入っているあいだは符号すら当てにならない。**
 #: 判定はこの等値では出さず、`reference_check` の 2 本（テーブル終端 vs 座の後端 /
 #: vs リード全長域）が持つ。後者はリード全長が実測のサイズでしか判定しない。
-SEAT_MINUS_REED_MM = {"soprano": (-4.9, -1.2), "alto": (-2.50, 0.10), "tenor": (1.02, 1.02)}
+SEAT_MINUS_REED_MM = {"soprano": (-4.9, -1.2), "alto": (-2.50, 0.10),
+                      "tenor": (-3.68, -2.03)}
 
 #: 最大径の位置（シャンク端から）[mm]。**ノギスでの実測**。
 #: soprano ヤナギサワ刻印4（2026-08-10）/ alto Wood Stone PHROX（2026-08-15）。
@@ -3374,24 +3379,30 @@ def test_cavity_station_roles():
         assert area(profiles.chamber_max_station(wide)) > area(chamber), tid
 
 
-#: マウスピースの照合カードで「軽微」が出る行。**どちらも実物の性質であって
+#: マウスピースの照合カードで「軽微」が出る行。**どれも実物の性質であって
 #: モデルの粗さではない**ので、消さずに 1 行ずつ理由込みで記録する。
 #:
 #:   soprano  テーブル終端 60.0mm はケーン 59.1 を上回るが樹脂 62.0 に 2.0mm 足りない
 #:            （`SOPRANO_LONG_REED_OVERHANG_MM`）。長いリードの踵は実際にはみ出す。
-#:   tenor    基準機 WindyCity の最大径 30.8 が Jody Jazz Giant 6* の実測 30.0 を
+#:   tenor    (1) 基準機 WindyCity の最大径 30.8 が Jody Jazz Giant 6* の実測 30.0 を
 #:            0.8 超える。アルトと違い**市販リガチャーで入るか確認していない**ので、
 #:            上限を 30.8 へ緩めずに「軽微」で残す（緩めると根拠が「自分の基準機が
 #:            そうだから」になり実物照合が循環する。descriptor の
 #:            `ligature_max_dia_source`）。
-_MP_CARD_MINOR = {"soprano": "リード全長域", "tenor": "最大径"}
+#:            (2) **2026-09-23 のリード実測で 2 行目が増えた**: テーブル終端 81.59 は
+#:            最長のリード 82.7 に 1.11mm 足りない（ソプラノと同じ形）。しかも
+#:            **実物の所見と向きが合う** —— Jody Jazz では 82.6 / 82.7 の 3 本の踵が
+#:            はみ出し、81.05 / 81.2 の 2 本はほぼはみ出さない
+#:            （`test_the_model_table_end_sits_inside_the_light_test_bracket`）。
+_MP_CARD_MINOR = {"soprano": ("リード全長域",), "tenor": ("最大径", "リード全長域")}
 
 
 def test_reference_card_all_match():
-    """規格照合カードの「軽微」が想定の 1 行に閉じ、乖離が 1 行も出ないこと。
+    """規格照合カードの「軽微」が想定の行に閉じ、乖離が 1 行も出ないこと。
 
     **軽微はカードが仕事をしている状態で、消してはいけない**（理由は
-    `_MP_CARD_MINOR`）。アルトだけ全行一致になる。リード側は 3 サイズとも一致。
+    `_MP_CARD_MINOR`）。マウスピース側はアルトだけ全行一致。リード側は 3 サイズとも
+    「先端から 20mm の幅」1 行だけが軽微で、残りは一致。
     """
     reg = get_registry().get("saxophone")
     for tid in SIZES:
@@ -3400,29 +3411,26 @@ def test_reference_card_all_match():
         card = next(c for c in cards if "照合" in c["title"])
         assert not [r for r in card["rows"] if "乖離" in r[1]], (tid, card["rows"])
         minor = [r for r in card["rows"] if "軽微" in r[1]]
-        want = _MP_CARD_MINOR.get(tid)
-        if want is not None:
-            assert len(minor) == 1 and want in minor[0][0], (tid, card["rows"])
-            assert card["status"] == "warn", (tid, card["rows"])
-        else:
-            assert not minor and card["status"] == "ok", (tid, card["rows"])
+        want = _MP_CARD_MINOR.get(tid, ())
+        assert len(minor) == len(want), (tid, card["rows"])
+        for label in want:
+            assert any(label in r[0] for r in minor), (tid, label, card["rows"])
+        assert card["status"] == ("warn" if want else "ok"), (tid, card["rows"])
 
-        # リード側は 3 サイズとも一致（ソプラノのテンプレートは実測 59.1 に置いてある）。
-        # **例外は実測したサイズの「先端から 20mm の幅」1 行だけ**: 直線のテーパーは
-        # 実物をアルト #1 で +0.12（#2 も +0.08、2026-09-21）、ソプラノ #2 で +0.07
-        # （#1 も +0.12、09-22）過小に読む。2 サイズとも同じ向きの実物の膨らみなので、
-        # 帯を広げて消さない。
+        # リード側は**全長も先端幅も 3 サイズとも一致**（テンプレートはどれも実測の
+        # 代表個体）。**外れるのは「先端から 20mm の幅」1 行だけ**で、これは
+        # 3 サイズともそうなる: 直線のテーパーは実物をアルト #1 で +0.12（#2 も
+        # +0.08、2026-09-21）、ソプラノ #2 で +0.07（#1 も +0.12、09-22）、
+        # テナー #2 で +0.08（#1 は −0.01、09-23）過小に読む。**3 サイズとも同じ向きの
+        # 実物の膨らみ**（外へわずかに出る）なので、帯を広げて消さない。
         reed = reg.make_component("reed", tid)
         reed.set_refs({"mouthpiece": {"params": _template_params("mouthpiece", tid)}})
         cards = reed.simulate({s.key: s.default for s in reed.param_specs()})["cards"]
         card = next(c for c in cards if "照合" in c["title"])
         off = [r[0] for r in card["rows"] if not r[1].endswith("一致")
                and not r[0].startswith("（参考）")]
-        if tid in ("alto", "soprano"):
-            assert off == ["先端から 20mm の幅 実測/モデル"], (tid, card["rows"])
-            assert card["status"] == "warn", (tid, card["rows"])
-        else:
-            assert card["status"] == "ok", (tid, card["rows"])
+        assert off == ["先端から 20mm の幅 実測/モデル"], (tid, card["rows"])
+        assert card["status"] == "warn", (tid, card["rows"])
 
 
 def test_reed_recommended_tip_matches_cane_reality(alto_reed):
@@ -3687,18 +3695,20 @@ def test_reed_builds_for_all_templates():
         assert sim["kind"] == "reed" and sim["cards"]
         # 既定同士は適合しているはず（テンプレートの整合性テスト）。
         #
-        # **テナーだけは合っていない**（Phase 4-F で測って分かった）—— 帯の前端の
-        # 直後 z=61.9 から踵まで 16mm、リードの縁がテーブルの外にある（最大
-        # +0.72mm）。ここに出てくる 2 つの値の出所が違う: マウスピースの
-        # `body_dia` 30.8 は実物 WindyCity の実測で、リードの `heel_width` 15.4 は
-        # **未実測の代表値**（`descriptor` のテナーは全長も先端幅も出所が無い）。
-        # どちらを動かすかは実物のリードを測ってから決める（`docs/reed-seat.md`）。
+        # **テナーだけは合っていない**（Phase 4-F で測って分かった）—— z=55.8 から
+        # 帯の後端 79.0 まで 23mm、リードの縁がテーブルの外にある（最大 +0.61mm）。
+        # **実物のリードを測っても消えなかった**（2026-09-23。踵幅 15.4 → 15.0 で
+        # 縮んだが、全長が 78.0 → 82.7 に伸びてテーブルの細い所まで届く）。
+        # ここに出てくる 2 つの値の出所はまだ違う: マウスピースの `body_dia` 30.8 は
+        # 実物 WindyCity の実測だが、**テーブルの実幅は 3 サイズとも未実測**で、
+        # リードの幅を測ったのも z≤30 まで。どちらを動かすかは MP のテーブル幅を
+        # 測ってから決める（`docs/reed-seat.md` §「次に測る」）。
         # それまで「合っている」と言い張らずに、食い違いの中身を固定しておく。
         fit = next(c for c in sim["cards"] if c["title"] == "マウスピース適合")
         if tid == "tenor":
             assert fit["status"] == "warn"
             assert "縁がテーブルの外" in fit["advice"]
-            assert "0.72mm" in fit["advice"]
+            assert "0.61mm" in fit["advice"]
         else:
             assert fit["status"] == "ok", fit["advice"]
 
@@ -3742,10 +3752,14 @@ def _tip_rail_gap(rp, pp, m, x_max, samples=40):
 
 
 def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
-    """既定の前縁カーブがマウスピースのティップ輪郭に乗ること。
+    """既定の前縁カーブとマウスピースのティップ輪郭の関係を固定する。
 
-    直線の前縁（`tip_curve_depth = 0`）だと 1.0〜1.2mm 前へ張り出す。これが
-    この パラメータが要る理由なので、両方向を固定する。
+    直線の前縁（`tip_curve_depth = 0`）だと 1.2〜1.7mm 前へ張り出す。これが
+    このパラメータが要る理由なので、両方向を固定する。
+
+    **乗るのはアルトだけ。** ソプラノとテナーは実物のリードの逆算値がモデルの
+    輪郭より深く、円弧では追えない（`docs/reed-seat.md`）。3 サイズとも MP の
+    輪郭そのものは未実測なので、判定は出さず数字だけ見る。
     """
     from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
@@ -3763,14 +3777,15 @@ def test_reed_tip_curve_follows_the_mouthpiece_tip_rail():
             # 実物の逆算値。カードの許容（0.3）には収まり、残差の大半は円弧の限界
             assert abs(gap) < TIP_CONTOUR_TOL, gap
             assert abs(comp._best_curve_depth(p, m)[1]) > TIP_CONTOUR_ARC_RESIDUAL_MM
-        elif tid == "soprano":
-            # 実物の逆算値 2.72 はモデルの輪郭から大きく後退する（＝モデルの MP
-            # 輪郭が浅い疑い）。MP の輪郭を実測して直したらここで気付く。
-            best_d, _ = comp._best_curve_depth(p, m)
-            assert gap > TIP_CONTOUR_TOL, gap
-            assert p["tip_curve_depth"] - best_d > 0.8, best_d
         else:
-            assert abs(gap) < TIP_CONTOUR_ARC_RESIDUAL_MM, tid
+            # ソプラノ（実物の逆算 2.72）とテナー（同 2.93）は、モデルの輪郭から
+            # 後退する。円弧に最も合う深さは 1.70 / 2.30 で、実測より 1.02 / 0.63
+            # 浅い。**テナーは 09-23 にこちら側へ移った** —— 旧既定 1.6 は
+            # 輪郭を借り物のリード幅 14.8 で読んだ値だったので、当然ぴったり
+            # 乗っていた。MP の輪郭を実測して直したらここで気付く。
+            best_d, _ = comp._best_curve_depth(p, m)
+            assert gap > TIP_CONTOUR_TOL, (tid, gap)
+            assert 0.5 < p["tip_curve_depth"] - best_d < 1.2, (tid, best_d)
         # 直線の前縁は角でレールより前へ出る（負＝張り出し）
         assert _tip_rail_gap(rp, flat, m, min(rp.arc_end_x(flat), hw)) \
             < -TIP_STRAIGHT_OVERHANG_MM, tid
@@ -3937,12 +3952,16 @@ def test_reed_nose_is_tangent_up_to_its_wall():
         if wall < tw / 2.0:        # 踵が広がる組: 前縁アークが側面に届かない
             R, _z_t, z_f, _x_t, a_f = rp._nose(out)
             assert math.hypot(a_f - r, z_f - R) - (R - r) > 1e-6, (tw, hw, r, L)
-    # **帯の上限はどの組でも壁の内側**。最小になるのは先端 9.0 × 踵 18.0 × 全長 55 ×
-    # 丸み 2.0 の組。帯（勧める値）の端に立てない組は無い。
+    # **帯の上限が壁を越える組が出た**（帯 2.8 → 3.0、2026-09-23）。壁が最小になるのは
+    # 先端 9.0 × 踵 18.0 × 全長 55 × 丸み 2.0 の隅で、288 通り中 4 通りだけ帯の端に
+    # 立てない（そこでは関係の壁が先に効いて 2.976〜2.985 で止まる）。
+    # **「帯はどの組でも壁の内側」だったのは偶然で、規則ではない** —— 帯は実測、
+    # 壁は関係（Phase 4-E の区別）。
     band = {s.key: s for s in get_registry().get("saxophone")
             .make_component("reed", "alto").param_specs()}["tip_curve_depth"].max
     assert min(walls) == pytest.approx(2.976, abs=5e-4)
-    assert min(walls) > band
+    assert sum(1 for w in walls if w < band) == 4, sorted(walls)[:6]
+    assert min(walls) > 2.8
 
 
 def test_reed_outline_stays_smooth_where_the_iteration_stalled():
@@ -8334,13 +8353,20 @@ def test_dimensions_are_not_nominal_values():
     半径とカット深さから決まり、**z によって変わる**（座中央で 13.98 / 15.14 /
     14.66mm）。`reed_width` が決めているのは窓幅の公称値とリガチャーのタブ幅
     だけで、マウスピースの面を 1 つも決めていない。
+
+    **「同じ値の寸法線が無い」ではなく「動かしても 1 本も動かない」で見る。**
+    値で見ていたら 2026-09-23 に偶然で落ちた —— テナーの `reed_width` を実測の
+    17.0 にしたら、ボア径 17.0（テノン 15.0 ＋ 2×コルク 1.1 − 締め代 0.2）と
+    たまたま一致した。**偶然の一致と導出の一致は値では分けられない。**
     """
     want = {"soprano": 13.9835, "alto": 15.1423, "tenor": 14.6565}
     for tid in SIZES:
         comp, p = _dim_component("mouthpiece", tid)
         dims = comp.dimensions(p)
-        assert not any(x["value"] == pytest.approx(p["reed_width"], abs=1e-9)
-                       for x in dims), tid
+        moved = comp.dimensions({**p, "reed_width": p["reed_width"] + 1.0})
+        assert [x["key"] for x in moved] == [x["key"] for x in dims], tid
+        for a, b in zip(dims, moved):
+            assert a["value"] == pytest.approx(b["value"], abs=1e-9), (tid, a["key"])
         s0, s1 = profiles.ligature_seat_range(p)
         d = next(x for x in dims if x["key"] == "table_flat_width")
         assert d["value"] == pytest.approx(
@@ -8750,13 +8776,25 @@ def test_how_many_holes_fit_in_two_hands():
 #: **ソプラノは実物のリード #2 と、実物の窓へ合わせた `side_rail_width` 1.55 の値**
 #: （2026-09-22）。旧値 (−0.19, −0.13, +3.00) の負は半分が窓の側だった。最小点
 #: z=1.7 は深い先端カーブ（2.72）のせいで、**実物の窓幅を測っていない区間**（実測は
-#: z=5 から）。テナーは借り物のまま（判定は参考、`reed_seat.cover_row`）。
+#: z=5 から）。
+#: **テナーは実物のリード #2 の値**（2026-09-23）。旧値 (−0.64, +0.72, None) の窓の
+#: かかり代の負は、規格リード先端幅の借り物 14.8 のせいだった（実物 17.0）——
+#: 窓の側は動かしていない（測った 2 本がどちらもテンプレートの基準ではない）。
+#: **締める区間のはみ出しはテナーだけ残る**（+0.61、z=55.8〜79.0）。
+#: 全長が 78.0 → 82.7 になってテーブルカットの消える 81.59 を越えたので、
+#: 帯より後ろの参考値が弦の潰れる区間を拾って +7.51 になる（`beyond_table_mm` 1.11）。
 _F_SEAT = {
     #          窓のかかり代 min   窓終端〜帯後端 はみ出し max   帯後端〜踵（参考）
     "soprano": (+0.12,            -0.54,                        +2.55),
     "alto":    (+0.58,            -0.22,                        +0.49),
-    "tenor":   (-0.64,            +0.72,                        None),
+    "tenor":   (+0.39,            +0.61,                        +7.51),
 }
+
+#: ティップレール区間（窓より前）で出る**偽のはみ出し**の最大 [mm]。先端の面取りで
+#: 胴が細るぶんで、ここを判定に入れてはいけない理由そのもの。**サイズで 2 倍以上違う**
+#: （ソプラノは先端カーブが深く鼻が引っ込むので 0.40、アルトは 0.97）ので、
+#: 「3 サイズとも 0.9 以上」のような 1 つの数では書けない。
+_F_NOSE_OVER_MM = {"soprano": 0.40, "alto": 0.97, "tenor": 0.80}
 
 
 def _seat(size):
@@ -8815,8 +8853,8 @@ def test_the_reed_seat_is_measured_over_the_whole_length_not_at_one_point():
     """**「載る」は 1 点では決まらないこと**（Phase 4-F）。
 
     `set_check` は帯の中央 1 点で幅を比べていた。その 1 点はテナーで
-    「軽微」を返すが、実際は帯の前端の直後から踵まで **16mm ぜんぶ**
-    リードの縁がテーブルの外にある。
+    「軽微」を返すが、実際は z=55.8 から帯の後端 79.0 まで **23mm ぜんぶ**
+    リードの縁がテーブルの外にある（実物のリードを入れた 2026-09-23 でも残った）。
     """
     from saxsketch.instruments.saxophone.components import reed_seat as rs
     for size in SIZES:
@@ -8839,13 +8877,17 @@ def test_the_reed_seat_is_measured_over_the_whole_length_not_at_one_point():
     # そして最悪点は帯の中にある（＝「後ろだから無害」では済まない）
     assert band0 <= s["table"]["z"] <= band1
 
-    # 窓より前（ティップレール）は判定に入れない。入れると先端の面取りで
-    # 胴が細るぶん、3 サイズとも +0.9mm 以上の偽のはみ出しが出る。
-    prof = rs.seat_profile(m, r)
-    nose = [d for d in prof if d["band"] == rs.NOSE]
-    assert nose and max(d["over"] for d in nose) > 0.9
-    assert max(d["z"] for d in nose) < min(d["z"] for d in prof
-                                           if d["band"] == rs.WINDOW)
+    # 窓より前（ティップレール）は判定に入れない。入れると先端の面取りで胴が細るぶん、
+    # 3 サイズとも偽のはみ出しが出る（量はサイズで 2 倍以上違う。`_F_NOSE_OVER_MM`）。
+    for size in SIZES:
+        m, r, _s = _seat(size)
+        prof = rs.seat_profile(m, r)
+        nose = [d for d in prof if d["band"] == rs.NOSE]
+        assert nose, size
+        assert max(d["over"] for d in nose) == pytest.approx(
+            _F_NOSE_OVER_MM[size], abs=0.05), size
+        assert max(d["z"] for d in nose) < min(d["z"] for d in prof
+                                               if d["band"] == rs.WINDOW), size
 
 
 def test_the_harmless_overhang_is_the_one_behind_the_band():
@@ -8854,17 +8896,36 @@ def test_the_harmless_overhang_is_the_one_behind_the_band():
     後方へはみ出しても締めないので害が無い。同じリード・同じマウスピースでも、
     リガチャーの座が前へ寄れば同じはみ出しが「締める区間で浮く」に変わる。
     区間の切り方は `reed_seat` の 1 か所だけが持っている。
+
+    **動いた区間の同じ z どうしで比べる形にした。** 以前は最悪点 1 つの符号で
+    書いていたが、テナーのリードを実測して（2026-09-23、全長 78.0 → 82.7・
+    踵幅 15.4 → 15.0）2 つ崩れた: 帯より前でも縁がテーブルの外へ出るようになり、
+    踵がテーブルカットの消える 81.59 を越えたので後方の最悪点が**弦の潰れる区間**へ
+    移った。主張は符号でも最悪点でもなく**区間**なので、そこを直接見る。
     """
     from saxsketch.instruments.saxophone.components import reed_seat as rs
     m = _template_params("mouthpiece", "tenor")
     r = _template_params("reed", "tenor")
 
-    late = rs.seat_summary(m, r, seat_end=79.0)      # 座が踵まで伸びている
-    early = rs.seat_summary(m, r, seat_end=61.0)     # 座が前寄り
-    assert late["table"]["mm"] > 0.5 and late["tail"] is None
-    assert early["tail"] is not None
-    assert early["tail"]["mm"] == pytest.approx(late["table"]["mm"], abs=1e-9)
-    assert early["table"]["mm"] < 0.0                # 締める区間は浮いていない
+    late = rs.seat_profile(m, r, seat_end=79.0)      # 座が踵まで伸びている
+    early = rs.seat_profile(m, r, seat_end=61.0)     # 座が前寄り
+    moved = {d["z"]: d["over"] for d in late
+             if d["band"] == rs.TABLE and d["z"] > 61.0}
+    assert moved
+
+    # 座を 18mm 前へ寄せるだけで、同じ z が「締める区間」から「帯より後ろ」へ移る。
+    # 幅は 1 つも変わらない。
+    for d in early:
+        if d["z"] in moved:
+            assert d["band"] == rs.TAIL, d
+            assert d["over"] == pytest.approx(moved[d["z"]], abs=1e-12)
+
+    # 量は同じなのに、判定に入るか参考かが入れ替わる
+    worst = max(moved.values())
+    assert worst > 0.5
+    assert rs.seat_summary(m, r, seat_end=79.0)["table"]["mm"] == pytest.approx(
+        worst, abs=1e-12)
+    assert max(d["over"] for d in early if d["band"] == rs.TABLE) < worst - 0.4
 
 
 def test_the_ligature_tab_is_cut_for_the_reed_not_for_a_nominal():
@@ -9060,31 +9121,204 @@ def test_the_soprano_window_was_fit_to_its_base_mouthpiece():
     assert m["cork_depth"] == pytest.approx(t["in_tune_mm"], abs=0.05), t
 
 
+#: テナーの基準マウスピース（WindyCity ＝ テンプレートの校正基準）の窓の実開口 [mm]。
+#: **ノギスではなくメッシュのスキャン**（`cad/windycity`）なので z が丸くない。
+#: 実物が手元に無いので 2026-09-23 の採寸では測れなかった。
+TENOR_BASE_WINDOW_MM = {5.1: 16.00, 14.1: 14.90, 38.1: 11.40}
+
+#: 2026-09-23 に測った 2 本の窓の実開口 [mm]。**どちらも基準ではない**。
+#: 記録の正本は `cad/inspection/inspection_values.py` の `WINDOW_WIDTH_AT_Z["tenor"]`。
+TENOR_SURVEYED_WINDOW_MM = {
+    "jody":     {5.0: 15.55, 10.0: 15.10, 20.0: 14.60, 30.0: 14.10},
+    "lebayle8": {5.0: 15.70, 10.0: 15.00, 20.0: 14.40, 30.0: 13.50},
+}
+
+
+def _inspection_values():
+    """`cad/inspection/inspection_values.py` を読み込む（`_sweeper` と同じく直読み）。
+
+    実測値の正本はこのファイルだけなので、テストも**写さずにここから読む**。
+    """
+    import importlib.util
+    path = (Path(__file__).resolve().parents[1] / "cad" / "inspection"
+            / "inspection_values.py")
+    spec = importlib.util.spec_from_file_location("inspection_values_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_tenor_window_was_left_alone_because_its_reference_was_not_measured():
+    """**窓の法則を実物へ合わせてよいのは、相手が基準個体のときだけ**（2026-09-23）。
+
+    ソプラノは比べた相手がテンプレートの校正基準そのもの（刻印 4）だったので
+    `side_rail_width` を 0.89 → 1.55 に動かせた。テナーで測れた 2 本はどちらも
+    基準ではない（基準は WindyCity）。モデルの法則は**その WindyCity のスキャン**と
+    ±0.2mm で合っていて、2 本との差は 3 倍以上あり、しかも z で符号が変わる
+    ＝一様なずれではない。だから**法則の誤差ではなく個体差**として読む。
+    どのサイズに基準があるかは `inspection_values.MP_TEMPLATE_REF` の 1 か所。
+    """
+    m = _template_params("mouthpiece", "tenor")
+    assert m["side_rail_width"] == pytest.approx(1.1)
+    with profiles.params_scope(m):
+        base = [2.0 * profiles.window_open_half_width(m, z) - w
+                for z, w in TENOR_BASE_WINDOW_MM.items()]
+        surveyed = {k: [2.0 * profiles.window_open_half_width(m, z) - w
+                        for z, w in v.items()]
+                    for k, v in TENOR_SURVEYED_WINDOW_MM.items()}
+    assert max(abs(d) for d in base) < 0.2, base
+    for k, dev in surveyed.items():
+        assert max(abs(d) for d in dev) > 3.0 * max(abs(d) for d in base), (k, dev)
+        assert min(dev) < 0.0 < max(dev), (k, dev)
+
+    iv = _inspection_values()
+    assert iv.MP_TEMPLATE_REF["tenor"] is None
+    assert iv.MP_TEMPLATE_REF["soprano"] == "hr4"
+    # 実測の正本とテストの写しが一致している（数字を 2 か所で持っていない）
+    assert iv.WINDOW_WIDTH_AT_Z["tenor"] == TENOR_SURVEYED_WINDOW_MM
+
+
+def test_the_model_table_end_sits_inside_the_light_test_bracket():
+    """**テーブル終端を挟んだのは所見だった**（2026-09-23）。
+
+    ソプラノでは刻印 4 のテーブル平坦部の終端を実測できた（60.2、モデル 60.0）が、
+    テナーにはその実測が無い。代わりに「リードの踵がはみ出すか」の所見が挟む ——
+    Jody Jazz では全長 81.05 / 81.2 の 2 本が「ほとんどはみ出さない」、82.6 / 82.7 の
+    3 本が「はみ出す」。**全長の順と所見の順が一致している**ことも合わせて見る。
+    """
+    m = _template_params("mouthpiece", "tenor")
+    iv = _inspection_values()
+    lengths = {r["id"]: r["reed_length"] for r in iv.REED_SURVEY["tenor"]}
+    flush, over = ("#1", "#3"), ("#2", "#4", "#5")          # Jody Jazz の所見
+    assert max(lengths[i] for i in flush) < min(lengths[i] for i in over)
+    end = profiles.table_cut_end_z(m)
+    assert max(lengths[i] for i in flush) < end < min(lengths[i] for i in over), end
+
+
+def test_the_mp_tip_contour_was_read_at_the_wrong_reed_width():
+    """**「モデルの輪郭は浅すぎる」の 1mm 以上は、読む x が違ったせいだった**（09-23）。
+
+    輪郭 `profiles.tip_contour_z` は x で急に落ちるので、**幅を 1〜2mm 間違えると
+    深さが 0.8〜2.3mm 動く**。3 サイズとも規格リード先端幅が借り物（12.9 / 13.4 /
+    14.8）で、そこで読むと実物のどのリードより 1.1mm 以上浅い ——
+    テナーの既定 `tip_curve_depth` 1.6 は、この読み（1.57）を 0.1 刻みに丸めた値
+    だった（`templates/tenor.json` の旧 `reed_note` の 1.569）。
+
+    **実物の先端幅の角で読み直すと、アルトとテナーは実測を挟む**（個体ごとの
+    残差が正負に散る）。**ソプラノだけは 5 本とも浅いまま**（−0.07〜−0.65）なので、
+    疑いは消えたのではなく 1 サイズに縮んだ。輪郭そのものは 3 サイズとも未実測
+    なので、判定の分岐は動かさない。
+
+    比べているのはどちらも**中央からの落ち込み**（実測は直定規を側面のまっすぐに
+    なる所へ渡して中央との隙間、モデルは `tip_contour_z(x) − tip_contour_z(0)`）。
+    """
+    borrowed = {"soprano": 12.9, "alto": 13.4, "tenor": 14.8}
+    straddles = {"alto", "tenor"}
+    for size, rows in _measured_reed_outlines().items():
+        m = _template_params("mouthpiece", size)
+        with profiles.params_scope(m):
+            z0 = profiles.tip_contour_z(m, 0.0)
+            res = [profiles.tip_contour_z(m, tw / 2.0) - z0 - z
+                   for tw, _, _, z in rows]
+            old_res = [profiles.tip_contour_z(m, borrowed[size] / 2.0) - z0 - z
+                       for _, _, _, z in rows]
+        # 借り物の幅で読むと、実物 5 本のどれよりも 1.1mm 以上浅い
+        assert max(old_res) < -1.1, (size, old_res)
+        if size in straddles:
+            assert min(res) < 0.0 < max(res), (size, res)
+        else:
+            assert max(res) < 0.0 and min(res) > -0.7, (size, res)
+        # x を直すだけで 0.8〜2.3mm 説明が付く
+        assert min(r - o for r, o in zip(res, old_res)) > 0.8, (size, res, old_res)
+    # 判定の分岐は動いていない（MP 側は 3 サイズとも未実測のまま）
+    from saxsketch.instruments.saxophone.components import reference_check
+    for size in SIZES:
+        assert not reference_check.mp_tip_contour_is_measured(_size_info(size))
+
+
+def test_the_tenor_reed_is_soft_because_its_vamp_was_ten_millimetres_short():
+    """**実測を入れて硬さカードが ok から warn に落ちた**（2026-09-23）。
+
+    未実測のヴァンプ長 35.0 は実物 5 本（43.2〜46.6）より 10mm 近く短かった。
+    ヴァンプは硬さの最強レバーなので、その差がそのまま出る。**値のほうを
+    合わせて隠さない**（ユーザー決定）—— PLA で実寸のテナーリードを刷ると
+    こうなる、という事実をカードが言うほうが正しい。
+
+    先端厚はいちばん弱いレバーなので、可動域の端 0.90 まで上げても 3 番に届かない
+    （`recommended_tip_limit` が立つ）。届かせるなら材料を替える。
+    """
+    from saxsketch.acoustics import reed_model
+    comp = get_registry().get("saxophone").make_component("reed", "tenor")
+    m = _template_params("mouthpiece", "tenor")
+    comp.set_refs({"mouthpiece": {"params": m}})
+    r = _template_params("reed", "tenor")
+    assert r["vamp_length"] == pytest.approx(44.9)
+
+    now = reed_model.reed_properties(r, comp.ref_params())
+    before = reed_model.reed_properties(dict(r, vamp_length=35.0), comp.ref_params())
+    assert now["strength_equiv"] == pytest.approx(1.42, abs=0.02)
+    assert before["strength_equiv"] == pytest.approx(2.84, abs=0.02)
+
+    card = next(c for c in comp._cards(r) if c["title"] == "硬さ・剛性")
+    assert card["status"] == "warn"
+    assert "柔らかすぎ" in card["advice"]
+    # 先端厚は可動域の端でも 3 番に届かない。材料なら届く
+    assert now["recommended_tip_mm"] is None
+    end, reach = now["recommended_tip_limit"]
+    assert end == pytest.approx(reed_model.TIP_THICKNESS_RANGE[1]) and reach < 3.0
+    cane = reed_model.reed_properties(dict(r, material="cane"), comp.ref_params())
+    assert cane["strength_equiv"] > 3.0
+
+
+def _measured_reed_outlines():
+    """実物のリード 15 本の (先端幅, 踵幅, 全長, 側面がまっすぐになる所) [mm]。
+
+    **写さずに `cad/inspection/inspection_values.py` から読む**（実測値の正本は
+    あのファイルだけ、という `cad/inspection/README.md` の規則）。アルト
+    2026-09-21 / ソプラノ 09-22 / テナー 09-23 に各 5 本。先端カーブの逆算は
+    この 3 つと `tip_corner_r`（サイズごと）に依るので、組で持つ。
+    """
+    return {size: tuple((r["tip_width"], r["heel_width"], r["reed_length"],
+                         r["tip_full_width_z"]) for r in rows)
+            for size, rows in _inspection_values().REED_SURVEY.items()}
+
+
 def test_every_measured_reed_fits_inside_the_tip_curve_wall():
-    """**先端カーブの壁は実物のリードを 1 本も締め出さない**（2026-09-22）。
+    """**先端カーブの壁も帯も、実物のリードを 1 本も締め出さない**（2026-09-23）。
 
     以前の上限 2.5 には出所が無く、実物 10 本の逆算 1.91〜2.72 のうち 6 本
     （アルト 2・ソプラノ 4）を締め出していた。ソプラノの採寸で「側面が
     まっすぐになる所」3.0 を入れると 2.72 に逆算され、壁で黙って 2.5 に
-    丸まるところだった。
+    丸まるところだった。**テナーを測ると同じことが 2.8 で起きた**（逆算
+    2.756〜2.932 で 5 本中 3 本が越える）ので 3.0 へ広げた。
 
-    2026-09-23 に壁は関係（前縁の円弧が側面に届く深さ）になり、2.8 は帯として
-    残った。**実物は帯にも入る**ことを両方で見る。
+    2026-09-23 に壁は関係（前縁の円弧が側面に届く深さ）になり、上限は帯として
+    残った。**実物は帯にも壁にも入る**ことを両方で見る。
     """
     from saxsketch.core.schema import ParamSet
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
-    comp = get_registry().get("saxophone").make_component("reed", "soprano")
-    p = _template_params("reed", "soprano")
-    sp = {s.key: s for s in comp.param_specs()}["tip_curve_depth"]
-    # ソプラノ 5 本（先端幅・踵幅・全長ごと）の「側面がまっすぐになる所」
-    for tw, hw, L, z in ((14.1, 13.1, 61.95, 3.0), (14.0, 12.6, 59.1, 3.0),
-                         (14.15, 12.8, 59.8, 2.9), (13.9, 12.55, 59.0, 2.9),
-                         (14.15, 13.1, 58.3, 2.8)):
-        q = dict(p, tip_width=tw, heel_width=hw, reed_length=L)
-        d = rp.curve_depth_for_full_width_z(q, z)
-        wall = comp.param_bounds(dict(q, tip_curve_depth=d))["tip_curve_depth"]["hi"]
-        assert sp.min <= d <= sp.max and d <= wall, (tw, z, d, wall)
+    reg = get_registry().get("saxophone")
+    depths = []
+    for size, rows in _measured_reed_outlines().items():
+        comp = reg.make_component("reed", size)
+        p = _template_params("reed", size)
+        sp = {s.key: s for s in comp.param_specs()}["tip_curve_depth"]
+        for tw, hw, L, z in rows:
+            q = dict(p, tip_width=tw, heel_width=hw, reed_length=L)
+            d = rp.curve_depth_for_full_width_z(q, z)
+            wall = comp.param_bounds(
+                dict(q, tip_curve_depth=d))["tip_curve_depth"]["hi"]
+            assert sp.min <= d <= sp.max and d <= wall, (size, tw, z, d, wall)
+            depths.append(d)
+            # 実物は 15 本とも踵が狭まる側なので、壁は先端幅の半分（半円）
+            assert wall == pytest.approx(tw / 2.0, abs=1e-9), (size, tw, wall)
+    # 帯の上限 3.0 は最大 2.932 を入れるぶん。2.8 のままだと 3 本こぼれる
+    assert max(depths) == pytest.approx(2.932, abs=0.002), max(depths)
+    assert sum(1 for d in depths if d > 2.8) == 3
+
     # 採寸フォーム → 逆算 → 取り込みで丸まらない
+    comp = reg.make_component("reed", "soprano")
+    p = _template_params("reed", "soprano")
     got = comp.survey_params({comp.SURVEY_TIP_KEY: 3.0}, p)
     ps = ParamSet(comp.param_specs(), dict(p, **got), bounds_provider=comp.param_bounds)
     assert ps.adjustments == []
@@ -9129,8 +9363,14 @@ def test_the_window_cover_is_judged_only_where_the_reed_was_measured():
     未実測の規格リード幅**の比較だった。アルトで両方を測ると 16 組すべて
     +0.40〜+1.33、光の試験も 10 組すべて縁がレールの上。ソプラノも翌日測って
     12 組すべて +0.90〜+2.12（窓の法則も実物へ合わせてから判定へ上げた）。
-    テナーは同じ出所の借り物のままなので参考のまま。判定は `reed_seat.cover_row` の
-    1 か所で、3 枚のカード（MP の「載るか」・リードの適合・セット）が同じ行を出す。
+    **テナーも 09-23 に測って 16 組すべて +0.50〜+1.45**（窓は動かしていない ——
+    測った 2 本がどちらもテンプレートの基準ではない）。判定は
+    `reed_seat.cover_row` の 1 か所で、3 枚のカード（MP の「載るか」・リードの適合・
+    セット）が同じ行を出す。
+
+    **3 サイズとも実測になっても分岐は消さない** —— 新しいサイズを足したときに、
+    また借り物の 1 点で判定を出さないため。域を外した偽の `size_info` で、
+    分岐が生きていることを見る。
     """
     from saxsketch.instruments.saxophone.components import reed_seat as rs
     reg = get_registry().get("saxophone")
@@ -9140,11 +9380,11 @@ def test_the_window_cover_is_judged_only_where_the_reed_was_measured():
         cover = rs.cover_row(s["window"], si)
         mp_card = rs.seat_card(m, r, si)
         assert cover["row"] in mp_card["rows"], size
-        if size in ("alto", "soprano"):
-            assert cover["verdict"] == "一致" and s["window"]["mm"] > 0.0, size
-        else:
-            assert cover["verdict"] is None, size
-            assert "未実測" in cover["row"][1], size
+        assert cover["verdict"] == "一致" and s["window"]["mm"] > 0.0, size
+        # 域を落とすと参考へ戻る（分岐は生きている）
+        bare = {k: v for k, v in si.items() if k != "reed_tip_width_range_mm"}
+        back = rs.cover_row(s["window"], bare)
+        assert back["verdict"] is None and "未実測" in back["row"][1], size
 
     # 同じ判定幅ではみ出しと対称（新しい数字を作っていない）
     si = reg.make_component("reed", "alto").size_info
@@ -9294,7 +9534,7 @@ def test_the_tip_curve_wall_reaches_the_browser():
     assert proj["bounds"]["tip_curve_depth"] == {"hi": pytest.approx(8.2),
                                                  "hi_by": "先端幅"}
     spec = next(s for s in proj["schema"] if s["key"] == "tip_curve_depth")
-    assert (spec["max"], spec["hard_max"]) == (pytest.approx(2.8), pytest.approx(9.0))
+    assert (spec["max"], spec["hard_max"]) == (pytest.approx(3.0), pytest.approx(9.0))
 
     r = c.put("/api/project/params", json={"params": {
         "tip_width": 9.0, "heel_width": 18.0, "reed_length": 55.0}}).json()
