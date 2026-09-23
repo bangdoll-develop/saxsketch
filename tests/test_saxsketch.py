@@ -9099,7 +9099,7 @@ def test_the_soprano_window_was_fit_to_its_base_mouthpiece():
     刻印 4 より z=5/10/20 で一様に 1.28 / 1.35 / 1.33 広かった。窓の区間では
     `side_rail_width` の重みが 1 なので、一様なずれはこの 1 本で消える（片側の
     平均 0.66 を足して 1.55）。**レールの実幅ではない**（窓幅だけでは「レールが
-    太い」と「空洞が狭い」を分けられない。`survey_sheet.py` の 3 枚目）。
+    太い」と「空洞が狭い」を分けられない。`survey_sheet.py` の外形ページ）。
 
     かかり代の負の半分はこちらだった: z=5 の外れ 1.17 のうち窓 0.64・リード 0.53。
     """
@@ -9148,15 +9148,18 @@ def _inspection_values():
     return mod
 
 
-def test_the_tenor_window_was_left_alone_because_its_reference_was_not_measured():
+def test_the_tenor_window_was_left_alone_because_its_reference_cannot_be_measured():
     """**窓の法則を実物へ合わせてよいのは、相手が基準個体のときだけ**（2026-09-23）。
 
     ソプラノは比べた相手がテンプレートの校正基準そのもの（刻印 4）だったので
     `side_rail_width` を 0.89 → 1.55 に動かせた。テナーで測れた 2 本はどちらも
-    基準ではない（基準は WindyCity）。モデルの法則は**その WindyCity のスキャン**と
-    ±0.2mm で合っていて、2 本との差は 3 倍以上あり、しかも z で符号が変わる
-    ＝一様なずれではない。だから**法則の誤差ではなく個体差**として読む。
-    どのサイズに基準があるかは `inspection_values.MP_TEMPLATE_REF` の 1 か所。
+    基準ではない。モデルの法則は**基準 WindyCity の配布 3mf**と ±0.2mm で合って
+    いて、2 本との差は 3 倍以上あり、しかも z で符号が変わる＝一様なずれではない。
+    だから**法則の誤差ではなく個体差**として読む。
+
+    **これは「まだ測っていない」ではなく「測れない」** —— その基準は物として
+    存在しないので、あとから埋めることができない
+    （`inspection_values.MP_TEMPLATE_REF` の 1 か所）。
     """
     m = _template_params("mouthpiece", "tenor")
     assert m["side_rail_width"] == pytest.approx(1.1)
@@ -9176,6 +9179,126 @@ def test_the_tenor_window_was_left_alone_because_its_reference_was_not_measured(
     assert iv.MP_TEMPLATE_REF["soprano"] == "hr4"
     # 実測の正本とテストの写しが一致している（数字を 2 か所で持っていない）
     assert iv.WINDOW_WIDTH_AT_Z["tenor"] == TENOR_SURVEYED_WINDOW_MM
+
+
+def _survey_sheet():
+    """`cad/inspection/survey_sheet.py` を読み込む（`_inspection_values` と同じ直読み）。
+
+    **測る場所を決める法則はこのファイルにしか無い**ので、テストも写さずに引く。
+    """
+    import importlib.util
+    path = (Path(__file__).resolve().parents[1] / "cad" / "inspection"
+            / "survey_sheet.py")
+    spec = importlib.util.spec_from_file_location("survey_sheet_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_survey_sheet_asks_for_widths_only_where_a_jaw_fits():
+    """**測る z は法則から決まる**（採寸シート、2026-09-23 に 4 点 → 10 点）。
+
+    候補を増やしたのは「モデルと実物の差が一様か、窓の形の誤りか」を 4 点では
+    分けられなかったから。増やしてよいかどうかは**サイズごとの窓の長さ**が決める
+    ので、`z_grid` は候補を窓の縁からマージンぶん内側へ絞る —— ジョウが窓の縁に
+    乗ると幅が読めない。**3 サイズとも空にならない**ことと、返った z が全部窓の
+    内側にあることを見る（短いソプラノが黙って 0 行になるのがいちばん困る）。
+    """
+    ss = _survey_sheet()
+    seen = {}
+    for size in ("soprano", "alto", "tenor"):
+        m = _template_params("mouthpiece", size)
+        with profiles.params_scope(m):
+            lo = profiles.window_open_z(m) + ss.Z_MARGIN_FRONT
+            hi = profiles.window_end_z(m) - ss.Z_MARGIN_REAR
+            zs = ss.z_grid(m)
+        assert len(zs) >= 6, (size, zs)          # 4 点では足りないのが出発点
+        assert all(lo < z < hi for z in zs), (size, zs, lo, hi)
+        assert zs == sorted(set(zs)), (size, zs)
+        seen[size] = zs
+    # 窓が長いサイズほど行が多い。**同じ候補表から出ている**ことの確認でもある。
+    assert len(seen["soprano"]) < len(seen["alto"]) < len(seen["tenor"]), seen
+
+
+def test_the_sheet_never_asks_for_the_same_width_twice():
+    """**同じ量を 2 か所で測らせない**（採寸シート、2026-09-23）。
+
+    マウスピース外形のページでも窓幅を測る欄があるが、それは**節 B の格子に
+    入らない z だけ**（かかり代が最小になる z≲2 は窓の縁に近すぎて節 B に入らない）。
+    候補を 4 点から 10 点へ増やしたとき、この差分を手で書いていたら z=3 が
+    両方に出るところだった —— だから `window_extra_z` は差分を計算で出す。
+    """
+    ss = _survey_sheet()
+    for size in ss.MP_SHAPE_SIZES:
+        m = _template_params("mouthpiece", size)
+        with profiles.params_scope(m):
+            grid, extra = set(ss.z_grid(m)), set(ss.window_extra_z(m))
+        assert not (grid & extra), (size, sorted(grid & extra))
+        assert extra <= set(ss.FACE_Z), (size, sorted(extra - set(ss.FACE_Z)))
+        # 節 B が拾えない前側が残っていること（ここが空になったら欄ごと消せる）
+        assert extra, size
+        assert max(extra) < min(grid), (size, sorted(extra), sorted(grid))
+
+
+def test_the_table_width_is_the_only_claim_with_nothing_to_check_it():
+    """**帯の区間だけ、外から確かめている実測が 1 つも無い**（2026-09-23）。
+
+    `reed_seat` は「窓の終端 〜 リガチャー座の後端」で縁がテーブルの外に出れば
+    害があると決めている。テナーの既定はそこで +0.61mm はみ出すと言うが、実物の
+    リード幅を測ったのは z≤30 まで、光にかざす試験が見ているのは窓の区間だけ、
+    マウスピースのテーブル実幅は 3 サイズとも未測。**だから採寸シートの節 C が
+    要る。** ここでは (a) 正本がまだ空であること、(b) 測る点が帯の内側にあること、
+    (c) **モデルが 3 サイズで違うことを言っている**こと —— テナーだけ途中で符号が
+    正へ変わり、ソプラノ・アルトは帯の中で終始負 —— を押さえる。
+    """
+    from saxsketch.instruments.saxophone.components import reed_profiles as rp
+    from saxsketch.instruments.saxophone.components import reed_seat as rs
+    ss, iv = _survey_sheet(), _inspection_values()
+    assert iv.TABLE_WIDTH_AT_Z == {}, "測ったら reed_seat の判定も上げること"
+
+    sign = {}
+    for size in ("soprano", "alto", "tenor"):
+        m = _template_params("mouthpiece", size)
+        r = _template_params("reed", size)
+        with profiles.params_scope(m):
+            lo, hi = profiles.window_end_z(m), rs.default_seat_end(m)
+            zs = ss.table_z_grid(m)
+            over = [(rp.width(r, z) - profiles.reed_chord(m, z)) / 2.0 for z in zs]
+        assert len(zs) == ss.TABLE_Z_COUNT, (size, zs)
+        assert all(lo < z < hi for z in zs), (size, zs, lo, hi)
+        sign[size] = (over[0], over[-1])
+    assert sign["tenor"][0] < 0.0 < sign["tenor"][-1], sign      # 途中で外へ出る
+    assert max(sign["soprano"]) < 0.0 and max(sign["alto"]) < 0.0, sign
+
+
+def test_the_reed_seat_report_survives_a_z_measured_on_only_one_side(capsys):
+    """**窓を 10 点、リードを 4 点測った日に落ちないこと**（2026-09-23）。
+
+    採寸シートの窓の候補を増やしたので、`WINDOW_WIDTH_AT_Z` と `REED_WIDTH_AT_Z`
+    の z が揃わなくなる。揃っていると決めて添字を引くと `KeyError` で落ちる ——
+    **かかり代が出せるのは両方ある z だけ**なので、そこだけ落として表は出す。
+    """
+    iv = _inspection_values()
+    iv.WINDOW_WIDTH_AT_Z["tenor"]["jody"][8.0] = 15.30          # 窓だけ 1 点増やす
+    iv.reed_seat_report(get_registry().get("saxophone"), "tenor")
+    out = capsys.readouterr().out
+    assert "z=8" not in out.split("かかり代")[1], out            # かかり代からは落ちる
+    assert "15.30" in out                                        # 窓の表には出る
+    assert "16 組すべて" in out                                  # 組数は変わらない
+
+
+def test_every_calibration_reference_is_an_individual_we_can_measure():
+    """**基準は「手元にあって測り直せる個体」**（2026-09-23）。
+
+    `MP_TEMPLATE_REF` に載る値は `MP_SURVEY` で採寸した個体の名前でなければ
+    ならない。テナーが `None` なのは測り忘れではなく、基準 WindyCity が配布 3mf で
+    **物が存在しない**から —— あとから測って埋めることはできない。
+    """
+    iv = _inspection_values()
+    assert set(iv.MP_TEMPLATE_REF) == set(iv.MP_SURVEY)
+    for size, key in iv.MP_TEMPLATE_REF.items():
+        assert key is None or key in iv.MP_SURVEY[size], (size, key)
+    assert iv.MP_TEMPLATE_REF["tenor"] is None
 
 
 def test_the_model_table_end_sits_inside_the_light_test_bracket():

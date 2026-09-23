@@ -1,8 +1,19 @@
 # 実物準拠マウスピース ベース形状（SaxSketch 新ベース）
 
 SaxSketch のマウスピース ベース形状を、実在のマウスピース
-**WindyCity Tenor .100" Long Shank**（`WindyCity-Tenor-72-100-LS.3mf`）の実測から
-起こし直した。ここにあるのは「実測 → 構成式化 → 検証」の一式。
+**WindyCity Tenor .100" Long Shank** の**配布 3mf**
+（`WindyCity-Tenor-72-100-LS.3mf`）の実測から起こし直した。
+ここにあるのは「実測 → 構成式化 → 検証」の一式。
+
+**この README で「実物」と呼んでいるのは、この 3mf のメッシュのこと。**
+物としてのマウスピースは手元に無い（2026-09-23 に確認）——
+入口は `align_reference.py` の `SRC_DEFAULT` 1 か所で、そこにあるのは
+ダウンロードしたファイルのパスである。だから**基準は孤児ではない**
+（ファイルは残っていて、いつでも同じ整列・同じ実測をやり直せる）が、
+**ノギスを当てられる個体は無い** —— 手元の実物で測り直したくなったときに
+突き合わせられる相手が居ない、という限界がここにある。
+実際 `docs/reed-seat.md` の「テナーの窓の法則を実物で確かめる」は
+この理由で行き止まりになった（`inspection_values.MP_TEMPLATE_REF`）。
 
 形状定義そのものは `saxsketch/instruments/saxophone/components/profiles.py` にある
 （このフォルダは実測・検証・目視確認のための道具）。
