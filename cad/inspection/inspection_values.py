@@ -109,8 +109,10 @@ BORE_RATIO_SOPRANO, BORE_RATIO_TENOR = 0.5364, 0.5349
 
 #: ---- リードが載るか（Phase 4-F）の採寸。ノギス、`survey_sheet.html` の各サイズ 2 枚。
 #: 報告は Excel（`survey_sheet_result_<size>.xlsx`）。**サイズごとに持つ**（アルト
-#: 2026-09-21、ソプラノ 2026-09-22）。アルトの報告は `reed_length` を `read_length` と
-#: 誤記していたので読み替えてある。
+#: 2026-09-21、ソプラノ 2026-09-22、テナー 2026-09-23）。アルトの報告は `reed_length` を
+#: `read_length` と誤記していたので読み替えてある。テナーの報告は節 0 の銘柄欄が #1 しか
+#: 埋まっておらず、#4 の踵中央厚が 2.55（他の 4 本は 3.55〜3.75）だったので、どちらも
+#: 実測者に確かめて追記・訂正してもらった（3.55 が正）。
 
 #: リード 5 本ずつ。欄名は採寸フォームと同じ。**先端カーブは「側面がまっすぐになる所」まで
 #: 測った値**（実測者に確認）で、パラメータ `tip_curve_depth`（丸みを無視した見かけの
@@ -173,14 +175,44 @@ REED_SURVEY: dict[str, list[dict]] = {
          "tip_thickness": 0.20, "heel_thickness": 2.35, "heel_edge_thickness": 1.00,
          "vamp_length": 30.7, "tip_full_width_z": 2.8},
     ],
+    "tenor": [
+        {"id": "#1", "brand": "Forestone HINOKI", "cut": "unfiled",
+         "material": "樹脂", "strength": "Medium",
+         "reed_length": 81.2, "tip_width": 16.8, "heel_width": 14.8,
+         "tip_thickness": 0.25, "heel_thickness": 3.60, "heel_edge_thickness": 2.45,
+         "vamp_length": 43.2, "tip_full_width_z": 3.3},
+        {"id": "#2", "brand": "Rico Select Jazz", "cut": "unfiled",
+         "material": "ケーン", "strength": "3 Soft",
+         "reed_length": 82.7, "tip_width": 17.0, "heel_width": 15.0,
+         "tip_thickness": 0.30, "heel_thickness": 3.55, "heel_edge_thickness": 1.75,
+         "vamp_length": 44.9, "tip_full_width_z": 3.35},
+        {"id": "#3", "brand": "Vandoren Traditional", "cut": "filed",
+         "material": "ケーン", "strength": "3",
+         "reed_length": 81.05, "tip_width": 16.9, "heel_width": 15.0,
+         "tip_thickness": 0.30, "heel_thickness": 3.70, "heel_edge_thickness": 1.80,
+         "vamp_length": 46.6, "tip_full_width_z": 3.2},
+        {"id": "#4", "brand": "Rico Select Jazz", "cut": "unfiled",
+         "material": "ケーン", "strength": "3 Soft",
+         "reed_length": 82.7, "tip_width": 17.2, "heel_width": 15.1,
+         "tip_thickness": 0.35, "heel_thickness": 3.55, "heel_edge_thickness": 1.75,
+         "vamp_length": 44.55, "tip_full_width_z": 3.3},
+        {"id": "#5", "brand": "Rico Select Jazz", "cut": "unfiled",
+         "material": "ケーン", "strength": "3 Soft",
+         "reed_length": 82.6, "tip_width": 17.2, "heel_width": 15.0,
+         "tip_thickness": 0.30, "heel_thickness": 3.75, "heel_edge_thickness": 1.35,
+         "vamp_length": 44.25, "tip_full_width_z": 3.2},
+    ],
 }
 
 #: テンプレートの代表にした個体（ユーザー決定。規則は全長と同じ「ケーンの代表」）。
-REED_TEMPLATE_ID: dict[str, str] = {"alto": "#1", "soprano": "#2"}
+#: **3 サイズとも節 B で幅を測ってある 2 本のうちの 1 本**でもある（`reed_width_at20_mm`
+#: が実測で付くのはこの個体だけ）。
+REED_TEMPLATE_ID: dict[str, str] = {"alto": "#1", "soprano": "#2", "tenor": "#2"}
 
-#: マウスピース 2 本ずつ。**先頭がそのサイズのテンプレートの校正基準そのもの**
-#: （アルトは PHROX、ソプラノはヤナギサワ 刻印 4）。もう 1 本は金属で基準ではない
+#: マウスピース 2 本ずつ。アルトとソプラノは**先頭がそのサイズのテンプレートの校正基準
+#: そのもの**（PHROX / ヤナギサワ 刻印 4）で、もう 1 本は金属で基準ではない
 #: （形の法則を当てる相手ではなく、「かかり代は正か」の 2 例目）。
+#: **テナーは 2 本とも基準ではない** —— 基準は WindyCity で、手元に無いので測っていない。
 MP_SURVEY: dict[str, dict[str, str]] = {
     "alto": {
         "phrox": "Wood Stone PHROX 6（ハードラバー）",
@@ -190,6 +222,19 @@ MP_SURVEY: dict[str, dict[str, str]] = {
         "hr4": "Yanagisawa 刻印 4（ハードラバー）",
         "metal7": "Yanagisawa Metal 7（金属）",
     },
+    "tenor": {
+        "jody": "Jody Jazz GIANT 6☆（金属＋樹脂）",
+        "lebayle8": "Lebayle Jazz Metal 8（金属）",
+    },
+}
+
+#: そのサイズのテンプレートの校正基準にあたる個体の `MP_SURVEY` のキー。**無いサイズが
+#: ある。** 窓の法則を実物へ合わせてよいのは基準個体と比べたときだけなので（ソプラノで
+#: `side_rail_width` を動かせたのはそれが理由）、ここが None のサイズでは「モデル −
+#: 実物」は法則の誤差ではなく**個体差**として読む。テナーの基準 WindyCity は
+#: `cad/windycity` の STEP/スキャンとしてだけ在る。
+MP_TEMPLATE_REF: dict[str, str | None] = {
+    "alto": "phrox", "soprano": "hr4", "tenor": None,
 }
 
 #: 窓の実開口の幅 [mm]（内側ジョウ）。z はティップ端から。ソプラノは窓が 27.8mm で
@@ -203,6 +248,10 @@ WINDOW_WIDTH_AT_Z: dict[str, dict[str, dict[float, float]]] = {
         "hr4":    {5.0: 12.00, 10.0: 11.20, 20.0: 9.65},
         "metal7": {5.0: 12.20, 10.0: 11.10, 20.0: 9.80},
     },
+    "tenor": {
+        "jody":     {5.0: 15.55, 10.0: 15.10, 20.0: 14.60, 30.0: 14.10},
+        "lebayle8": {5.0: 15.70, 10.0: 15.00, 20.0: 14.40, 30.0: 13.50},
+    },
 }
 
 #: リードの幅 [mm]（外側ジョウ）。同じ z。z=20 は `reed_width_at20_mm` そのもの。
@@ -215,10 +264,14 @@ REED_WIDTH_AT_Z: dict[str, dict[str, dict[float, float]]] = {
         "#1": {5.0: 14.10, 10.0: 14.00, 20.0: 13.90},
         "#2": {5.0: 14.00, 10.0: 13.90, 20.0: 13.60},
     },
+    "tenor": {
+        "#1": {5.0: 16.70, 10.0: 16.60, 20.0: 16.30, 30.0: 16.10},
+        "#2": {5.0: 16.90, 10.0: 16.80, 20.0: 16.60, 30.0: 16.40},
+    },
 }
 
 #: リードを載せて光にかざす。○ ＝ 縁がサイドレールの上（光が漏れない）。
-#: **両サイズとも 10 組すべて ○。** 所見（実測者の記述の要約）:
+#: **3 サイズとも 10 組すべて ○。** 所見（実測者の記述の要約）:
 #: アルト —— PHROX は左右ともリードの外にサイドレールが見える。Lebayle はリード幅と
 #: ほぼぴったりで外側にレールが見えない。#3 レジェールだけは Lebayle で先端から 5mm
 #: 付近、左右とも 0.1mm ほどはみ出して見える。
@@ -227,6 +280,13 @@ REED_WIDTH_AT_Z: dict[str, dict[str, dict[float, float]]] = {
 #: 踵がテーブルの後ろへはみ出す。刻印 4 では #2（59.1）・#4（59.0）・#5（58.3）は
 #: ほぼはみ出さず、#1（61.95）・#3（59.8）ははみ出す（刻印 4 のテーブル平坦部の終端は
 #: 実測 60.2、モデル 60.0）。#3 Wood Stone は刻印 4 と先端カーブの形がほぼ一致。
+#: テナー —— **踵の所見がテーブル終端を挟んだ**（ソプラノの 60.2 に当たるものが無いので、
+#: これが唯一の外部の手掛かり）: Jody では #1（81.2）・#3（81.05）が「ほとんどはみ出さ
+#: ない」、#2（82.7）・#4（82.7）・#5（82.6）は「はみ出す」＝終端は 81.2〜82.6 の間。
+#: モデルの `profiles.table_cut_end_z` は 81.59 でその中にある。Lebayle 8 は 5 本とも
+#: はみ出すので 81.05 より手前。**先端幅の向きも所見に出た**: Lebayle 8 では #2〜#5
+#: （17.0〜17.2）のほうがマウスピースの先端幅より広く、#1（16.8）だけほぼ同じ ——
+#: Lebayle 8 のリード面の外幅は 16.8mm 前後と読める（数字では未測）。
 LIGHT_TEST: dict[str, dict[str, dict[str, str]]] = {
     size: {r: {mp: "○" for mp in MP_SURVEY[size]}
            for r in ("#1", "#2", "#3", "#4", "#5")}
@@ -238,6 +298,8 @@ LIGHT_TEST: dict[str, dict[str, dict[str, str]]] = {
 #:   している
 #: ・アルト: FIBRACELL はヴァンプが長い（43.0）ので、リガチャーの固定位置を後ろへ
 #:   ずらす必要がある
+#: ・テナー: ケーンのほうが総じて倍音が多く聞こえ、Forestone の樹脂リードはケーンより
+#:   **若干腰が弱い**（3 サイズで「ケーンのほうが倍音が多い」が揃った）
 #: ・ソプラノ: 刻印 4 に Légère を付けると、締めたリガチャーの**後ろにマウスピースの
 #:   余地がほとんど無い**（リガチャーがシャンク側の端まで来る。実測者に確認）。
 #:   Légère のヴァンプ 30.7 / 31.4 は Vandoren の 28.9 / 29.4 より長い ——
@@ -249,6 +311,13 @@ WINDOW_NOTE: dict[str, str] = {
     "alto": ("**ティップ側は合い、後ろ半分で 0.7mm 狭い** —— 窓の形は実物テナー"
              "（WindyCity）をボア径で割った表 `_CAVITY_W` から引いている。"
              "PHROX 1 本・4 点なので、ここでは直さない"),
+    "tenor": ("**モデルは直していない。今回の 2 本はどちらも基準ではない** "
+              "（`MP_TEMPLATE_REF` が None）—— テナーの窓の法則は基準機 WindyCity から"
+              "起こしたもので、その WindyCity のスキャン値 16.00 / 14.90 / 11.40 "
+              "（z=5.1 / 14.1 / 38.1）とは +0.06 / +0.17 / −0.05 で合っている。"
+              "Jody・Lebayle との差は一様でもない（+0.52〜−0.73 / +0.66〜−0.13）ので、"
+              "これは法則の誤差ではなく**個体差**。ソプラノで `side_rail_width` を"
+              "動かせたのは比べた相手が基準個体そのものだったから"),
     "soprano": ("**0.89 のときは 3 点とも一様に 1.3mm 広かった**（片側 0.64 / 0.675 / "
                 "0.665）。一様なずれは `side_rail_width` の効き方そのもの（窓の区間で"
                 "重み 1）なので、平均 0.66 を足して 1.55 にした（2026-09-22）。"
@@ -373,8 +442,9 @@ def reed_seat_report(inst, size: str) -> None:
     """窓とリードの幅を**同じ z で**並べる（Phase 4-F）。**判定は出さない。**
 
     実物どうしのかかり代・実物とモデルの窓・リード幅が直線から外れる量を出す。
-    モデルの側はテンプレート素（窓はそのサイズの基準 MP ＝ `MP_SURVEY` の先頭に
-    合わせた法則、リードは `REED_TEMPLATE_ID` の実測）。
+    モデルの側はテンプレート素（リードは `REED_TEMPLATE_ID` の実測）。
+    **窓を比べる相手が基準個体かどうかはサイズで違う**（`MP_TEMPLATE_REF`）——
+    テナーは基準の WindyCity を測っていないので、差は法則の誤差ではなく個体差。
     """
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     from saxsketch.instruments.saxophone.components import reed_seat
@@ -385,12 +455,15 @@ def reed_seat_report(inst, size: str) -> None:
     tpl = inst.templates[size]
     m, r = dict(tpl["mouthpiece"]), dict(tpl["reed"])
     wins, widths, survey = WINDOW_WIDTH_AT_Z[size], REED_WIDTH_AT_Z[size], REED_SURVEY[size]
-    base = next(iter(MP_SURVEY[size]))
+    ref = MP_TEMPLATE_REF.get(size)
+    base = ref or next(iter(MP_SURVEY[size]))
     zs = sorted(wins[base])
 
     print(f"\n# リードが載るか —— {size}")
     print("  MP: " + " / ".join(f"{k} = {v}" for k, v in MP_SURVEY[size].items())
-          + f"（{base} がテンプレートの基準）")
+          + (f"（{base} がテンプレートの基準）" if ref else
+             "（**どちらもテンプレートの基準ではない**。基準は測っていないので、"
+             "下の差は法則の誤差ではなく個体差）"))
     print("\n## 窓の実開口 [mm]（モデル＝テンプレート素の法則 vs 実物）")
     print(f"  {'z':>4}{'モデル':>8}" + "".join(f"{k:>9}" for k in wins)
           + f"{'モデル−' + base:>14}")
@@ -437,7 +510,8 @@ def reed_seat_report(inst, size: str) -> None:
     with profiles.params_scope(m):
         z5 = (rp.width(r, 5.0) - 2.0 * profiles.window_open_half_width(m, 5.0)) / 2.0
     real5 = (widths[tid][5.0] - wins[base][5.0]) / 2.0
-    print(f"  z=5 で モデル {z5:+.2f} / 実物（{base} × {tid}）{real5:+.2f}")
+    print(f"  z=5 で モデル {z5:+.2f} / 実物（{base} × {tid}）{real5:+.2f}"
+          + ("" if ref else "　※ この MP は基準ではない"))
 
 
 def main() -> None:
