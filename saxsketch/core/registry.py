@@ -354,22 +354,29 @@ class Instrument:
         return self.set_card_fn(size_info, members)
 
     def summary(self) -> dict:
+        # 楽器・テンプレート・セットの名前は `descriptor.json` と
+        # `templates/*.json` に日本語で書いてある。**原本はそちらのまま**で、
+        # 英語は `i18n.t()`（msgid が日本語そのもの）で引く。
+        from saxsketch import i18n
         return {
             "id": self.id,
-            "label": self.descriptor.get("label", self.id),
+            "label": i18n.t(self.descriptor.get("label", self.id)),
             "templates": [
-                {"id": tid, "label": t.get("label", tid)}
+                {"id": tid, "label": i18n.t(t.get("label", tid))}
                 for tid, t in self.templates.items()
             ],
             "components": [
-                {"id": cid, "label": cls.label, "available": cls.available()}
+                {"id": cid, "label": i18n.component_label(cid, cls.label),
+                 "available": cls.available()}
                 for cid, cls in self.component_classes.items()
             ],
             "sets": [
-                {"id": s["id"], "label": s.get("label", s["id"]),
+                {"id": s["id"], "label": i18n.t(s.get("label", s["id"])),
                  "members": [
                      {"component": m["component"],
-                      "label": self.component_classes[m["component"]].label,
+                      "label": i18n.component_label(
+                          m["component"],
+                          self.component_classes[m["component"]].label),
                       "required": bool(m.get("required", True)),
                       "master": m.get("role") == "master"}
                      for m in s["members"]

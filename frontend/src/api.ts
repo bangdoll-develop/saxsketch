@@ -1,5 +1,7 @@
 // SaxSketch API クライアント
 
+import { getLang } from "./i18n";
+
 export interface Choice { value: string; label: string }
 export interface ParamSpec {
   key: string; label: string; category: string; type: string; unit: string;
@@ -281,7 +283,13 @@ export interface ExportResult {
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
+  // 表示言語は**全リクエストに付ける**。サーバはこれでスキーマの訳も
+  // 書き出し（仕様書・部品表・入稿 ZIP）の言語も決めるので、
+  // 「画面は英語なのに仕様書だけ日本語」が構造的に起きない。
+  // クエリではなくヘッダなのは、既にクエリを持つ URL が多いため。
+  const headers = new Headers(init?.headers);
+  headers.set("X-Lang", getLang());
+  const r = await fetch(url, { ...init, headers });
   if (!r.ok) {
     let detail = r.statusText;
     try { detail = (await r.json()).detail ?? detail; } catch { /* noop */ }

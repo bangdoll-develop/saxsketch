@@ -9,6 +9,7 @@ import os
 import threading
 from pathlib import Path
 
+from saxsketch import i18n
 from saxsketch.core.project import Member, Project
 from saxsketch.core.registry import get_registry
 from saxsketch.core.schema import ParamSet
@@ -361,7 +362,7 @@ class AppState:
             present = self.project.has(cid)
             members.append({
                 "component_id": cid,
-                "label": cls.label,
+                "label": i18n.component_label(cid, cls.label),
                 "name": self.project.member(cid).name if present else None,
                 "present": present,
                 "required": bool(defined.get(cid, {}).get("required", False)),
@@ -369,7 +370,7 @@ class AppState:
             })
         return {
             "set_id": self.project.set_id,
-            "label": sdef.get("label", "セット"),
+            "label": i18n.t(sdef.get("label", "セット")),
             # 実際に組になっているか（単体だが育てられる状態は False）
             "is_set": self.project.is_set,
             "active": self.project.active,

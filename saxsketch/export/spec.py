@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date
 from html import escape as _escape
 
+from saxsketch import i18n
+
 
 def _e(value) -> str:
     """HTML へ埋める前に逃がす。
@@ -90,13 +92,13 @@ def _acoustics_section(sim: dict) -> str:
             f"<tr><th>{_e(t2['labels'][k])}</th><td>{t2[k]:.1f} / 10</td></tr>\n"
             for k in ["brightness", "power", "resistance", "flexibility", "edge"]
             if k in t2)
-        return f"""<h2>4. 音響予測（設計時シミュレーション）</h2>
+        return f"""<h2>4. {_e(i18n.t('音響予測（設計時シミュレーション）'))}</h2>
 <table>
-<tr><th>内容積（実効）</th><td>{_e(t1.get('effective_cc', '-'))} cc（目標 {_e(t1.get('target_cc', '-'))} cc）</td></tr>
-<tr><th>音程傾向</th><td>{_e(t1.get('deviation_cents', '-'))} セント（{_e(t1.get('advice', ''))}）</td></tr>
+<tr><th>{_e(i18n.t('内容積（実効）'))}</th><td>{_e(t1.get('effective_cc', '-'))} cc（{_e(i18n.t('目標'))} {_e(t1.get('target_cc', '-'))} cc）</td></tr>
+<tr><th>{_e(i18n.t('音程傾向'))}</th><td>{_e(t1.get('deviation_cents', '-'))} {_e(i18n.t('セント'))}（{_e(t1.get('advice', ''))}）</td></tr>
 {tone_rows}
 </table>
-<p class="note">※ 指標は文献傾向に基づく推定値。絶対値ではなく設計比較の目安。</p>"""
+<p class="note">※ {_e(i18n.t('指標は文献傾向に基づく推定値。絶対値ではなく設計比較の目安。'))}</p>"""
 
     blocks = ""
     for card in sim.get("cards", []):
@@ -107,7 +109,7 @@ def _acoustics_section(sim: dict) -> str:
                    f"<p class=\"note\">{_e(card.get('advice', ''))}</p>\n")
     if not blocks:
         return ""
-    return f"<h2>4. 設計時シミュレーション</h2>\n{blocks}"
+    return f'<h2>4. {_e(i18n.t('設計時シミュレーション'))}</h2>\n{blocks}'
 
 
 _STYLE = """
@@ -123,21 +125,23 @@ _STYLE = """
  @media print { body { margin: 12mm; } }
 """
 
-_DATA_SECTION = """<h2>7. 入稿データ</h2>
-<ul>
- <li>STL: 汎用（全サービス対応）。単位 mm</li>
- <li>STEP: 精密加工・寸法検証用（ロスレス）</li>
- <li>3MF: 単位・メタ情報付き（対応サービス向け）</li>
-</ul>"""
+def _data_section() -> str:
+    """入稿データの節。**定数ではなく関数**にしてあるのは、`t()` が呼ばれた
+    時点の言語で引くから（モジュール読み込み時に固めると日本語で凍る）。"""
+    return (f"<h2>7. {i18n.t('入稿データ')}</h2>\n<ul>\n"
+            f" <li>{i18n.t('STL: 汎用（全サービス対応）。単位 mm')}</li>\n"
+            f" <li>{i18n.t('STEP: 精密加工・寸法検証用（ロスレス）')}</li>\n"
+            f" <li>{i18n.t('3MF: 単位・メタ情報付き（対応サービス向け）')}</li>\n"
+            "</ul>")
 
 
 def _page(title: str, meta: str, body: str) -> str:
     """自己完結 HTML の外枠。**単体もセットも同じ枠**（体裁が 2 つに割れない）。"""
     return f"""<!DOCTYPE html>
-<html lang="ja"><head><meta charset="utf-8">
-<title>仕様書 - {_e(title)}</title>
+<html lang="{i18n.get_lang()}"><head><meta charset="utf-8">
+<title>{_e(i18n.t('仕様書'))} - {_e(title)}</title>
 <style>{_STYLE}</style></head><body>
-<h1>製作仕様書　{_e(title)}</h1>
+<h1>{_e(i18n.t('製作仕様書'))}　{_e(title)}</h1>
 {meta}
 {body}
 </body></html>"""
@@ -174,36 +178,36 @@ def _member_body(component_label: str, params: dict, specs: list, dimensions: li
     bom_body = "".join(
         f"<tr><td>{_e(r['type'])}</td><td>{_e(r['name'])}</td><td>{_e(r['qty'])}</td>"
         f"<td>{_e(r['material'])}</td><td>{_e(r['note'])}</td></tr>\n" for r in bom_rows)
-    rec_items = "".join(f"<li>{_e(i)}</li>\n" for i in rec["items"])
+    rec_items = "".join(f"<li>{_e(i18n.t(i))}</li>\n" for i in rec["items"])
     # `svg` は**こちらが組んだ HTML 片**なのでそのまま。題だけ逃がす。
     section_html = "\n".join(f"<h3>{_e(s['title'])}</h3>\n{s['svg']}" for s in sections) \
-        or '<p class="note">この部品には断面図がありません。</p>'
+        or f'<p class="note">{_e(i18n.t('この部品には断面図がありません。'))}</p>'
     title = f'<h1 class="part">{_e(heading)}</h1>\n' if heading else ""
 
-    return f"""{title}<h2>1. 主要寸法</h2>
+    return f"""{title}<h2>1. {_e(i18n.t('主要寸法'))}</h2>
 <table>{dim_rows}</table>
 
-<h2>2. 断面図</h2>
+<h2>2. {_e(i18n.t('断面図'))}</h2>
 {section_html}
 
-<h2>3. 設計パラメータ全値</h2>
-<table><tr><th>カテゴリ</th><th>パラメータ</th><th>値</th></tr>
+<h2>3. {_e(i18n.t('設計パラメータ全値'))}</h2>
+<table><tr><th>{_e(i18n.t('カテゴリ'))}</th><th>{_e(i18n.t('パラメータ'))}</th><th>{_e(i18n.t('値'))}</th></tr>
 {param_rows}</table>
 
 {_acoustics_section(sim)}
 
-<h2>5. 部品表（BOM）</h2>
-<table><tr><th>区分</th><th>品名</th><th>数量</th><th>材料</th><th>備考</th></tr>
+<h2>5. {_e(i18n.t('部品表（BOM）'))}</h2>
+<table><tr><th>{_e(i18n.t('区分'))}</th><th>{_e(i18n.t('品名'))}</th><th>{_e(i18n.t('数量'))}</th><th>{_e(i18n.t('材料'))}</th><th>{_e(i18n.t('備考'))}</th></tr>
 {bom_body}</table>
 
-<h2>6. 3Dプリント推奨条件 — {_e(rec['label'])}（{_e(component_label)}）</h2>
+<h2>6. {_e(i18n.t('3Dプリント推奨条件'))} — {_e(i18n.t(rec['label']))}（{_e(component_label)}）</h2>
 <ul>{rec_items}</ul>
-<p class="note">※ <b>口に入れる部品です。</b>材料の食品接触適合性と、印刷後の洗浄・二次硬化を
-必ず確認してください。未硬化のレジンは皮膚感作性があります。PLA は約 55℃ で変形するため
-熱湯洗浄は不可。使用前に毎回、割れ・欠け・鋭い縁を点検してください。</p>
-<p class="note">※ この仕様書の寸法と音響指標は SaxSketch による推定であり、
-<b>できあがる物の安全性・耐久性・適合性を保証するものではありません。</b>
-製作と使用は利用者の責任で行ってください。</p>
+<p class="note">※ <b>{_e(i18n.t('口に入れる部品です。'))}</b>{_e(i18n.t('材料の食品接触適合性と、印刷後の洗浄・二次硬化を必ず確認してください。'
+                  '未硬化のレジンは皮膚感作性があります。PLA は約 55℃ で変形するため'
+                  '熱湯洗浄は不可。使用前に毎回、割れ・欠け・鋭い縁を点検してください。'))}</p>
+<p class="note">※ {_e(i18n.t('この仕様書の寸法と音響指標は SaxSketch による推定であり、'))}
+<b>{_e(i18n.t('できあがる物の安全性・耐久性・適合性を保証するものではありません。'))}</b>
+{_e(i18n.t('製作と使用は利用者の責任で行ってください。'))}</p>
 """
 
 
@@ -213,11 +217,11 @@ def spec_html(project_name: str, instrument_label: str, component_label: str,
               material: str) -> str:
     """部品 1 つの仕様書（従来どおり）。"""
     meta = f"""<table class="meta"><tr>
- <td>楽器: {_e(instrument_label)}</td><td>コンポーネント: {_e(component_label)}</td>
- <td>テンプレート: {_e(template_label)}</td><td>発行日: {date.today().isoformat()}</td>
- <td>作成: SaxSketch</td></tr></table>"""
+ <td>{_e(i18n.t('楽器'))}: {_e(instrument_label)}</td><td>{_e(i18n.t('コンポーネント'))}: {_e(component_label)}</td>
+ <td>{_e(i18n.t('テンプレート'))}: {_e(template_label)}</td><td>{_e(i18n.t('発行日'))}: {date.today().isoformat()}</td>
+ <td>{_e(i18n.t('作成'))}: SaxSketch</td></tr></table>"""
     body = _member_body(component_label, params, specs, dimensions, bom_rows,
-                        sim, sections, material) + "\n" + _DATA_SECTION
+                        sim, sections, material) + "\n" + _data_section()
     return _page(project_name, meta, body)
 
 
@@ -240,22 +244,24 @@ def spec_html_set(set_name: str, instrument_label: str, template_label: str,
     """
     parts = "、".join(_e(m["label"]) for m in members)
     meta = f"""<table class="meta"><tr>
- <td>楽器: {_e(instrument_label)}</td><td>構成: {parts}</td>
- <td>テンプレート: {_e(template_label)}</td><td>発行日: {date.today().isoformat()}</td>
- <td>作成: SaxSketch</td></tr></table>"""
+ <td>{_e(i18n.t('楽器'))}: {_e(instrument_label)}</td>\
+<td>{_e(i18n.t('構成'))}: {parts}</td>
+ <td>{_e(i18n.t('テンプレート'))}: {_e(template_label)}</td>\
+<td>{_e(i18n.t('発行日'))}: {date.today().isoformat()}</td>
+ <td>{_e(i18n.t('作成'))}: SaxSketch</td></tr></table>"""
 
     listing = "".join(f"<tr><th>{_e(m['label'])}</th><td>{_e(m['name'])}</td>"
                       f"<td>{_e(m['dir'])}/model.*</td></tr>" for m in members)
-    body = f"<h2>0. 同梱の構成</h2>\n<table>{listing}</table>\n"
+    body = f"<h2>0. {_e(i18n.t('同梱の構成'))}</h2>\n<table>{listing}</table>\n"
     if set_card:
-        body += f"<h2>0-2. セットの適合（部品どうし）</h2>\n{_card_table(set_card)}\n"
+        body += f"<h2>0-2. {_e(i18n.t('セットの適合（部品どうし）'))}</h2>\n{_card_table(set_card)}\n"
     for m in members:
         body += _member_body(
             m["label"], m["params"], m["specs"], m["dimensions"], m["bom_rows"],
             m["sim"], m["sections"], m["material"],
             heading=f"{m['label']} — {m['name']}") + "\n"
-    body += _DATA_SECTION + (
-        '\n<p class="note">部品ごとに '
+    body += _data_section() + (
+        f'\n<p class="note">{_e(i18n.t("部品ごとに"))} '
         + "、".join(f"{_e(m['dir'])}/" for m in members)
-        + " のフォルダへ分かれています。</p>")
+        + f' {_e(i18n.t("のフォルダへ分かれています。"))}</p>')
     return _page(set_name, meta, body)

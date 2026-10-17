@@ -3,13 +3,16 @@ import {
   api, type ProjectData, type SimCard, type SurveyField, type SurveyMeasure,
   type SurveyState,
 } from "../api";
+import { getLang, t, useLang } from "../i18n";
 import { Backdrop } from "./Dialogs";
 import { usePathPicker } from "../pathPicker";
 
 const CONF_LABEL: Record<string, string> = { high: "高", med: "中", low: "低" };
 
 function fmtDate(iso: string) {
-  try { return new Date(iso).toLocaleString("ja-JP"); } catch { return iso; }
+  try {
+    return new Date(iso).toLocaleString(getLang() === "ja" ? "ja-JP" : "en-GB");
+  } catch { return iso; }
 }
 
 /** SimPanel と同じ .simcard スタイルで照合結果を出す */
@@ -55,7 +58,7 @@ function FieldRows({ fields, prev, inputs, onInput }: {
           <span style={{ width: 28, color: "var(--muted)", fontSize: 12 }}>{f.unit}</span>
           {prev[f.key] != null && (
             <span style={{ width: 60, color: "var(--accent2)", fontSize: 11 }}>
-              採寸 {prev[f.key]}
+              {t("採寸")} {prev[f.key]}
             </span>
           )}
         </div>
@@ -69,6 +72,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
   onApplied: (p: ProjectData) => void;  // commit/revert/clear の反映後（プロジェクト全体）
   onClose: () => void;
 }) {
+  useLang();
   const [state, setState] = useState<SurveyState>(survey);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [sizeInputs, setSizeInputs] = useState<Record<string, string>>({});
@@ -97,7 +101,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
     setErr("");
     const path = await pickPath("open_model", "");
     if (!path) return;
-    setBusy("3Dモデルを測定中…（整列とレイキャスト。十数秒かかります）");
+    setBusy(t("3Dモデルを測定中…（整列とレイキャスト。十数秒かかります）"));
     try {
       const m = await api.surveyMeasure(path);
       setMeasure(m);
@@ -116,9 +120,9 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
     const measured = collect(inputs);
     const measured_size = collect(sizeInputs);
     if (Object.keys(measured).length === 0 && Object.keys(measured_size).length === 0) {
-      setErr("実測値を1つ以上入力してください。"); return;
+      setErr(t("実測値を1つ以上入力してください。")); return;
     }
-    setBusy("採寸を反映中…"); setErr("");
+    setBusy(t("採寸を反映中…")); setErr("");
     try {
       const p = await api.surveyCommit({ measured, measured_size, note });
       setState(p.survey);
@@ -129,7 +133,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
   };
 
   const revert = async () => {
-    setBusy("採寸時点へ復元中…"); setErr("");
+    setBusy(t("採寸時点へ復元中…")); setErr("");
     try {
       const p = await api.surveyRevert();
       setState(p.survey); setInputs({}); setSizeInputs({});
@@ -139,7 +143,7 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
   };
 
   const clear = async () => {
-    setBusy("採寸を破棄中…"); setErr("");
+    setBusy(t("採寸を破棄中…")); setErr("");
     try {
       const p = await api.surveyClear();
       setState(p.survey); setInputs({}); setSizeInputs({}); setNote("");
@@ -148,73 +152,74 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
     finally { setBusy(""); }
   };
 
-  const t = state.targets;
+  // `t` は訳の関数なので `tg`（名前を取り合わない）
+  const tg = state.targets;
 
   return (
     <Backdrop onClose={onClose}>
-      <h2>採寸（実物の実測をプロジェクトへ反映）</h2>
+      <h2>{t("採寸（実物の実測をプロジェクトへ反映）")}</h2>
       <div className="note" style={{ lineHeight: 1.6 }}>
-        手元の実物をノギスで測った値を入力すると、その項目だけ設計に反映されます
-        （空欄は計算値のまま）。確定すると<b>復元点</b>が記録され、以後に設計を
-        いじって破綻しても「採寸時点へ戻す」で戻せます。
+        {t("手元の実物をノギスで測った値を入力すると、その項目だけ設計に反映されます（空欄は計算値のまま）。確定すると")}
+        <b>{t("復元点")}</b>
+        {t("が記録され、以後に設計をいじって破綻しても「採寸時点へ戻す」で戻せます。")}
       </div>
 
       {/* 外部3Dモデルからの採寸プレフィル */}
       <div className="simcard" style={{ margin: "8px 0" }}>
         <div className="drow" style={{ alignItems: "center", justifyContent: "space-between" }}>
-          <span>実物の 3mf / STL / STEP から外形寸法を自動測定して埋める</span>
-          <button onClick={measureFromModel} disabled={!!busy}>📥 3mf/STLから測定…</button>
+          <span>{t("実物の 3mf / STL / STEP から外形寸法を自動測定して埋める")}</span>
+          <button onClick={measureFromModel} disabled={!!busy}>{t("📥 3mf/STLから測定…")}</button>
         </div>
         {measure && (
           <div className="note" style={{ marginTop: 6, lineHeight: 1.6 }}>
-            測定できた項目（信頼度）:{" "}
+            {t("測定できた項目（信頼度）:")}{" "}
             {Object.keys(measure.measured).length + Object.keys(measure.measured_size).length === 0
-              ? "なし"
+              ? t("なし")
               : [...Object.entries(measure.measured), ...Object.entries(measure.measured_size)]
-                  .map(([k, v]) => `${k} ${v}（${CONF_LABEL[measure.confidence[k]] ?? "?"}）`)
+                  .map(([k, v]) => t("{key} {val}（{conf}）", { key: k, val: String(v),
+                      conf: t(CONF_LABEL[measure.confidence[k]] ?? "?") }))
                   .join(" / ")}
             <br />
-            水密: {measure.quality.watertight ? "OK" : "NG"}
-            {measure.quality.volume_cc != null && ` / 体積 ${measure.quality.volume_cc.toFixed(1)} cc`}
+            {t("水密:")} {measure.quality.watertight ? "OK" : "NG"}
+            {measure.quality.volume_cc != null && t(" / 体積 {cc} cc", { cc: measure.quality.volume_cc.toFixed(1) })}
             {measure.notes.map((n, i) => (
               <div key={i} style={{ color: "var(--warn)" }}>・{n}</div>
             ))}
-            測定値は下の入力欄に入りました。確認・修正して「採寸を確定」してください。
+            {t("測定値は下の入力欄に入りました。確認・修正して「採寸を確定」してください。")}
           </div>
         )}
       </div>
 
       {state.surveyed_at && (
         <div className="note" style={{ color: "var(--accent2)" }}>
-          📐 採寸済み — {fmtDate(state.surveyed_at)}
+          {t("📐 採寸済み — ")}{fmtDate(state.surveyed_at)}
           {state.note && <> / {state.note}</>}
         </div>
       )}
 
       {/* 系統A: 設計パラメータ */}
       <div className="simcard" style={{ margin: "8px 0" }}>
-        <h3>設計寸法（実測 → 設計パラメータに反映）</h3>
-        <FieldRows fields={t.params} prev={state.measured}
+        <h3>{t("設計寸法（実測 → 設計パラメータに反映）")}</h3>
+        <FieldRows fields={tg.params} prev={state.measured}
                    inputs={inputs} onInput={setInput} />
       </div>
 
       {/* 系統B: 音響基準定数 */}
-      {t.size.length > 0 && (
+      {tg.size.length > 0 && (
         <div className="simcard" style={{ margin: "8px 0" }}>
-          <h3>音響基準（実測 → ネック等の基準寸法に反映）</h3>
+          <h3>{t("音響基準（実測 → ネック等の基準寸法に反映）")}</h3>
           <div className="note">
-            公表値の無い基準寸法。実測するとこのプロジェクトの音程計算に効きます
-            （descriptor は書き換えず、プロジェクト内だけの上書き）。
+            {t("公表値の無い基準寸法。実測するとこのプロジェクトの音程計算に効きます（descriptor は書き換えず、プロジェクト内だけの上書き）。")}
           </div>
-          <FieldRows fields={t.size} prev={state.measured_size}
+          <FieldRows fields={tg.size} prev={state.measured_size}
                      inputs={sizeInputs} onInput={setSizeInput} />
         </div>
       )}
 
       <div className="drow" style={{ margin: "8px 0", alignItems: "center", gap: 8 }}>
-        <span>メモ</span>
+        <span>{t("メモ")}</span>
         <input value={note} onChange={(e) => setNote(e.target.value)}
-               placeholder="採寸の対象・条件など" style={{ flex: 1 }} />
+               placeholder={t("採寸の対象・条件など")} style={{ flex: 1 }} />
       </div>
 
       {busy && <div className="busy" style={{ margin: "8px 0" }}>⏳ {busy}</div>}
@@ -223,15 +228,15 @@ export function SurveyDialog({ survey, onApplied, onClose }: {
       {state.card && <Card card={state.card} />}
 
       <div className="actions" style={{ marginTop: 8 }}>
-        <button onClick={onClose}>閉じる</button>
+        <button onClick={onClose}>{t("閉じる")}</button>
         {state.has_checkpoint && (
-          <button onClick={clear} disabled={!!busy}>採寸を破棄</button>
+          <button onClick={clear} disabled={!!busy}>{t("採寸を破棄")}</button>
         )}
         {state.has_checkpoint && (
-          <button onClick={revert} disabled={!!busy}>↩ 採寸時点へ戻す</button>
+          <button onClick={revert} disabled={!!busy}>{t("↩ 採寸時点へ戻す")}</button>
         )}
         <button className="primary" onClick={commit} disabled={!!busy}>
-          📐 採寸を確定
+          {t("📐 採寸を確定")}
         </button>
       </div>
     </Backdrop>

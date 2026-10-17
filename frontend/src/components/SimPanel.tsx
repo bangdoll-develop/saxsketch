@@ -1,4 +1,5 @@
 import type { SimCard, Simulation, Tier2 } from "../api";
+import { t, useLang } from "../i18n";
 import RadarChart from "./RadarChart";
 import SoundPreview from "./SoundPreview";
 import ImpedancePanel from "./ImpedancePanel";
@@ -18,7 +19,7 @@ function WarningsCard({ items }: { items?: string[] }) {
   if (!items?.length) return null;
   return (
     <div className="simcard warncard">
-      <h3>⚠ 注意</h3>
+      <h3>{t("⚠ 注意")}</h3>
       {items.map((w, i) => <div className="warnline" key={i}>{w}</div>)}
     </div>
   );
@@ -36,22 +37,22 @@ function WarningsCard({ items }: { items?: string[] }) {
 function SafetyCard() {
   return (
     <div className="simcard safetycard">
-      <h3>⚠ 口に入れる部品です</h3>
+      <h3>{t("⚠ 口に入れる部品です")}</h3>
       <div className="warnline">
-        材料は<b>食品接触適合のもの</b>を指定してください。
+        {t("材料は")}<b>{t("食品接触適合のもの")}</b>{t("を指定してください。")}
       </div>
       <div className="warnline">
-        レジンは二次硬化と洗浄を十分に。<b>未硬化のレジンは皮膚感作性があります</b>。
+        {t("レジンは二次硬化と洗浄を十分に。")}
+        <b>{t("未硬化のレジンは皮膚感作性があります")}</b>{t("。")}
       </div>
       <div className="warnline">
-        PLA は約 55℃ で変形します。熱湯での洗浄・車内放置は不可。
+        {t("PLA は約 55℃ で変形します。熱湯での洗浄・車内放置は不可。")}
       </div>
       <div className="warnline">
-        使う前に<b>割れ・欠け・鋭い縁</b>を点検してください。印刷物は割れます。
+        {t("使う前に")}<b>{t("割れ・欠け・鋭い縁")}</b>{t("を点検してください。印刷物は割れます。")}
       </div>
       <div className="advice">
-        ここに出る寸法と音響指標は推定です。できあがる物の安全性・耐久性・
-        適合性は保証しません（詳しくは SAFETY.md）。製作と使用は自己責任で。
+        {t("ここに出る寸法と音響指標は推定です。できあがる物の安全性・耐久性・適合性は保証しません（詳しくは SAFETY.md）。製作と使用は自己責任で。")}
       </div>
     </div>
   );
@@ -79,6 +80,7 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
   sim: Simulation; setCard?: SimCard | null;
   compare?: Tier2 | null; paramsKey: string; onGoalSeek: () => void;
 }) {
+  useLang();
   // セットの適合は**どの部品を見ていても同じ**（3 部品が揃わないと決まらない量）
   // なので、部品ごとのカードより先に出す。
   const setCardEl = setCard ? <Card card={setCard} /> : null;
@@ -112,37 +114,38 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
             演奏者が抜き差しするチューニングそのものなので、固定した状態のセントを
             前面に出すと寸法の誤差とチューニングの自由度が混ざる。
             容積の行は判定の理由として並べてある（両者は一対一で動かない）。 */}
-        <h3>チューニング位置</h3>
+        <h3>{t("チューニング位置")}</h3>
         <div className={`big ${t1.status}`}>
           {t1.in_tune_mm === null ? "—" : `${t1.in_tune_mm.toFixed(1)} mm`}
           <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-            {t1.in_tune_mm === null ? "合う位置が無い" :
-             t1.status === "ok" ? "実用域の内側" :
-             t1.status === "tight" ? "端に寄っている" : "実用域の外"}
+            {t1.in_tune_mm === null ? t("合う位置が無い") :
+             t1.status === "ok" ? t("実用域の内側") :
+             t1.status === "tight" ? t("端に寄っている") : t("実用域の外")}
           </span>
         </div>
         {/* 基準条件での値であって「あなたが実際に挿す深さ」ではない。実際の位置は
             リード・リガチャー・気温・アンブシュアで動き、後ろ 2 つはモデルに無い。
             条件は advice の下の note に出ている。 */}
-        <div className="hint">基準条件（25°C・目標音）で合う位置。実演奏の位置は
-          リード・リガチャー・アンブシュアでも動く</div>
+        <div className="hint">
+          {t("基準条件（25°C・目標音）で合う位置。実演奏の位置はリード・リガチャー・アンブシュアでも動く")}
+        </div>
         <table>
           <tbody>
-            <tr><td>実用域（挿し込み）</td>
+            <tr><td>{t("実用域（挿し込み）")}</td>
                 <td className="num">{t1.cork_range_mm[0]}〜{t1.cork_range_mm[1]} mm</td></tr>
-            <tr><td>感度（1mm 押し込んだときの第1共鳴）</td>
-                <td className="num">{t1.cents_per_mm > 0 ? "+" : ""}{t1.cents_per_mm} セント/mm</td></tr>
-            <tr><td>現在 {t1.current_mm} mm でのズレ</td>
-                <td className="num">{t1.deviation_cents > 0 ? "+" : ""}{t1.deviation_cents} セント</td></tr>
-            <tr><td>実効内容積</td><td className="num">{t1.effective_cc} cc</td></tr>
-            <tr><td>目標（欠損円錐）</td><td className="num">{t1.target_cc} cc</td></tr>
+            <tr><td>{t("感度（1mm 押し込んだときの第1共鳴）")}</td>
+                <td className="num">{t1.cents_per_mm > 0 ? "+" : ""}{t1.cents_per_mm} {t("セント/mm")}</td></tr>
+            <tr><td>{t("現在 {mm} mm でのズレ", { mm: t1.current_mm })}</td>
+                <td className="num">{t1.deviation_cents > 0 ? "+" : ""}{t1.deviation_cents} {t("セント")}</td></tr>
+            <tr><td>{t("実効内容積")}</td><td className="num">{t1.effective_cc} cc</td></tr>
+            <tr><td>{t("目標（欠損円錐）")}</td><td className="num">{t1.target_cc} cc</td></tr>
           </tbody>
         </table>
         <div className="advice">{t1.advice}</div>
       </div>
 
       <div className="simcard">
-        <h3>音色レーダー</h3>
+        <h3>{t("音色レーダー")}</h3>
         <RadarChart tier2={sim.tier2} compare={compare} />
         <div className="sugg">
           {METRIC_ORDER.map((m) => {
@@ -150,14 +153,15 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
             if (!s) return null;
             return (
               <div key={m}>
-                {sim.tier2.labels[m]}を上げるなら → <b>{s.label} {s.direction}{s.step}{s.unit}</b>
-                （効果 {s.per_step}/step）
+                {t("{metric}を上げるなら → ", { metric: sim.tier2.labels[m] })}
+                <b>{s.label} {s.direction}{s.step}{s.unit}</b>
+                {t("（効果 {per}/step）", { per: s.per_step })}
               </div>
             );
           })}
         </div>
         <div style={{ marginTop: 10 }}>
-          <button className="primary" onClick={onGoalSeek}>🎯 目標から逆算（ゴールシーク）</button>
+          <button className="primary" onClick={onGoalSeek}>{t("🎯 目標から逆算（ゴールシーク）")}</button>
         </div>
         <div className="advice">{sim.tier2.note}</div>
       </div>

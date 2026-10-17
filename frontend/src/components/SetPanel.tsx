@@ -1,4 +1,5 @@
 import type { SetInfo } from "../api";
+import { t, useLang } from "../i18n";
 
 interface Props {
   info: SetInfo;
@@ -24,10 +25,11 @@ interface Props {
 export default function SetPanel({
   info, onSelect, onAdd, onRemove, onImport, onExport,
 }: Props) {
+  useLang();
   return (
     <div className="cat setpanel">
       <div className="cat-head">
-        <span>{info.is_set ? info.label : "部品構成"}</span>
+        <span>{info.is_set ? info.label : t("部品構成")}</span>
       </div>
       <div className="setmembers">
         {info.members.map((m) => (
@@ -40,7 +42,7 @@ export default function SetPanel({
                 {m.master ? "★ " : ""}{m.label}
               </span>
               {!m.master && (
-                <span className="setmember-x" title="セットから外す"
+                <span className="setmember-x" title={t("セットから外す")}
                       onClick={(e) => { e.stopPropagation(); onRemove(m.component_id); }}>
                   ×
                 </span>
@@ -49,20 +51,20 @@ export default function SetPanel({
           ) : (
             <button key={m.component_id} className="setmember add"
                     onClick={() => onAdd(m.component_id)}
-                    title={`${m.label}をこのセットに追加する`}>
+                    title={t("{part}をこのセットに追加する", { part: m.label })}>
               ＋ {m.label}
             </button>
           )
         ))}
       </div>
       <div className="abrow">
-        <button onClick={onImport}>.wproj から取込</button>
-        <button onClick={onExport} disabled={!info.is_set}>この部品を書出</button>
+        <button onClick={onImport}>{t(".wproj から取込")}</button>
+        <button onClick={onExport} disabled={!info.is_set}>{t("この部品を書出")}</button>
       </div>
       <div className="effect">
         {info.is_set
-          ? "セットの中では設計中の値がそのまま下流の部品へ渡ります（取込み直しは要りません）。★ が土台の部品です。"
-          : "部品を足すとセットになります。足した部品は、いま設計している値にそのまま追従します。"}
+          ? t("セットの中では設計中の値がそのまま下流の部品へ渡ります（取込み直しは要りません）。★ が土台の部品です。")
+          : t("部品を足すとセットになります。足した部品は、いま設計している値にそのまま追従します。")}
       </div>
     </div>
   );

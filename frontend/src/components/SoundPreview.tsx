@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Harmonics } from "../api";
+import { t, useLang } from "../i18n";
 
 const NOTES = [
   { label: "ラ (A3) 220Hz", freq: 220 },
@@ -96,6 +97,7 @@ function updateEngine(e: Engine, h: Harmonics) {
 interface PhysHandle { ctx: AudioContext; src: AudioBufferSourceNode }
 
 export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
+  const lang = useLang();
   const [playing, setPlaying] = useState(false);
   const [freq, setFreq] = useState(261.63);
   const [snapA, setSnapA] = useState<Snapshot | null>(null);
@@ -147,7 +149,7 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
       }
       const f0 = res.headers.get("X-Played-F0");
       const note = res.headers.get("X-Played-Note");
-      if (note) setPlayed(`実際に鳴った音: ${note} (${f0}Hz)`);
+      if (note) setPlayed(t("実際に鳴った音: {note} ({hz}Hz)", { note, hz: f0 ?? "?" }));
       const buf = await res.arrayBuffer();
       const ctx = new AudioContext();
       const audio = await ctx.decodeAudioData(buf);
@@ -158,7 +160,8 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
       physRef.current = { ctx, src };
       setPlaying(true);
     } catch (e) {
-      setPhysNote(`物理モデル音合成に失敗（${(e as Error).message}）。印象合成に切替えました。`);
+      setPhysNote(t("物理モデル音合成に失敗（{why}）。印象合成に切替えました。",
+                   { why: (e as Error).message }));
       setMode("impression");
     } finally {
       setPhysBusy(false);
@@ -194,9 +197,10 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
     g1.strokeStyle = "#4da3ff"; g1.lineWidth = 1.6;
     g1.beginPath();
     for (let x = 0; x < W; x++) {
-      const t = (x / W) * 2 * Math.PI * 2; // 2周期
+      // ローカル名を `t` にしない（訳の `t()` を隠す）
+      const phase = (x / W) * 2 * Math.PI * 2; // 2周期
       let y = 0;
-      current.amplitudes.forEach((a, i) => { y += (a / norm) * Math.sin(t * (i + 1)); });
+      current.amplitudes.forEach((a, i) => { y += (a / norm) * Math.sin(phase * (i + 1)); });
       const py = H / 2 - y * H * 0.42;
       x === 0 ? g1.moveTo(x, py) : g1.lineTo(x, py);
     }
@@ -213,37 +217,38 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
       g2.fillRect(i * bw + 2, H2 - h, bw - 4, h);
     });
     g2.fillStyle = "#8b96a6"; g2.font = "10px sans-serif";
-    g2.fillText("倍音 1→16", 4, 10);
-  }, [current]);
+    g2.fillText(t("倍音 1→16"), 4, 10);
+    // 言語を入れてあるのは、キャンバスは再描画しないと訳が変わらないから
+  }, [current, lang]);
 
   return (
     <div className="simcard">
-      <h3>音プレビュー</h3>
+      <h3>{t("音プレビュー")}</h3>
       <div className="abrow">
         {(["impression", "physical"] as const).map((m) => (
           <button key={m} className={mode === m ? "primary" : ""}
                   onClick={() => { stop(); setMode(m); }}>
-            {m === "impression" ? "印象合成（即時）" : "物理モデル(OpenWind)"}
+            {m === "impression" ? t("印象合成（即時）") : t("物理モデル(OpenWind)")}
           </button>
         ))}
       </div>
       <div className="soundrow">
         {mode === "physical"
           ? <select value={embouchure} onChange={(e) => setEmbouchure(e.target.value)}>
-              {EMBOUCHURES.map((b) => <option key={b.key} value={b.key}>{b.label}</option>)}
+              {EMBOUCHURES.map((b) => <option key={b.key} value={b.key}>{t(b.label)}</option>)}
             </select>
           : <select value={freq} onChange={(e) => setFreq(Number(e.target.value))}>
-              {NOTES.map((n) => <option key={n.freq} value={n.freq}>{n.label}</option>)}
+              {NOTES.map((n) => <option key={n.freq} value={n.freq}>{t(n.label)}</option>)}
             </select>}
         {!playing
           ? <button className="primary" onClick={play} disabled={physBusy}>
-              {physBusy ? "合成中… (最大40秒)" : "▶ 再生"}
+              {physBusy ? t("合成中… (最大40秒)") : t("▶ 再生")}
             </button>
-          : <button onClick={stop}>■ 停止</button>}
+          : <button onClick={stop}>{t("■ 停止")}</button>}
         {mode === "physical" && (
           <button onClick={() => playPhysical(api.scaleWavUrl(), false)}
                   disabled={physBusy || playing}>
-            🎵 スケール
+            {t("🎵 スケール")}
           </button>
         )}
       </div>
@@ -252,17 +257,17 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
       )}
       {mode === "physical" && !physNote && (
         <div className="advice">
-          物理モデル音は OpenWind の時間領域リードシミュで合成（単音 約12秒・スケール 約35秒）。
-          トーンホールの無い共鳴管なので<b>音高は指定できず</b>、アンブシュア（リード共振）で
-          どの共鳴が立つかが決まる。実際に鳴った音は上に表示。
+          {t("物理モデル音は OpenWind の時間領域リードシミュで合成（単音 約12秒・スケール 約35秒）。トーンホールの無い共鳴管なので")}
+          <b>{t("音高は指定できず")}</b>
+          {t("、アンブシュア（リード共振）でどの共鳴が立つかが決まる。実際に鳴った音は上に表示。")}
         </div>
       )}
       {physNote && <div className="advice" style={{ color: "#d9a441" }}>{physNote}</div>}
       <canvas ref={waveRef} className="scope" />
       <canvas ref={specRef} className="scope" style={{ marginTop: 6 }} />
       <div className="abrow">
-        <button onClick={() => setSnapA({ name: "A案", harmonics })}>現在をAに記録</button>
-        <button onClick={() => setSnapB({ name: "B案", harmonics })}>現在をBに記録</button>
+        <button onClick={() => setSnapA({ name: t("A案"), harmonics })}>{t("現在をAに記録")}</button>
+        <button onClick={() => setSnapB({ name: t("B案"), harmonics })}>{t("現在をBに記録")}</button>
       </div>
       <div className="abrow">
         {(["live", "A", "B"] as const).map((slot) => (
@@ -270,7 +275,7 @@ export default function SoundPreview({ harmonics }: { harmonics: Harmonics }) {
                   className={active === slot ? "primary" : ""}
                   disabled={(slot === "A" && !snapA) || (slot === "B" && !snapB)}
                   onClick={() => setActive(slot)}>
-            {slot === "live" ? "現在の設計" : slot === "A" ? "A案" : "B案"}
+            {slot === "live" ? t("現在の設計") : slot === "A" ? t("A案") : t("B案")}
           </button>
         ))}
       </div>

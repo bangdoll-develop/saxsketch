@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Dimension, Region } from "../api";
+import { t } from "../i18n";
 
 interface Props {
   /** パラメータ変更のたびに増えるトークン。変わったらSTLを再取得 */
@@ -137,7 +138,8 @@ const VERTS_PER_DIM = 10;
 
 function dimText(d: Dimension): string {
   const v = `${d.label} ${d.value.toFixed(2)}${d.unit ? " " + d.unit : ""}`;
-  return d.requested === undefined ? v : `${v}（指定 ${d.requested.toFixed(2)}）`;
+  return d.requested === undefined
+    ? v : `${v}${t("（指定 {n}）", { n: d.requested.toFixed(2) })}`;
 }
 
 /** ラベル 1 枚。**白文字＋暗い縁取り**で描く。色は `material.color` で着けるので、

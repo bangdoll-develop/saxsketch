@@ -13,6 +13,7 @@ import {
   createContext, useCallback, useContext, useEffect, useRef, useState,
 } from "react";
 import { api, type Capabilities, type DialogMode } from "./api";
+import { t, useLang } from "./i18n";
 
 export type PickPath = (mode: DialogMode, suggested?: string) => Promise<string | null>;
 
@@ -93,8 +94,10 @@ function PathPrompt({ mode, suggested, remote, onDone }: {
   mode: DialogMode; suggested: string; remote: boolean;
   onDone: (v: string | null) => void;
 }) {
+  useLang();
   const [value, setValue] = useState(suggested);
-  const t = LABELS[mode];
+  // `t` は訳の関数なので、ここは `lbl`（名前を取り合わない）
+  const lbl = LABELS[mode];
   const submit = () => onDone(value.trim() ? value.trim() : null);
 
   // Dialogs.tsx の Backdrop と同じ見た目。あちらを import すると
@@ -103,15 +106,14 @@ function PathPrompt({ mode, suggested, remote, onDone }: {
     <div className="dialog-backdrop"
          onMouseDown={(e) => { if (e.target === e.currentTarget) onDone(null); }}>
      <div className="dialog">
-      <h2>{t.title}</h2>
+      <h2>{t(lbl.title)}</h2>
       <div className="note">
         {remote
-          ? "この環境ではOSのファイルダイアログを使えません（サーバが手元の画面を"
-            + "持っていない構成です）。サーバから見えるパスを直接入力してください。"
-          : "ファイルダイアログを開けませんでした。パスを直接入力してください。"}
+          ? t("この環境ではOSのファイルダイアログを使えません（サーバが手元の画面を持っていない構成です）。サーバから見えるパスを直接入力してください。")
+          : t("ファイルダイアログを開けませんでした。パスを直接入力してください。")}
       </div>
       <div className="drow">
-        <label>{t.label}</label>
+        <label>{t(lbl.label)}</label>
         {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
         <input type="text" style={{ flex: 1 }} value={value} autoFocus
                onChange={(e) => setValue(e.target.value)}
@@ -120,10 +122,10 @@ function PathPrompt({ mode, suggested, remote, onDone }: {
                  if (e.key === "Escape") onDone(null);
                }} />
       </div>
-      <div className="note">{t.hint}</div>
+      <div className="note">{t(lbl.hint)}</div>
       <div className="actions">
-        <button onClick={() => onDone(null)}>キャンセル</button>
-        <button className="primary" onClick={submit} disabled={!value.trim()}>決定</button>
+        <button onClick={() => onDone(null)}>{t("キャンセル")}</button>
+        <button className="primary" onClick={submit} disabled={!value.trim()}>{t("決定")}</button>
       </div>
      </div>
     </div>

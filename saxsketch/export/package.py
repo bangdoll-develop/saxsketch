@@ -4,6 +4,8 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+from saxsketch import i18n
+
 
 def build_package(zip_path: str | Path, files: dict[str, Path | str | bytes],
                   readme_text: str) -> Path:
@@ -31,52 +33,55 @@ def readme_text_set(set_name: str, members: list[dict]) -> str:
     for m in members:
         dim_lines = "\n".join(f"    - {k}: {v}" for k, v in m["dims"])
         blocks += (f"\n[{m['label']}]  → {m['dir']}/\n"
-                   f"  推奨材料: {m['material_label']}\n"
-                   f"  主要寸法:\n{dim_lines}\n")
-    return f"""SaxSketch 入稿パッケージ（セット）
-========================================
-プロジェクト: {set_name}
-用途: 管楽器のマウスピース一式（口に触れる部品）
-
-構成:
-{blocks}
-共通ファイル:
-  - spec.html  … 製作仕様書（全部品＋部品どうしの適合）
-  - bom.csv    … 部品表（先頭列がどの部品かを示す）
-
-各部品フォルダの中身:
-  - model.stl  … 3Dプリント用メッシュ（単位: mm）
-  - model.step … 精密CAD形状（寸法検証用）
-  - model.3mf  … 単位情報付きメッシュ
-
-注意: 食品接触適合材料を指定してください（口に入れる部品です）。
-      レジンは二次硬化と洗浄を十分に。PLA は約 55℃ で変形します。
-      寸法・音響指標は推定であり、できあがる物の安全性・耐久性・
-      適合性を保証するものではありません。
-部品ごとに推奨材料が違うことがあります（上記を参照）。
-"""
+                   + i18n.t("  推奨材料: {material}\n",
+                            material=m["material_label"])
+                   + i18n.t("  主要寸法:\n") + dim_lines + "\n")
+    return i18n.t(
+        "SaxSketch 入稿パッケージ（セット）\n"
+        "========================================\n"
+        "プロジェクト: {name}\n"
+        "用途: 管楽器のマウスピース一式（口に触れる部品）\n"
+        "\n"
+        "構成:\n"
+        "{blocks}\n"
+        "共通ファイル:\n"
+        "  - spec.html  … 製作仕様書（全部品＋部品どうしの適合）\n"
+        "  - bom.csv    … 部品表（先頭列がどの部品かを示す）\n"
+        "\n"
+        "各部品フォルダの中身:\n"
+        "  - model.stl  … 3Dプリント用メッシュ（単位: mm）\n"
+        "  - model.step … 精密CAD形状（寸法検証用）\n"
+        "  - model.3mf  … 単位情報付きメッシュ\n"
+        "\n"
+        "注意: 食品接触適合材料を指定してください（口に入れる部品です）。\n"
+        "      レジンは二次硬化と洗浄を十分に。PLA は約 55℃ で変形します。\n"
+        "      寸法・音響指標は推定であり、できあがる物の安全性・耐久性・\n"
+        "      適合性を保証するものではありません。\n"
+        "部品ごとに推奨材料が違うことがあります（上記を参照）。\n",
+        name=set_name, blocks=blocks)
 
 
 def readme_text(project_name: str, dims: list, material_label: str) -> str:
     dim_lines = "\n".join(f"  - {k}: {v}" for k, v in dims)
-    return f"""SaxSketch 入稿パッケージ
-========================================
-プロジェクト: {project_name}
-用途: 管楽器マウスピース（口に触れる部品）
-
-同梱ファイル:
-  - model.stl  … 3Dプリント用メッシュ（単位: mm）
-  - model.step … 精密CAD形状（寸法検証用）
-  - model.3mf  … 単位情報付きメッシュ
-  - spec.html  … 製作仕様書（寸法・印刷推奨条件）
-  - bom.csv    … 部品表
-
-主要寸法:
-{dim_lines}
-
-推奨材料: {material_label}
-注意: 食品接触適合材料を指定してください（口に入れる部品です）。
-      レジンは二次硬化と洗浄を十分に。PLA は約 55℃ で変形します。
-      寸法・音響指標は推定であり、できあがる物の安全性・耐久性・
-      適合性を保証するものではありません。
-"""
+    return i18n.t(
+        "SaxSketch 入稿パッケージ\n"
+        "========================================\n"
+        "プロジェクト: {name}\n"
+        "用途: 管楽器マウスピース（口に触れる部品）\n"
+        "\n"
+        "同梱ファイル:\n"
+        "  - model.stl  … 3Dプリント用メッシュ（単位: mm）\n"
+        "  - model.step … 精密CAD形状（寸法検証用）\n"
+        "  - model.3mf  … 単位情報付きメッシュ\n"
+        "  - spec.html  … 製作仕様書（寸法・印刷推奨条件）\n"
+        "  - bom.csv    … 部品表\n"
+        "\n"
+        "主要寸法:\n"
+        "{dims}\n"
+        "\n"
+        "推奨材料: {material}\n"
+        "注意: 食品接触適合材料を指定してください（口に入れる部品です）。\n"
+        "      レジンは二次硬化と洗浄を十分に。PLA は約 55℃ で変形します。\n"
+        "      寸法・音響指標は推定であり、できあがる物の安全性・耐久性・\n"
+        "      適合性を保証するものではありません。\n",
+        name=project_name, dims=dim_lines, material=material_label)

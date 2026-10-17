@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { t, useLang } from "../i18n";
 import type { Impedance } from "../api";
 
 export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
@@ -8,6 +9,7 @@ export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  useLang();
 
   // パラメータが変わったら「再計算が必要」を示す
   useEffect(() => { if (imp) setStale(true); }, [paramsKey]); // eslint-disable-line
@@ -75,22 +77,22 @@ export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
 
   return (
     <div className="simcard">
-      <h3>インピーダンス（Tier3・共鳴解析）</h3>
+      <h3>{t("インピーダンス（Tier3・共鳴解析）")}</h3>
       <div className="soundrow">
         <button className="primary" onClick={compute} disabled={busy}>
-          {busy ? "計算中…" : imp ? "🔄 再計算" : "📈 インピーダンス計算"}
+          {busy ? t("計算中…") : imp ? t("🔄 再計算") : t("📈 インピーダンス計算")}
         </button>
         {imp && (
           <span className="engine-badge" style={{ fontSize: 11, color: "#8b96a6" }}>
-            {imp.engine === "openwind" ? "OpenWind" : "簡易TMM"}
+            {imp.engine === "openwind" ? "OpenWind" : t("簡易TMM")}
           </span>
         )}
       </div>
 
-      {err && <div className="advice" style={{ color: "#e08a8a" }}>計算失敗: {err}</div>}
+      {err && <div className="advice" style={{ color: "#e08a8a" }}>{t("計算失敗")}: {err}</div>}
       {stale && imp && (
         <div className="advice" style={{ color: "#d9a441" }}>
-          パラメータが変更されました。「再計算」で更新してください。
+          {t("パラメータが変更されました。「再計算」で更新してください。")}
         </div>
       )}
 
@@ -99,10 +101,10 @@ export default function ImpedancePanel({ paramsKey }: { paramsKey: string }) {
           <canvas ref={canvasRef} className="scope" style={{ height: 150 }} />
           <table>
             <tbody>
-              <tr><td>第1共鳴</td><td className="num">{imp.first_note}</td></tr>
-              <tr><td>目標（記譜最低音の実音）</td><td className="num">{imp.target_note}</td></tr>
+              <tr><td>{t("第1共鳴")}</td><td className="num">{imp.first_note}</td></tr>
+              <tr><td>{t("目標（記譜最低音の実音）")}</td><td className="num">{imp.target_note}</td></tr>
               {imp.inharmonicity_cents != null && (
-                <tr><td>倍音整列度（ずれRMS）</td>
+                <tr><td>{t("倍音整列度（ずれRMS）")}</td>
                   <td className="num">{imp.inharmonicity_cents} cent</td></tr>
               )}
             </tbody>
