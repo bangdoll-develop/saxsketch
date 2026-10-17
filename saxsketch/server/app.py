@@ -1,7 +1,7 @@
 """SaxSketch FastAPI サーバ。
 
 起動:  python -m saxsketch.server.app  →  http://127.0.0.1:8712
-       （8712 占有時は WF_PORT で上書き、または空きポートへ自動退避）
+       （8712 占有時は SAX_PORT で上書き、または空きポートへ自動退避）
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 #: ループバック以外へ出すことを明示的に許すスイッチ。
 #: LAN へ出す＝**認証の無いファイルシステム API を公開する**ことなので、
 #: 既定では `main()` が起動そのものを断る。立てるとこの検査も丸ごと外れる。
-ALLOW_REMOTE = bool(os.environ.get("WF_ALLOW_REMOTE"))
+ALLOW_REMOTE = bool(os.environ.get("SAX_ALLOW_REMOTE"))
 
 
 def _host_name(header: str) -> str:
@@ -1197,23 +1197,23 @@ def main():
         with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    host = os.environ.get("WF_HOST", "127.0.0.1")
-    want = int(os.environ.get("WF_PORT", "8712"))
+    host = os.environ.get("SAX_HOST", "127.0.0.1")
+    want = int(os.environ.get("SAX_PORT", "8712"))
 
     # 認証が無いので、ループバック以外へ bind するのは
     # **ファイルシステム API を無防備に公開する**のと同じ。黙って従わない。
     if not _is_loopback_host(host) and not ALLOW_REMOTE:
-        print("✗ WF_HOST=%s はループバックではありません。" % host,
+        print("✗ SAX_HOST=%s はループバックではありません。" % host,
               file=sys.stderr)
         print("  SaxSketch は認証を持たず、API は任意の絶対パスを読み書きし、",
               file=sys.stderr)
         print("  外部ツールを起動します。LAN へ出すと誰でもそれを使えます。",
               file=sys.stderr)
-        print("  それでも出すなら WF_ALLOW_REMOTE=1 を立ててください（自分の責任で）。",
+        print("  それでも出すなら SAX_ALLOW_REMOTE=1 を立ててください（自分の責任で）。",
               file=sys.stderr)
         sys.exit(1)
     if ALLOW_REMOTE:
-        print(f"⚠ WF_ALLOW_REMOTE が立っています。{host} からは認証なしで"
+        print(f"⚠ SAX_ALLOW_REMOTE が立っています。{host} からは認証なしで"
               f"ファイルを読み書きできます。")
 
     if _in_use(host, want):
@@ -1223,7 +1223,7 @@ def main():
         port = _free_port(host, want + 1)
         if port is None:
             print(f"✗ {want} が使用中で、近傍にも空きポートがありません。"
-                  f"占有元を止めるか WF_PORT で別ポートを指定してください。", file=sys.stderr)
+                  f"占有元を止めるか SAX_PORT で別ポートを指定してください。", file=sys.stderr)
             sys.exit(1)
         print(f"⚠ ポート {want} は使用中。空いている {port} で起動します。")
     else:

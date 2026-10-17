@@ -9,13 +9,13 @@
 #     --deps : pip の依存を入れ直す（pyproject.toml を変えた時）＋ npm install
 #     --test : 同期後に pytest を実行
 #
-# 環境変数で上書き可: WF_SRC（Windows 正本）, WF_DST（WSL 稼働コピー）
+# 環境変数で上書き可: SAX_SRC（Windows 正本）, SAX_DST（WSL 稼働コピー）
 set -euo pipefail
 
 # 既定の正本は**このスクリプトの置き場所から導く**（他人の機械でも動く）。
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WF_SRC="${WF_SRC:-$(cd "$_SELF_DIR/.." && pwd)}"
-WF_DST="${WF_DST:-$HOME/mp_design}"
+SAX_SRC="${SAX_SRC:-$(cd "$_SELF_DIR/.." && pwd)}"
+SAX_DST="${SAX_DST:-$HOME/mp_design}"
 
 DO_DEPS=0
 DO_TEST=0
@@ -28,18 +28,18 @@ for arg in "$@"; do
 done
 
 # ---- 事前チェック
-if [ ! -d "$WF_SRC" ]; then
-  echo "✗ 正本が見つからない: $WF_SRC" >&2; exit 1
+if [ ! -d "$SAX_SRC" ]; then
+  echo "✗ 正本が見つからない: $SAX_SRC" >&2; exit 1
 fi
-if [ "$(readlink -f "$WF_SRC")" = "$(readlink -f "$WF_DST")" ]; then
+if [ "$(readlink -f "$SAX_SRC")" = "$(readlink -f "$SAX_DST")" ]; then
   echo "✗ SRC と DST が同一。~/mp_design から実行していないか確認。" >&2; exit 1
 fi
 if ! command -v rsync >/dev/null 2>&1; then
   echo "✗ rsync 未導入。一度だけ: sudo apt install -y rsync" >&2; exit 1
 fi
 
-echo "▶ 同期  $WF_SRC  →  $WF_DST"
-mkdir -p "$WF_DST"
+echo "▶ 同期  $SAX_SRC  →  $SAX_DST"
+mkdir -p "$SAX_DST"
 # ソースのみ同期。Windows 側 .venv / node_modules / dist / キャッシュは持ち込まない。
 rsync -a --delete \
   --exclude '.venv/' \
@@ -49,9 +49,9 @@ rsync -a --delete \
   --exclude '*.pyc' \
   --exclude '.git/' \
   --exclude '.pytest_cache/' \
-  "$WF_SRC/" "$WF_DST/"
+  "$SAX_SRC/" "$SAX_DST/"
 
-cd "$WF_DST"
+cd "$SAX_DST"
 
 # ---- venv
 if [ ! -d ".venv" ]; then

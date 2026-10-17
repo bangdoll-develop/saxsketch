@@ -72,9 +72,9 @@ copy under `~/mp_design`, and `scripts/wsl_run.sh` starts the server.
 > **Local only.** There is no authentication. The API reads and writes
 > arbitrary absolute paths and launches external tools — that is the design,
 > because the only entry point is the OS file dialog and the user picks the
-> path. So it refuses to bind anywhere but loopback: setting `WF_HOST` to a
+> path. So it refuses to bind anywhere but loopback: setting `SAX_HOST` to a
 > non-loopback address **aborts startup** unless you also set
-> `WF_ALLOW_REMOTE=1`. `Host` and `Sec-Fetch-Site` are checked so that other
+> `SAX_ALLOW_REMOTE=1`. `Host` and `Sec-Fetch-Site` are checked so that other
 > web pages cannot drive it.
 
 Optional: `pip install -e ".[acoustics]"` adds OpenWind (GPL-3, **not

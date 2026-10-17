@@ -9961,7 +9961,7 @@ def test_binding_outside_loopback_needs_an_explicit_opt_in(monkeypatch):
     assert not appmod._is_loopback_host("192.168.1.50")
 
     monkeypatch.setattr(appmod, "ALLOW_REMOTE", False)
-    monkeypatch.setenv("WF_HOST", "0.0.0.0")
+    monkeypatch.setenv("SAX_HOST", "0.0.0.0")
     with pytest.raises(SystemExit) as got:
         appmod.main()
     assert got.value.code == 1

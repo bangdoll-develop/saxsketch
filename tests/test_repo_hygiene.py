@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -88,12 +89,25 @@ def test_no_personal_paths_are_tracked():
 
     Windows のユーザー名と正本の絶対パスは、他人には動かないうえに
     「どこに何を置いているか」をそのまま晒す。コマンド例は相対パスで書く。
+
+    **探すのは形（正規表現）で、特定のユーザー名は書かない。** 最初は実際の
+    ユーザー名を並べた表で探していたが、それだと (1) **この網自身がその名前を
+    公開してしまう**し、(2) 自分の表に自分が当たる。実際このファイルが
+    untracked の間だけ緑で、`git add` した瞬間に赤くなった —— 通っていたのでは
+    なく、**測る前に自分を外していた**。形で探せば、他人の機械のパスが
+    混ざった時も拾える。
+
+    `<user>` や `<repo>` のような差し込み記号には当たらない
+    （文字クラスが `<` を除いてあるので、プレースホルダは一致しない）。
     """
-    needles = ("C:/Users/<user>", "/mnt/c/Users/<user>",
-               "/mnt/c/HOME/<user>", "C:/HOME/<user>",
-               r"C:\Users\<user>", r"C:\HOME\<user>",
-               # JSON などで二重に逃がされた形
-               r"C:\\Users\\<user>", r"C:\\HOME\\<user>")
+    patterns = (
+        # C:\Users\<誰か> / C:/Users/<誰か>（JSON などで二重に逃がされた形も）
+        re.compile(r'[A-Za-z]:[\/]{1,2}Users[\/]{1,2}([^\/\s"\'<>,)]+)'),
+        # C:\HOME\<誰か> —— この企画の正本が置かれていた形
+        re.compile(r'[A-Za-z]:[\/]{1,2}HOME[\/]{1,2}([^\/\s"\'<>,)]+)'),
+        # WSL から見た同じ場所
+        re.compile(r'/mnt/[a-z]/(?:Users|HOME)/([^/\s"\'<>,)]+)'),
+    )
     hits: list[str] = []
     for rel in _tracked_files():
         f = _REPO_ROOT / rel
@@ -103,7 +117,37 @@ def test_no_personal_paths_are_tracked():
             text = f.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue          # 画像など
-        for n in needles:
-            if n in text:
-                hits.append("%s: %s" % (rel, n))
+        for pat in patterns:
+            for m in pat.finditer(text):
+                hits.append("%s: %s" % (rel, m.group(0)))
     assert hits == [], "個人のパスが残っている:\n  " + "\n  ".join(hits)
+
+
+#: 旧名。他人の**生きた登録商標**（米 4549949 ほか、どちらも第 9 類の
+#: ソフトウェア）なので公開物に残さない。**2 つに割ってあるのは細工ではなく
+#: 計測の都合** —— 1 つの文字列で書くとこのファイル自身が当たり、上の個人パスで
+#: 掘ったのと同じ穴（自分を外さないと緑にならない）をまた掘ることになる。
+_OLD_PROJECT_NAME = "wind" "forge"
+
+
+def test_the_old_project_name_is_gone():
+    """**改名したら残りかすを置いていかない。**
+
+    `SaxSketch` は旧名からの改名（2026-10-17）。旧名は他人の登録商標で、
+    しかも import パス・コマンド名・URL と 81 ファイルに散っていたので、
+    1 か所でも残ると「直したつもり」になる。
+    """
+    hits: list[str] = []
+    for rel in _tracked_files():
+        if _OLD_PROJECT_NAME in rel.lower():
+            hits.append("%s（パス）" % rel)
+        f = _REPO_ROOT / rel
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _OLD_PROJECT_NAME in text.lower():
+            hits.append("%s（中身）" % rel)
+    assert hits == [], "旧名が残っている:\n  " + "\n  ".join(hits)
