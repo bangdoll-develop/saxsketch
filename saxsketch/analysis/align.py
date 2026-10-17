@@ -12,6 +12,8 @@ from __future__ import annotations
 import numpy as np
 import trimesh
 
+from saxsketch import i18n
+
 _SAMPLE = 60_000
 
 
@@ -91,7 +93,7 @@ def axis_align(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, np.ndarray, dict
         shank_conf = "med"
     else:
         shank_conf = "low"
-        warnings.append("両端の太さが近く、シャンク方向を特定できません。")
+        warnings.append(i18n.t("両端の太さが近く、シャンク方向を特定できません。"))
 
     if not shank_at_pos:
         # x 軸まわり 180° 回転で z を反転（右手系維持: y,z を反転）
@@ -100,7 +102,7 @@ def axis_align(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, np.ndarray, dict
         T = flip @ T
 
     if axis_conf == "low":
-        warnings.append("形状が十分に細長くないため、主軸の向きが不確実です。")
+        warnings.append(i18n.t("形状が十分に細長くないため、主軸の向きが不確実です。"))
 
     info = {
         "elongation": round(elong, 2),

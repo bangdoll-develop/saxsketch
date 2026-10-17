@@ -15,6 +15,8 @@ import math
 
 from saxsketch.acoustics import volume as ac_volume
 
+from saxsketch import i18n
+
 _RING_N = 48       # 断面リングの点数（全リング一定＝ロフト堅牢性）
 _STATIONS = 40     # ベンド時のロフト断面数
 #: 段差を立てるための 2 点の間隔 [mm]。ステーションをこれだけ離して置くと、
@@ -226,21 +228,21 @@ def param_regions(p: dict) -> dict:
     zL = centerline_point(L, p)[0][2]
     zbody = centerline_point(L - p["body_tenon_length"], p)[0][2]
     reg = {
-        "tenon_length": {"z0": 0.0, "z1": zt, "side": "all", "label": "テノン（コルク座）"},
-        "tenon_od": {"z0": 0.0, "z1": zt, "side": "all", "label": "テノン外径"},
-        "cork_thickness": {"z0": 0.0, "z1": zt, "side": "all", "label": "コルク厚"},
-        "bore_small_id": {"z0": 0.0, "z1": zt, "side": "all", "label": "小端ボア"},
-        "neck_length": {"z0": 0.0, "z1": zL, "side": "all", "label": "ネック全長"},
-        "bend_angle": {"z0": zt, "z1": zL, "side": "all", "label": "曲げ区間"},
-        "bore_large_id": {"z0": zt, "z1": zL, "side": "all", "label": "大端ボア"},
-        "wall_thickness": {"z0": zt, "z1": zL, "side": "all", "label": "肉厚"},
-        "body_tenon_length": {"z0": zbody, "z1": zL, "side": "all", "label": "本体挿入部"},
+        "tenon_length": {"z0": 0.0, "z1": zt, "side": "all", "label": i18n.t("テノン（コルク座）")},
+        "tenon_od": {"z0": 0.0, "z1": zt, "side": "all", "label": i18n.t("テノン外径")},
+        "cork_thickness": {"z0": 0.0, "z1": zt, "side": "all", "label": i18n.t("コルク厚")},
+        "bore_small_id": {"z0": 0.0, "z1": zt, "side": "all", "label": i18n.t("小端ボア")},
+        "neck_length": {"z0": 0.0, "z1": zL, "side": "all", "label": i18n.t("ネック全長")},
+        "bend_angle": {"z0": zt, "z1": zL, "side": "all", "label": i18n.t("曲げ区間")},
+        "bore_large_id": {"z0": zt, "z1": zL, "side": "all", "label": i18n.t("大端ボア")},
+        "wall_thickness": {"z0": zt, "z1": zL, "side": "all", "label": i18n.t("肉厚")},
+        "body_tenon_length": {"z0": zbody, "z1": zL, "side": "all", "label": i18n.t("本体挿入部")},
     }
     if p["octave_vent"] == "on":
         sv = max(0.05, min(0.95, p["vent_position"])) * L
         zv = centerline_point(sv, p)[0][2]
         vent = {"z0": max(0.0, zv - 6.0), "z1": zv + 6.0, "side": "all",
-                "label": "オクターブベント"}
+                "label": i18n.t("オクターブベント")}
         reg["vent_position"] = vent
         reg["vent_dia"] = dict(vent)
         reg["chimney_height"] = dict(vent)

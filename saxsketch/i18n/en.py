@@ -1047,3 +1047,11 @@ PARAMS: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
+
+
+from . import en_cards as _cards   # noqa: E402  （下で合流させるので末尾に置く）
+
+#: 助言カード・警告・採寸の文（便 D 後半）。量が多いので別ファイルに分けてある。
+#: **合流先は同じ `MESSAGES`** —— 引く側に 2 つの表があると、どちらに足すかで
+#: 迷いが出るし、網（`tests/test_i18n.py`）も 2 か所を見ることになる。
+MESSAGES.update(_cards.MESSAGES)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import math
 
+from saxsketch import i18n
+
 #: 材料表の唯一の出所: key → (表示名, ヤング率 E [MPa], 密度 ρ [kg/m³],
 #: 実用強度の下限厚 [mm], 工程)。UI の選択肢も BOM の材料名もここから引く
 #: （物性と表示名が別々の表にあると、片方だけ増やしても実行時エラーにならず
@@ -51,13 +53,15 @@ MIN_LAYER_RANGE = (0.02, 0.20)
 
 
 def material_label(key: str) -> str:
-    return MATERIALS.get(key, (key,))[0]
+    # 表はモジュール直下にあるので、訳すのは**引く所**（取り込み時に
+    # 固めない）。`i18n.CHOICES` が同じ鍵で英語を持っている。
+    return i18n.choice_label(key, MATERIALS.get(key, (key,))[0])
 
 
 def material_process(key: str) -> str:
     """工程の表示名（「FDM」/「光造形」/「切削」）。"""
     row = MATERIALS.get(key, MATERIALS[DEFAULT_MATERIAL])
-    return PROCESS_LABELS.get(row[4], row[4])
+    return i18n.choice_label(row[4], PROCESS_LABELS.get(row[4], row[4]))
 
 
 def _rp():
@@ -331,10 +335,10 @@ def _calibration_deflection() -> float:
 def _strength_label(v: float) -> str:
     """市販の硬さ番手表記（1, 1½, 2, 2½ …）へ丸める。番手レンジ外は数値で示す。"""
     if v > 5.25:
-        return f"硬さ {v:.1f}（市販番手レンジ外）"
+        return i18n.t("硬さ {v}（市販番手レンジ外）", v=f"{v:.1f}")
     half = round(v * 2.0) / 2.0
     whole = int(half)
-    return f"{whole}½ 相当" if half - whole >= 0.5 else f"{whole} 相当"
+    return i18n.t("{whole}½ 相当", whole=f"{whole}") if half - whole >= 0.5 else i18n.t("{whole} 相当", whole=f"{whole}")
 
 
 def reed_override(props: dict, p: dict) -> dict:

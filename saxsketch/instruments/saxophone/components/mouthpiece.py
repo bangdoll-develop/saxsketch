@@ -23,6 +23,8 @@ from saxsketch.geometry.builders import (
     yz_profile_cut_solid,
     yz_profile_cut_solid_curved,
 )
+from saxsketch import i18n
+
 from . import profiles
 from . import reed_seat
 from . import reference_check
@@ -678,7 +680,9 @@ class MouthpieceComponent(Component):
         except Exception:                      # noqa: BLE001 - 形状生成の失敗全般
             import logging
             logging.getLogger(__name__).warning(
-                "build_cad が失敗したため build() の表現で STEP を出力します",
+                i18n.t(
+                    "build_cad が失敗したため build() の表現で STEP "
+                    "を出力します"),
                 exc_info=True)
             return self.build(params)
 
@@ -779,7 +783,7 @@ class MouthpieceComponent(Component):
             ob.tuning_position(params, self.size_info),
             headroom_cc=profiles.chamber_headroom_cc(params, cr_max))
         tier2 = ac_brightness.tone_metrics(params)
-        sens = ac_brightness.sensitivity(params, self.param_specs(),
+        sens = ac_brightness.sensitivity(params, self.localized_specs(),
                                          self.param_bounds(params))
         harm = ac_harmonics.harmonic_series(tier2)
         return {
@@ -838,7 +842,7 @@ class MouthpieceComponent(Component):
         見るようにした、Phase 4-F）、マウスピースの面を 1 つも決めていない。代わりに実幅を出す。
         """
         p = params
-        sp = {s.key: s for s in self.param_specs()}
+        sp = {s.key: s for s in self.localized_specs()}
         L = p["overall_length"]
         hz = profiles.heel_z(p)
         zb = profiles.bore_start_z(p)
@@ -882,7 +886,7 @@ class MouthpieceComponent(Component):
                 FWD, spec=sp["beak_height"], params=p, level=1),
             # --- テーブル実幅（x 方向なので断面には写らない）
             dim([-w_flat / 2.0, ty_seat, z_seat], [w_flat / 2.0, ty_seat, z_seat],
-                DOWN, key="table_flat_width", label="テーブル実幅", unit="mm",
+                DOWN, key="table_flat_width", label=i18n.t("テーブル実幅"), unit="mm",
                 level=3),
         ]
 
@@ -901,16 +905,18 @@ class MouthpieceComponent(Component):
             return []
         parts = []
         if cone:
-            parts.append("最大径からシャンク端まで一直線（円錐・平行部なし）")
+            parts.append(i18n.t("最大径からシャンク端まで一直線（円錐・平行部なし）"))
         else:
-            parts.append(f"平行部 {p['shank_length']:.1f} mm / "
-                         f"肩 {profiles.shoulder_length(p):.1f} mm")
+            parts.append(i18n.t(
+                "平行部 {shank_length} mm / 肩 {profiles} mm",
+                shank_length=f"{p['shank_length']:.1f}",
+                profiles=f"{profiles.shoulder_length(p):.1f}"))
             if abs(full) >= 1e-12:
-                parts.append(f"肩の張り {full:+.2f}"
-                             + ("（母線が直線）" if profiles.shoulder_is_straight(p) else ""))
+                parts.append(i18n.t("肩の張り {full}", full=f"{full:+.2f}")
+                             + (i18n.t("（母線が直線）") if profiles.shoulder_is_straight(p) else ""))
         if abs(waist) >= 1e-12:
-            parts.append(f"胴の膨らみ {waist:+.3f}")
-        return [("外形（実測形からの変更）", " / ".join(parts))]
+            parts.append(i18n.t("胴の膨らみ {waist}", waist=f"{waist:+.3f}"))
+        return [(i18n.t("外形（実測形からの変更）"), " / ".join(parts))]
 
     def _handle_ranges(self, params: dict | None = None) -> dict:
         """外形ハンドルへ渡す {key: (min, max, step)}。
@@ -973,7 +979,7 @@ class MouthpieceComponent(Component):
             "handles": (profiles.baffle_handles(params, self._handle_ranges(params))
                         + profiles.outer_handles(params, self._handle_ranges(params))),
             "baffle_type": params.get("baffle_type", "step"),
-            "title": "側面断面（中央面）— 丸ポチをドラッグ",
+            "title": i18n.t("側面断面（中央面）— 丸ポチをドラッグ"),
         }
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A）
@@ -1001,7 +1007,7 @@ class MouthpieceComponent(Component):
         **`values` を渡せば相手で動く壁がそちらを上書きする**（B-5）。実物は
         組で存在しているので、いま設計している組で置ける範囲が受け口の範囲。
         """
-        specs = {s.key: s for s in self.param_specs()}
+        specs = {s.key: s for s in self.localized_specs()}
         bounds = self.param_bounds(values) if values else {}
         params = []
         for k in self._SURVEY_PARAM_KEYS:
@@ -1015,19 +1021,22 @@ class MouthpieceComponent(Component):
             params.append({"key": k, "label": specs[k].label,
                            "unit": specs[k].unit, "min": lo, "max": hi,
                            "step": specs[k].step})
-        size = [dict(f) for f in self._SURVEY_SIZE_FIELDS]
+        size = [dict(f, label=i18n.t(f["label"]))
+                for f in self._SURVEY_SIZE_FIELDS]
         return {"params": params, "size": size}
 
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:
         """採寸値 vs 採寸前の設計/基準値。判定は `reference_check.survey_card`。"""
         return reference_check.survey_card(
-            "採寸 vs 設計",
-            {s.key: s for s in self.param_specs()},
-            {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS},
+            i18n.t("採寸 vs 設計"),
+            {s.key: s for s in self.localized_specs()},
+            {f["key"]: (i18n.t(f["label"]), f["unit"])
+             for f in self._SURVEY_SIZE_FIELDS},
             before_params, before_size, measured_params, measured_size,
-            "実測をプロジェクトへ反映しました。設計をいじって破綻したら"
-            "「採寸時点へ戻す」で復元できます。")
+            i18n.t(
+                "実測をプロジェクトへ反映しました。"
+                "設計をいじって破綻したら「採寸時点へ戻す」で復元できます。"))
 
     def survey_measure_mesh(self, mesh) -> dict:
         """外部マウスピース メッシュ（3mf/STL）から外形バルク寸法だけを実測。
@@ -1056,7 +1065,7 @@ class MouthpieceComponent(Component):
             measured["overall_length"] = round(L, 2)
             confidence["overall_length"] = info["axis_conf"]
         else:
-            notes.append("主軸が不確実なため全長も参考値です。")
+            notes.append(i18n.t("主軸が不確実なため全長も参考値です。"))
             measured["overall_length"] = round(L, 2)
             confidence["overall_length"] = "low"
 
@@ -1076,11 +1085,14 @@ class MouthpieceComponent(Component):
                 measured["bore_dia"] = round(res[0], 2)
                 confidence["bore_dia"] = res[1]
         if "bore_dia" not in measured:
-            notes.append("シャンク内径を確実に測れませんでした（ノギス実測を推奨）。")
+            notes.append(i18n.t(
+                "シャンク内径を確実に測れませんでした（ノギス実測を推奨）。"))
 
         notes.append(
-            "ティップ開き・フェイシング長・レール幅・窓長・バッフル・チェンバーは"
-            "外部モデルから一意に測れません。ノギス実測して手入力してください。")
+            i18n.t(
+                "ティップ開き・フェイシング長・レール幅・窓長・バッフル・"
+                "チェンバーは外部モデルから一意に測れません。"
+                "ノギス実測して手入力してください。"))
         return {"measured": measured, "measured_size": {},
                 "confidence": confidence, "notes": notes}
 
@@ -1089,7 +1101,7 @@ class MouthpieceComponent(Component):
         from saxsketch.analysis import meshdiff
         from . import measure
         result = measure.estimate_params(edited_mesh, frozen_params,
-                                         self.param_specs())
+                                         self.localized_specs())
         return {
             "regions": meshdiff.region_deviations(
                 ref_mesh, edited_mesh, self.regions(frozen_params)),
@@ -1100,19 +1112,25 @@ class MouthpieceComponent(Component):
     # ------------------------------------------------------------ BOM / 仕様書
 
     def bom(self, params: dict) -> list[dict]:
-        mat_labels = {"resin": "レジン(光造形)", "pla": "PLA", "petg": "PETG",
-                      "nylon_sls": "ナイロンPA12(SLS)"}
-        size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]
+        mat_labels = {"resin": i18n.t("レジン(光造形)"), "pla": "PLA", "petg": "PETG",
+                      "nylon_sls": i18n.t("ナイロンPA12(SLS)")}
+        size_label = {"soprano": i18n.t("ソプラノ"), "alto": i18n.t("アルト"), "tenor": i18n.t("テナー")}[self.size]
         return [
-            {"type": "3Dプリント", "name": f"マウスピース本体（{size_label}）",
+            {"type": i18n.t("3Dプリント"), "name": i18n.t(
+                "マウスピース本体（{size_label}）",
+                size_label=f"{size_label}"),
              "qty": 1, "material": mat_labels.get(params["material"], params["material"]),
-             "note": "食品接触面。印刷後に洗浄・シーリング推奨（仕様書参照）"},
-            {"type": "市販品", "name": f"リード（{size_label}用）", "qty": 1,
-             "material": "ケーン/樹脂", "note": f"幅 {params['reed_width']:.1f}mm 規格"},
-            {"type": "市販品", "name": f"リガチャー（{size_label}用）", "qty": 1,
-             "material": "-", "note": f"ボディ径 φ{params['body_dia']:.1f}mm 適合品"},
-            {"type": "市販品", "name": "マウスピースパッチ", "qty": 1,
-             "material": "シリコン", "note": "ビーク保護（任意）"},
+             "note": i18n.t("食品接触面。印刷後に洗浄・シーリング推奨（仕様書参照）")},
+            {"type": i18n.t("市販品"), "name": i18n.t("リード（{size_label}用）", size_label=f"{size_label}"), "qty": 1,
+             "material": i18n.t("ケーン/樹脂"), "note": i18n.t(
+                 "幅 {reed_width}mm 規格",
+                 reed_width=f"{params['reed_width']:.1f}")},
+            {"type": i18n.t("市販品"), "name": i18n.t("リガチャー（{size_label}用）", size_label=f"{size_label}"), "qty": 1,
+             "material": "-", "note": i18n.t(
+                 "ボディ径 φ{body_dia}mm 適合品",
+                 body_dia=f"{params['body_dia']:.1f}")},
+            {"type": i18n.t("市販品"), "name": i18n.t("マウスピースパッチ"), "qty": 1,
+             "material": i18n.t("シリコン"), "note": i18n.t("ビーク保護（任意）")},
         ]
 
     def _section_svg(self, params: dict) -> str:
@@ -1131,8 +1149,10 @@ class MouthpieceComponent(Component):
             {"pts": pr["cavity_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["table_plane"], "stroke": "#cc3300",
              "width": 0.8, "dash": "2 2"},
-        ], f"側面断面図（実線=外形 / 青破線=内部空洞 / "
-           f"赤破線=テーブル平面 傾斜{deg:.2f}°） 単位:mm")
+        ], i18n.t(
+            "側面断面図（実線=外形 / 青破線=内部空洞 / 赤破線=テーブル平面 "
+            "傾斜{deg}°） 単位:mm",
+            deg=f"{deg:.2f}"))
 
     def spec_extras(self, params: dict) -> dict:
         from saxsketch.acoustics import openwind_bridge as ob
@@ -1142,38 +1162,47 @@ class MouthpieceComponent(Component):
         # UI 側は速い線形推定（`ob.tuning_position` の既定）。
         tune = ob.tuning_position(p, self.size_info, exact=True)
         dims = [
-            ("全長", f"{p['overall_length']:.1f} mm"),
-            ("ティップ開き", f"{p['tip_opening']:.2f} mm"),
-            ("フェイシング長", f"{p['facing_length']:.1f} mm"),
-            ("ボア径", f"φ{p['bore_dia']:.2f} mm"),
-            ("ボディ径（リガチャー座）", f"φ{p['body_dia']:.1f} mm"),
+            (i18n.t("全長"), f"{p['overall_length']:.1f} mm"),
+            (i18n.t("ティップ開き"), f"{p['tip_opening']:.2f} mm"),
+            (i18n.t("フェイシング長"), f"{p['facing_length']:.1f} mm"),
+            (i18n.t("ボア径"), f"φ{p['bore_dia']:.2f} mm"),
+            (i18n.t("ボディ径（リガチャー座）"), f"φ{p['body_dia']:.1f} mm"),
             # 実効値で出す。`window_length` は「ボアの始まり −4.0mm」で頭打ちに
             # なることがあり、その帯では指定値が形に出ない。仕様書は納品物なので、
             # 部品が持っていない寸法を書いてはいけない（`window_length_effective`）。
-            ("ウィンドウ長 × 窓幅",
+            (i18n.t("ウィンドウ長 × 窓幅"),
              f"{profiles.window_length_effective(p):.1f} × "
              f"{profiles.window_width(p):.1f} mm"
-             + (f"（指定 {p['window_length']:.1f}mm はボアの始まりに阻まれて "
-                f"{profiles.window_length_shortfall(p):.1f}mm 届いていません）"
+             + (i18n.t(
+                 "（指定 {window_length}mm はボアの始まりに阻まれて "
+                 "{profiles}mm 届いていません）",
+                 window_length=f"{p['window_length']:.1f}",
+                 profiles=f"{profiles.window_length_shortfall(p):.1f}")
                 if profiles.window_length_shortfall(p) > 0.05 else "")),
-            ("内容積（全体/実効）", f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
+            (i18n.t("内容積（全体/実効）"), f"{vol['total_cc']:.1f} / {vol['effective_cc']:.1f} cc"),
             *self._outer_shape_dims(p),
             # コーク挿入深さは寸法ではなくチューニング量。設計値として意味があるのは
             # 「目標音で鳴らせる挿し込み量が実際に届く範囲にあるか」の方。
             # **基準条件での値**であって実演奏の位置の予測ではない（volume.py の
             # モジュール docstring）。仕様書は単独で読まれるので条件をラベルに書く。
-            (f"目標音が出る挿し込み量（{ob.TEMPERATURE_C:.0f}°C 基準）",
+            (i18n.t(
+                "目標音が出る挿し込み量（{ob}°C 基準）",
+                ob=f"{ob.TEMPERATURE_C:.0f}"),
              (f"{tune['in_tune_mm']:.1f} mm" if tune['in_tune_mm'] is not None
               # 合う位置が無い形もある（ボアがほとんど無いなど）。数字を作らない。
               # 理由はすぐ後ろの括弧が言う（傾きが 0.00 セント/mm と出る）。
-              else "**無し**")
-             + f"（実用域 {tune['range_mm'][0]:.0f}〜{tune['range_mm'][1]:.0f} mm、"
-             f"1mm 押し込むと {tune['cents_per_mm']:+.2f} セント）"),
+              else i18n.t("**無し**"))
+             + i18n.t(
+                 "（実用域 {range_mm}〜{range_mm2} mm、1mm "
+                 "押し込むと {cents_per_mm} セント）",
+                 range_mm=f"{tune['range_mm'][0]:.0f}",
+                 range_mm2=f"{tune['range_mm'][1]:.0f}",
+                 cents_per_mm=f"{tune['cents_per_mm']:+.2f}")),
         ]
         # 各部名称（参照サイト準拠）を寸法表に畳み込む。コア（spec.py）は dimensions と
         # sections しか知らないので、部品側で行として組み立てる（「コアは楽器を知らない」）。
-        dims.append(("― 各部名称（z範囲）―", ""))
+        dims.append((i18n.t("― 各部名称（z範囲）―"), ""))
         dims += [(a["part"], f"z {a['z0']:.1f}–{a['z1']:.1f} mm")
                  for a in profiles.anatomy_regions(p)]
         return {"dimensions": dims,
-                "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}
+                "sections": [{"title": i18n.t("断面図"), "svg": self._section_svg(p)}]}

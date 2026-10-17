@@ -34,6 +34,8 @@ from saxsketch.acoustics import toneholes
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 
+from saxsketch import i18n
+
 from . import body_profiles as bpf
 from . import neck_profiles as npf
 from . import reference_check
@@ -166,10 +168,10 @@ class BodyComponent(Component):
     def ref_dimensions(self) -> list[tuple[str, str]]:
         n = self._neck()
         return [
-            ("ネック全長（弧長）", f"{n['neck_length']:.0f} mm"),
-            ("小端ボア内径", f"φ{n['bore_small_id']:.1f} mm"),
-            ("本体挿入部長", f"{n['body_tenon_length']:.0f} mm"),
-            ("曲げ角", f"{n['bend_angle']:.0f} °"),
+            (i18n.t("ネック全長（弧長）"), f"{n['neck_length']:.0f} mm"),
+            (i18n.t("小端ボア内径"), f"φ{n['bore_small_id']:.1f} mm"),
+            (i18n.t("本体挿入部長"), f"{n['body_tenon_length']:.0f} mm"),
+            (i18n.t("曲げ角"), f"{n['bend_angle']:.0f} °"),
         ]
 
     # ------------------------------------------------------------ 形状生成
@@ -290,37 +292,47 @@ class BodyComponent(Component):
         """全閉から順に開けたときの音階と、4-B.2c が使うつまみの効き。"""
         solver, holes = self._solver(params)
         rows_scale = solver.scale()
-        rows = [[f"{r['name']}（目標 {r['target_note']}）",
+        rows = [[i18n.t(
+            "{name}（目標 {target_note}）",
+            name=i18n.t(r["name"]),
+            target_note=f"{r['target_note']}"),
                  f"{r['freq']:.1f} Hz  {r['cents']:+.0f} c"] for r in rows_scale]
         opened = [r for r in rows_scale if r["name"] != "全閉"]
         if opened:
             base = [r["cents"] for r in opened]
-            for label, kw in (("チムニー +1mm", {"d_chimney_mm": 1.0}),
-                              ("指孔径 +1mm", {"d_dia_mm": 1.0})):
+            for label, kw in ((i18n.t("チムニー +1mm"), {"d_chimney_mm": 1.0}),
+                              (i18n.t("指孔径 +1mm"), {"d_dia_mm": 1.0})):
                 got = solver.scale(self._shifted(holes, **kw))
                 d = [g["cents"] - b for g, b in
                      zip([g for g in got if g["name"] != "全閉"], base)]
                 rows.append([label,
-                             f"平均 {sum(d) / len(d):+.1f} c "
-                             f"（{min(d):+.1f}〜{max(d):+.1f}）"])
+                             i18n.t(
+                                 "平均 {sum} c （{min}〜{max}）",
+                                 sum=f"{sum(d) / len(d):+.1f}",
+                                 min=f"{min(d):+.1f}", max=f"{max(d):+.1f}")])
         worst = max(rows_scale, key=lambda r: abs(r["cents"]))
-        note = ("**調律の保証ではありません。** 4-B.2b の穴位置は 0 次規則"
-                "（開孔位置＝その音が鳴る円錐長）で置いた**暫定値**で、実測でも解でも"
-                "ありません。有限径の穴は完全な開口端ではないので、実際の共鳴は"
-                "0 次の予測より低く出ます。ここに出ているセントは「設計が外れている量」"
-                "ではなく、**4-B.2c のソルバが潰す残差**そのものです。"
-                "評価は理想マウスピース＋直線円錐（ベル未接続）の上で、"
-                "TMM 固定・全閉が目標音ちょうどになる物差しで行っています。")
+        note = (i18n.t(
+            "**調律の保証ではありません。** 4-B.2b の穴位置は 0 "
+            "次規則（開孔位置＝その音が鳴る円錐長）で置いた**暫定値**で、"
+            "実測でも解でもありません。有限径の穴は完全な開口端ではないので、"
+            "実際の共鳴は0 次の予測より低く出ます。"
+            "ここに出ているセントは「設計が外れている量」ではなく、**4-B.2c "
+            "のソルバが潰す残差**そのものです。評価は理想マウスピー"
+            "ス＋直線円錐（ベル未接続）の上で、TMM 固定・"
+            "全閉が目標音ちょうどになる物差しで行っています。"))
         if abs(worst["cents"]) <= SCALE_TOL_CENTS:
-            return {"title": "音階（側孔・暫定配置）",
-                    "big": f"最大 {worst['cents']:+.0f} c", "status": "ok",
+            return {"title": i18n.t("音階（側孔・暫定配置）"),
+                    "big": i18n.t("最大 {cents} c", cents=f"{worst['cents']:+.0f}"), "status": "ok",
                     "rows": rows, "advice": note}
-        return {"title": "音階（側孔・暫定配置）",
-                "big": f"最大 {worst['cents']:+.0f} c（{worst['name']}）",
+        return {"title": i18n.t("音階（側孔・暫定配置）"),
+                "big": i18n.t(
+                    "最大 {cents} c（{name}）",
+                    cents=f"{worst['cents']:+.0f}", name=f"{worst['name']}"),
                 "status": "warn", "rows": rows,
-                "advice": (f"0 次配置のままだと {worst['name']} が "
-                           f"{worst['cents']:+.0f} セント外れます。"
-                           f"チムニーと穴径の効きは上の 2 行です。 ") + note}
+                "advice": (i18n.t(
+                    "0 次配置のままだと {name} が {cents} セント外れます。"
+                    "チムニーと穴径の効きは上の 2 行です。 ",
+                    name=f"{worst['name']}", cents=f"{worst['cents']:+.0f}")) + note}
 
     def _reach_card(self, params: dict) -> dict:
         """指が届くか。**キーレスで最初に効く拘束はここ。**"""
@@ -333,45 +345,54 @@ class BodyComponent(Component):
             z = bpf.hole_zone(h["s_mm"], p, n)
             zones[z] = zones.get(z, 0) + 1
         rows = [
-            ["指孔の本数", f"{len(fingers)} 本"
-             + ("＋親指孔" if len(holes) > len(fingers) else "")],
-            ["指孔の弧長スパン", f"{span:.0f} mm"],
-            ["両手の実用スパン目安", f"{bpf.HAND_SPAN_MM:.0f} mm"],
-            ["載る区間", " / ".join(f"{k} {v}本" for k, v in sorted(zones.items()))],
-            ["指孔径 / ふさげる目安",
+            [i18n.t("指孔の本数"), i18n.t("{len} 本", len=f"{len(fingers)}")
+             + (i18n.t("＋親指孔") if len(holes) > len(fingers) else "")],
+            [i18n.t("指孔の弧長スパン"), f"{span:.0f} mm"],
+            [i18n.t("両手の実用スパン目安"), f"{bpf.HAND_SPAN_MM:.0f} mm"],
+            [i18n.t("載る区間"), " / ".join(i18n.t("{k} {v}本", k=f"{k}", v=f"{v}") for k, v in sorted(zones.items()))],
+            [i18n.t("指孔径 / ふさげる目安"),
              f"φ{p['hole_dia']:.1f} / φ{bpf.FINGER_PAD_DIA_MM:.0f} mm"],
         ]
         if fingers:
-            rows.insert(1, ["最上 → 最下（スロートから）",
+            rows.insert(1, [i18n.t("最上 → 最下（スロートから）"),
                             f"{min(h['s_mm'] for h in fingers):.0f} → "
                             f"{max(h['s_mm'] for h in fingers):.0f} mm"])
-        common = ("スパンは音程で決まります —— 実効長が 1/f に比例する管"
-                  "（円錐も円筒もそう）では、全閉から 1 オクターブ上までの位置比は"
-                  "`f_高/f_低` そのもので、頂点から測った管の 44.1% にあたります。"
-                  "だから**「穴を寄せる」ことはできません**。"
-                  f"目安の {bpf.HAND_SPAN_MM:.0f}mm はリコーダ（約200）と"
-                  "クラリネット（7孔で約230）の実測から採った値で、物理ではありません。")
+        common = (i18n.t(
+            "スパンは音程で決まります —— 実効長が 1/f "
+            "に比例する管（円錐も円筒もそう）では、全閉から 1 オクター"
+            "ブ上までの位置比は`f_高/f_低` そのもので、頂点から測った管の 44."
+            "1% にあたります。だから**「穴を寄せる」ことはできません**。"
+            "目安の {bpf}mm はリコーダ（約200）とクラリネット（7孔で約230）"
+            "の実測から採った値で、物理ではありません。",
+            bpf=f"{bpf.HAND_SPAN_MM:.0f}"))
         if float(p["hole_dia"]) > bpf.FINGER_PAD_DIA_MM and fingers:
-            rows.append(["注意", "指では塞ぎきれない太さです"])
+            rows.append([i18n.t("注意"), i18n.t("指では塞ぎきれない太さです")])
         fit = bpf.max_finger_holes_in_span(si)
-        rows.append([f"{bpf.HAND_SPAN_MM:.0f}mm に収まる本数",
-                     f"{fit} 本（＝全閉を入れて {fit + 1} 音）"])
+        rows.append([i18n.t("{bpf}mm に収まる本数", bpf=f"{bpf.HAND_SPAN_MM:.0f}"),
+                     i18n.t(
+                         "{fit} 本（＝全閉を入れて {fit2} 音）",
+                         fit=f"{fit}", fit2=f"{fit + 1}")])
         if span > bpf.HAND_SPAN_MM:
-            return {"title": "指の届く範囲", "big": "届きません", "status": "warn",
+            return {"title": i18n.t("指の届く範囲"), "big": i18n.t("届きません"), "status": "warn",
                     "rows": rows,
-                    "advice": (f"指孔が {span:.0f}mm に広がっており、両手では"
-                               f"押さえられません（目安の {span / bpf.HAND_SPAN_MM:.1f} 倍）。"
-                               "**これは配置の失敗ではなく、このサイズでキーレス全音階が"
-                               "成立しないという結論です。** 逃げ道は 3 つ ——"
-                               f"(1) 音階の段数を減らす（このサイズなら {fit} 孔まで）、"
-                               "(2) フォーク運指で穴を減らす、"
-                               "(3) もっと小さい楽器にする。"
-                               "**キー機構で延ばす**のは 4-B.4 の話で、そうすると"
-                               "「キーレス」ではなくなります。 ") + common}
-        return {"title": "指の届く範囲", "big": "届きます", "status": "ok",
+                    "advice": (i18n.t(
+                        "指孔が {span}mm に広がっており、"
+                        "両手では押さえられません（目安の {span2} 倍）。"
+                        "**これは配置の失敗ではなく、このサイズでキー"
+                        "レス全音階が成立しないという結論です。** 逃げ道は "
+                        "3 つ ——(1) 音階の段数を減らす（このサイズなら "
+                        "{fit} 孔まで）、(2) フォーク運指で穴を減らす、(3) "
+                        "もっと小さい楽器にする。**キー機構で延ばす**のは "
+                        "4-B.4 の話で、そうすると「キーレス」"
+                        "ではなくなります。 ",
+                        span=f"{span:.0f}",
+                        span2=f"{span / bpf.HAND_SPAN_MM:.1f}", fit=f"{fit}")) + common}
+        return {"title": i18n.t("指の届く範囲"), "big": i18n.t("届きます"), "status": "ok",
                 "rows": rows,
-                "advice": ("指孔が両手のスパンに収まります。ボウやベルに載った穴は"
-                           "面が傾くので、実物では押さえにくいことがあります。 ") + common}
+                "advice": (i18n.t(
+                    "指孔が両手のスパンに収まります。"
+                    "ボウやベルに載った穴は面が傾くので、"
+                    "実物では押さえにくいことがあります。 ")) + common}
 
     def impedance(self, params: dict) -> dict:
         """全閉のインピーダンス曲線（理想マウスピース＋側孔）。
@@ -391,39 +412,51 @@ class BodyComponent(Component):
             fit = reference_check.INTERFERENCE_FIT_MM
             need = n["tenon_od"] + 2.0 * n["cork_thickness"]
             rows = [
-                ["繋ぎ方", "一体（ネックまで1部品）"],
-                ["ネック区間の弧長", f"{n['neck_length']:.0f} mm"],
-                ["テノン外径 ＋ コルク", f"φ{need:.2f} mm（自由状態）"],
-                ["合うマウスピースのボア径", f"φ{need - fit:.2f} mm"],
-                ["部品の弧長", f"{bpf.part_arc(p, n):.0f} mm"],
+                [i18n.t("繋ぎ方"), i18n.t("一体（ネックまで1部品）")],
+                [i18n.t("ネック区間の弧長"), f"{n['neck_length']:.0f} mm"],
+                [i18n.t("テノン外径 ＋ コルク"), i18n.t("φ{need} mm（自由状態）", need=f"{need:.2f}")],
+                [i18n.t("合うマウスピースのボア径"), f"φ{need - fit:.2f} mm"],
+                [i18n.t("部品の弧長"), f"{bpf.part_arc(p, n):.0f} mm"],
             ]
-            advice = ("テノン継手が無いので漏れ経路とボアの段差が 1 つ減ります。"
-                      "代わりに**姿勢を調整できません** —— 実機のネックは回して銜え角を"
-                      "合わせます。ストレートソプラノは元からそうなので実害は小さいですが、"
-                      "曲げのあるサイズでは奏者ごとの角度差を吸収できません。"
-                      "壊れたときに全部作り直しになる点も別体との違いです。"
-                      "**音響はどちらでも同じ**です（継ぎ目はモデルに入っていません）。")
-            return {"title": "ネック接続", "big": "一体型", "status": "ok",
+            advice = (i18n.t(
+                "テノン継手が無いので漏れ経路とボアの段差が 1 つ減ります。"
+                "代わりに**姿勢を調整できません** —— "
+                "実機のネックは回して銜え角を合わせます。ストレー"
+                "トソプラノは元からそうなので実害は小さいですが、"
+                "曲げのあるサイズでは奏者ごとの角度差を吸収できません。"
+                "壊れたときに全部作り直しになる点も別体との違いです。"
+                "**音響はどちらでも同じ**です（継ぎ目はモデルに入っていません"
+                "）。"))
+            return {"title": i18n.t("ネック接続"), "big": i18n.t("一体型"), "status": "ok",
                     "rows": rows, "advice": advice}
 
         sock_id = 2.0 * bpf.socket_bore_radius(p, si, n)
         spigot_od = 2.0 * npf.outer_radius_at(float(n["neck_length"]), n, si)
         rows = [
-            ["繋ぎ方", "別体（テノンで挿す）"],
-            ["ネックのスピゴット外径", f"φ{spigot_od:.2f} mm"],
-            ["受け穴内径", f"φ{sock_id:.2f} mm（片側隙間 {p['socket_clearance']:.2f}）"],
-            ["受け深さ / スピゴット長", f"{p['socket_length']:.0f} / {n['body_tenon_length']:.0f} mm"],
-            ["部品の弧長", f"{bpf.part_arc(p, n):.0f} mm"],
+            [i18n.t("繋ぎ方"), i18n.t("別体（テノンで挿す）")],
+            [i18n.t("ネックのスピゴット外径"), f"φ{spigot_od:.2f} mm"],
+            [i18n.t("受け穴内径"), i18n.t(
+                "φ{sock_id} mm（片側隙間 {socket_clearance}）",
+                sock_id=f"{sock_id:.2f}",
+                socket_clearance=f"{p['socket_clearance']:.2f}")],
+            [i18n.t("受け深さ / スピゴット長"), f"{p['socket_length']:.0f} / {n['body_tenon_length']:.0f} mm"],
+            [i18n.t("部品の弧長"), f"{bpf.part_arc(p, n):.0f} mm"],
         ]
         if p["socket_length"] + 0.5 < n["body_tenon_length"]:
-            return {"title": "ネック接続", "big": "受けが浅い", "status": "warn", "rows": rows,
-                    "advice": (f"受け深さ {p['socket_length']:.0f}mm がネックの挿入部 "
-                               f"{n['body_tenon_length']:.0f}mm より浅く、スピゴットが底突きします。"
-                               f"受けを深くするか、ネック側の挿入部を短くしてください。")}
-        return {"title": "ネック接続", "big": "噛み合い可", "status": "ok", "rows": rows,
-                "advice": ("印刷品でいちばん気密が出ないのが継手です。はめあい隙間は"
-                           "実測で詰めてください。一体型（ネックまで1部品）にすると"
-                           "この継手ごと無くなります —— **音響は変わりません**。")}
+            return {"title": i18n.t("ネック接続"), "big": i18n.t("受けが浅い"), "status": "warn", "rows": rows,
+                    "advice": (i18n.t(
+                        "受け深さ {socket_length}mm "
+                        "がネックの挿入部 {body_tenon_length}mm より浅く、"
+                        "スピゴットが底突きします。受けを深くするか、"
+                        "ネック側の挿入部を短くしてください。",
+                        socket_length=f"{p['socket_length']:.0f}",
+                        body_tenon_length=f"{n['body_tenon_length']:.0f}"))}
+        return {"title": i18n.t("ネック接続"), "big": i18n.t("噛み合い可"), "status": "ok", "rows": rows,
+                "advice": (i18n.t(
+                    "印刷品でいちばん気密が出ないのが継手です。"
+                    "はめあい隙間は実測で詰めてください。"
+                    "一体型（ネックまで1部品）にするとこの継手ごと無くなります"
+                    " —— **音響は変わりません**。"))}
 
     def _cone_card(self, params: dict) -> dict:
         """円錐リーチ。**(B)「ネック省略」を検出する唯一の量。**
@@ -438,36 +471,46 @@ class BodyComponent(Component):
         end_dia = bpf.cone_end_dia(p, si, n)
         gap = bpf.neck_throat_gap_mm(n, si)
         rows = [
-            ["円錐リーチ（スロート→出口）", f"{reach:.1f} mm"],
-            ["合う長さ（低音 "
-             f"{si['low_note_label']} {si['low_note_sounding_hz']:.2f}Hz）", f"{target:.1f} mm"],
-            ["差", f"{d:+.1f} mm"],
-            ["円錐終端 → ベル出口", f"φ{end_dia:.1f} → φ{p['bell_exit_dia']:.1f} mm"],
+            [i18n.t("円錐リーチ（スロート→出口）"), f"{reach:.1f} mm"],
+            [i18n.t(
+                "合う長さ（低音 {low_note_label} {low_note_sounding_hz}Hz）",
+                low_note_label=f"{si['low_note_label']}",
+                low_note_sounding_hz=f"{si['low_note_sounding_hz']:.2f}"), f"{target:.1f} mm"],
+            [i18n.t("差"), f"{d:+.1f} mm"],
+            [i18n.t("円錐終端 → ベル出口"), f"φ{end_dia:.1f} → φ{p['bell_exit_dia']:.1f} mm"],
         ]
         if abs(gap) > 0.05:
-            rows.append(["参照ネックの小端ボアのずれ", f"{gap:+.2f} mm（スロート基準）"])
-        note = ("**ベルは音響へ接続していません。** フレアは 3 サイズとも未実測で、"
-                "入れると全閉の第1共鳴が +38〜+106 セント動きます。未実測の仮定で音程の"
-                "記録値を動かさないため、共鳴管は校正済みの直線円錐のままにしてあります。"
-                "したがってこのカードは**鳴る音程を判定していません**。曲げの影響も"
-                "入っていません（弧長近似）。")
+            rows.append([i18n.t("参照ネックの小端ボアのずれ"), i18n.t("{gap} mm（スロート基準）", gap=f"{gap:+.2f}")])
+        note = (i18n.t(
+            "**ベルは音響へ接続していません。** フレアは 3 "
+            "サイズとも未実測で、入れると全閉の第1共鳴が +38〜+106 "
+            "セント動きます。未実測の仮定で音程の記録値を動かさないため、"
+            "共鳴管は校正済みの直線円錐のままにしてあります。"
+            "したがってこのカードは**鳴る音程を判定していません**。"
+            "曲げの影響も入っていません（弧長近似）。"))
         if abs(d) <= CONE_REACH_TOL_MM:
-            return {"title": "円錐リーチ（音響は未接続）", "big": "円錐は届いている",
+            return {"title": i18n.t("円錐リーチ（音響は未接続）"), "big": i18n.t("円錐は届いている"),
                     "status": "ok", "rows": rows, "advice": note}
         if d < 0:
-            big, extra = "円錐が短い", (
-                f"円錐が {abs(d):.0f}mm 足りません。円錐は長さで音程が決まるので、"
-                f"このままだと**約 {self._cents_for(reach, target):+.0f} セント**高くなります。"
-                "**ネックを省いて詰めた形になっていないか**を疑ってください —— "
-                "一体型は『ネックが本体と 1 部品』であって『ネックを外す』ことでは"
-                "ありません。外して詰めると円錐の先端側が消え、アルトなら約 +346 セント"
-                "（ほぼ短3度上）で別の楽器になります。")
+            big, extra = i18n.t("円錐が短い"), (
+                i18n.t(
+                    "円錐が {d}mm 足りません。円錐は長さで音程が決まるので、"
+                    "このままだと**約 {self} セント**高くなります。"
+                    "**ネックを省いて詰めた形になっていないか**を疑ってくださ"
+                    "い —— 一体型は『ネックが本体と 1 部品』"
+                    "であって『ネックを外す』ことではありません。"
+                    "外して詰めると円錐の先端側が消え、アルトなら約 +346 "
+                    "セント（ほぼ短3度上）で別の楽器になります。",
+                    d=f"{abs(d):.0f}",
+                    self=f"{self._cents_for(reach, target):+.0f}"))
         else:
-            big, extra = "円錐が長い", (
-                f"円錐が {d:.0f}mm 余ります。このままだと**約 "
-                f"{self._cents_for(reach, target):+.0f} セント**低くなります。"
-                "本体管長を詰めてください。")
-        return {"title": "円錐リーチ（音響は未接続）", "big": big, "status": "warn",
+            big, extra = i18n.t("円錐が長い"), (
+                i18n.t(
+                    "円錐が {d}mm 余ります。このままだと**約 {self} "
+                    "セント**低くなります。本体管長を詰めてください。",
+                    d=f"{d:.0f}",
+                    self=f"{self._cents_for(reach, target):+.0f}"))
+        return {"title": i18n.t("円錐リーチ（音響は未接続）"), "big": big, "status": "warn",
                 "rows": rows, "advice": extra + " " + note}
 
     def _target_cone_mm(self) -> float:
@@ -509,27 +552,35 @@ class BodyComponent(Component):
         arc = bpf.part_arc(p, n)
         segs = max(1, int(-(-arc // BED_HINT_MM)))
         rows = [
-            ["部品の弧長", f"{arc:.0f} mm"],
-            ["実用ベッド長の目安", f"{BED_HINT_MM:.0f} mm"],
-            ["分割の見込み", f"{segs} 分割"],
-            ["肉厚 / 下限", f"{p['wall_thickness']:.1f} / {p['min_wall']:.1f} mm"],
-            ["材料体積 / 概算質量", f"{vol_cc:.1f} cc / {vol_cc * dens:.0f} g"],
+            [i18n.t("部品の弧長"), f"{arc:.0f} mm"],
+            [i18n.t("実用ベッド長の目安"), f"{BED_HINT_MM:.0f} mm"],
+            [i18n.t("分割の見込み"), i18n.t("{segs} 分割", segs=f"{segs}")],
+            [i18n.t("肉厚 / 下限"), f"{p['wall_thickness']:.1f} / {p['min_wall']:.1f} mm"],
+            [i18n.t("材料体積 / 概算質量"), f"{vol_cc:.1f} cc / {vol_cc * dens:.0f} g"],
         ]
         if p["wall_thickness"] < p["min_wall"]:
-            return {"title": "印刷・肉厚・気密", "big": "肉厚不足", "status": "bad", "rows": rows,
-                    "advice": (f"肉厚が下限 {p['min_wall']:.1f}mm を下回ります。管壁が薄いと"
-                               "気密と強度が出ません。肉厚を上げてください。")}
-        advice = ("管体は層間の気密が要ります。FDM では層間ポロシティで漏れやすいので、"
-                  "レジン（光造形）か印刷後のシーリングを推奨します。")
+            return {"title": i18n.t("印刷・肉厚・気密"), "big": i18n.t("肉厚不足"), "status": "bad", "rows": rows,
+                    "advice": (i18n.t(
+                        "肉厚が下限 {min_wall}mm を下回ります。"
+                        "管壁が薄いと気密と強度が出ません。"
+                        "肉厚を上げてください。",
+                        min_wall=f"{p['min_wall']:.1f}"))}
+        advice = (i18n.t(
+            "管体は層間の気密が要ります。FDM では層間ポロシティで漏れやすいの"
+            "で、レジン（光造形）か印刷後のシーリングを推奨します。"))
         if segs > 1:
-            advice += (f" 弧長がベッド目安を超えるので **{segs} 分割**になります。"
-                       "分割そのものは後段 4-B.3 で、いまは出力しません。"
-                       "一体型を選んだから分割が要るのではなく、**別体でも要ります** "
-                       "（一体型が増やすのはネックの弧長ぶんだけ）。")
+            advice += (i18n.t(
+                " 弧長がベッド目安を超えるので **{segs} 分割**になります。"
+                "分割そのものは後段 4-B.3 で、いまは出力しません。"
+                "一体型を選んだから分割が要るのではなく、"
+                "**別体でも要ります** （一体型が増やすのはネックの弧長ぶんだけ"
+                "）。",
+                segs=f"{segs}"))
         if bpf.is_integrated(p) and n["bend_angle"] > 0.0:
-            advice += (" 一体型では継手を曲げの内部に置けないので、分割線は曲げの前後に"
-                       "限られます（4-B.3 への制約）。")
-        return {"title": "印刷・肉厚・気密", "big": "造形可", "status": "ok",
+            advice += (i18n.t(
+                " 一体型では継手を曲げの内部に置けないので、"
+                "分割線は曲げの前後に限られます（4-B.3 への制約）。"))
+        return {"title": i18n.t("印刷・肉厚・気密"), "big": i18n.t("造形可"), "status": "ok",
                 "rows": rows, "advice": advice}
 
     # ------------------------------------------------------------ 領域 / BOM / 仕様書
@@ -541,26 +592,33 @@ class BodyComponent(Component):
 
     def bom(self, params: dict) -> list[dict]:
         p, n = params, self._neck()
-        size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]
+        size_label = {"soprano": i18n.t("ソプラノ"), "alto": i18n.t("アルト"), "tenor": i18n.t("テナー")}[self.size]
         vol_cc = bpf.body_volume_mm3(p, self.size_info, n) / 1000.0
         arc = bpf.part_arc(p, n)
         segs = max(1, int(-(-arc // BED_HINT_MM)))
-        kind = "管体＋ネック一体" if bpf.is_integrated(p) else "管体"
+        kind = i18n.t("管体＋ネック一体") if bpf.is_integrated(p) else i18n.t("管体")
         rows = [
-            {"type": "3Dプリント", "name": f"{kind}（{size_label}）", "qty": 1,
-             "material": MAT_LABELS.get(p["material"], p["material"]),
-             "note": (f"材料体積 約{vol_cc:.0f}cc・弧長 {arc:.0f}mm。"
-                      f"ベッド目安では {segs} 分割（分割は 4-B.3）"
-                      + (f"。側孔 {len(bpf.hole_layout(p, self.size_info, n))} 個"
-                         f"（一体造形・後加工なし）" if bpf.is_holed(p) else ""))},
+            {"type": i18n.t("3Dプリント"), "name": f"{kind}（{size_label}）", "qty": 1,
+             "material": i18n.choice_label(
+                 p["material"], MAT_LABELS.get(p["material"],
+                                               p["material"])),
+             "note": (i18n.t(
+                 "材料体積 約{vol_cc}cc・弧長 {arc}mm。ベッド目安では "
+                 "{segs} 分割（分割は 4-B.3）",
+                 vol_cc=f"{vol_cc:.0f}", arc=f"{arc:.0f}", segs=f"{segs}")
+                      + (i18n.t(
+                          "。側孔 {len} 個（一体造形・後加工なし）",
+                          len=f"{len(bpf.hole_layout(p, self.size_info, n))}") if bpf.is_holed(p) else ""))},
         ]
         if bpf.is_integrated(p):
-            rows.append({"type": "市販品", "name": "テノン コルクストリップ", "qty": 1,
-                         "material": "コルク",
-                         "note": f"厚 {n['cork_thickness']:.1f}mm（マウスピース勘合）"})
+            rows.append({"type": i18n.t("市販品"), "name": i18n.t("テノン コルクストリップ"), "qty": 1,
+                         "material": i18n.t("コルク"),
+                         "note": i18n.t(
+                             "厚 {cork_thickness}mm（マウスピース勘合）",
+                             cork_thickness=f"{n['cork_thickness']:.1f}")})
         else:
-            rows.append({"type": "市販品", "name": "ネック接合 コルク／Oリング", "qty": 1,
-                         "material": "コルク/NBR", "note": "受け口の気密"})
+            rows.append({"type": i18n.t("市販品"), "name": i18n.t("ネック接合 コルク／Oリング"), "qty": 1,
+                         "material": i18n.t("コルク/NBR"), "note": i18n.t("受け口の気密")})
         return rows
 
     def _section_svg(self, params: dict) -> str:
@@ -571,31 +629,39 @@ class BodyComponent(Component):
             {"pts": pr["outer_bot"], "stroke": "#222", "width": 1.5},
             {"pts": pr["bore_top"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["bore_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
-        ], "側面断面図（実線=外形 / 青破線=ボア） 単位:mm")
+        ], i18n.t("側面断面図（実線=外形 / 青破線=ボア） 単位:mm"))
 
     def spec_extras(self, params: dict) -> dict:
         p, n = params, self._neck()
         vol_cc = bpf.body_volume_mm3(p, self.size_info, n) / 1000.0
         holes = bpf.hole_layout(p, self.size_info, n)
         dims = [
-            ("ネックの繋ぎ方", "一体（1部品）" if bpf.is_integrated(p) else "別体（テノン）"),
-            ("部品の弧長", f"{bpf.part_arc(p, n):.0f} mm"),
-            ("円錐リーチ（スロート→出口）", f"{bpf.cone_reach_mm(p, n):.0f} mm"),
-            ("スロート → 円錐終端",
+            (i18n.t("ネックの繋ぎ方"), i18n.t("一体（1部品）") if bpf.is_integrated(p) else i18n.t("別体（テノン）")),
+            (i18n.t("部品の弧長"), f"{bpf.part_arc(p, n):.0f} mm"),
+            (i18n.t("円錐リーチ（スロート→出口）"), f"{bpf.cone_reach_mm(p, n):.0f} mm"),
+            (i18n.t("スロート → 円錐終端"),
              f"φ{2 * bpf.throat_radius(self.size_info):.1f} → "
              f"φ{bpf.cone_end_dia(p, self.size_info, n):.1f} mm"),
-            ("ベル", f"長さ {p['bell_length']:.0f} mm / 出口 φ{p['bell_exit_dia']:.0f} mm"),
-            ("ボウ", f"{p['bow_angle']:.0f} ° / 半径 {p['bow_radius']:.0f} mm"),
-            ("肉厚", f"{p['wall_thickness']:.1f} mm"),
-            ("材料体積", f"{vol_cc:.0f} cc"),
+            (i18n.t("ベル"), i18n.t(
+                "長さ {bell_length} mm / 出口 φ{bell_exit_dia} mm",
+                bell_length=f"{p['bell_length']:.0f}",
+                bell_exit_dia=f"{p['bell_exit_dia']:.0f}")),
+            (i18n.t("ボウ"), i18n.t(
+                "{bow_angle} ° / 半径 {bow_radius} mm",
+                bow_angle=f"{p['bow_angle']:.0f}",
+                bow_radius=f"{p['bow_radius']:.0f}")),
+            (i18n.t("肉厚"), f"{p['wall_thickness']:.1f} mm"),
+            (i18n.t("材料体積"), f"{vol_cc:.0f} cc"),
         ]
         if holes:
             fingers = [h for h in holes if h["role"] == "finger"]
-            dims.append(("側孔", f"指孔 {len(fingers)} 本 φ{p['hole_dia']:.1f} / "
-                                 f"チムニー {p['hole_chimney']:.1f} mm"
-                                 + ("＋親指孔" if len(holes) > len(fingers) else "")))
-            dims.append(("側孔の弧長（スロートから）",
+            dims.append((i18n.t("側孔"), i18n.t(
+                "指孔 {len} 本 φ{hole_dia} / チムニー {hole_chimney} mm",
+                len=f"{len(fingers)}", hole_dia=f"{p['hole_dia']:.1f}",
+                hole_chimney=f"{p['hole_chimney']:.1f}")
+                                 + (i18n.t("＋親指孔") if len(holes) > len(fingers) else "")))
+            dims.append((i18n.t("側孔の弧長（スロートから）"),
                          " / ".join(f"{h['s_mm']:.0f}" for h in holes) + " mm"
-                         + "（0 次規則の暫定配置）"))
+                         + i18n.t("（0 次規則の暫定配置）")))
         return {"dimensions": dims,
-                "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}
+                "sections": [{"title": i18n.t("断面図"), "svg": self._section_svg(p)}]}

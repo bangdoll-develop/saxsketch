@@ -382,13 +382,15 @@ def set_member_import(req: MemberImportReq):
     """既存の単体 .wproj をセットのメンバーとして取り込む。"""
     _require_project()
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         STATE.import_member(req.path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("読み込み失敗: {e}", e=f"{e}"))
     return project_get()
 
 
@@ -464,11 +466,13 @@ def project_save(req: PathReq):
 @app.post("/api/project/open")
 def project_open(req: PathReq):
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         STATE.open_project(req.path)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("読み込み失敗: {e}", e=f"{e}"))
     return project_get()
 
 
@@ -582,7 +586,9 @@ async def ref_model_stl():
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=i18n.t("形状生成に失敗: {e}", e=f"{e}"))
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -609,7 +615,9 @@ async def set_model_stl(member: str):
     try:
         data = await asyncio.to_thread(STATE.get_stl_bytes, 0.05, member)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=i18n.t("形状生成に失敗: {e}", e=f"{e}"))
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -712,7 +720,8 @@ async def manual_import(req: PathReq):
         raise HTTPException(status_code=409,
                             detail=i18n.t("先に「凍結して編集用エクスポート」を実行してください"))
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         return await asyncio.to_thread(STATE.analyze_derived, req.path)
     except ValueError as e:
@@ -730,7 +739,8 @@ async def external_load(req: PathReq):
     """
     _require_project()
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         return await asyncio.to_thread(STATE.load_external, req.path)
     except ValueError as e:
@@ -914,8 +924,11 @@ async def export(req: ExportReq):
     _require_project()
     proj = STATE.project
     inst = STATE.registry.get(proj.instrument_id)
-    template_label = inst.templates[proj.template_id].get("label", proj.template_id)
-    instrument_label = inst.descriptor.get("label", proj.instrument_id)
+    # 仕様書の見出しに出るので訳す（`Instrument.summary()` と同じ引き方）。
+    template_label = i18n.t(
+        inst.templates[proj.template_id].get("label", proj.template_id))
+    instrument_label = i18n.t(
+        inst.descriptor.get("label", proj.instrument_id))
 
     as_set = req.scope == "set" and proj.is_set
     member_ids = list(proj.members) if as_set else [proj.active]
@@ -956,7 +969,7 @@ async def export(req: ExportReq):
         readme_members.append({
             "label": comp_label, "dir": cid,
             "material_label": i18n.choice_label(
-                params.get("material", ""),
+                str(params.get("material", "")),
                 MATERIAL_LABELS.get(params.get("material"), "-")),
             "dims": extras.get("dimensions", []),
         })
@@ -991,11 +1004,14 @@ async def export(req: ExportReq):
         edited = [STATE.members[cid].component.label
                   for cid in member_ids if built[cid]["used_derived"]]
         if edited:
-            readme += ("\n\n[外部編集済みモデル]\n"
-                       "model_edited.stl は外部ツールで手動編集したモデルです。\n"
-                       "印刷にはこのファイルを使用してください。\n"
-                       f"対象: {'、'.join(edited)}\n")
-        package_path = out_dir / f"{_safe_name(proj.name)}_入稿パッケージ.zip"
+            readme += "\n\n" + i18n.t(
+                "[外部編集済みモデル]\n"
+                "model_edited.stl は外部ツールで手動編集したモデルです。\n"
+                "印刷にはこのファイルを使用してください。\n"
+                "対象: {targets}\n",
+                targets="、".join(edited))
+        package_path = out_dir / i18n.t(
+            "{name}_入稿パッケージ.zip", name=_safe_name(proj.name))
         build_package(package_path, {k: v for k, v in files.items()}, readme)
 
     # 凍結: STEP出力とセットでスナップショット記録（外部編集ワークフローの起点）。
@@ -1081,7 +1097,8 @@ class ToolReq(BaseModel):
 def tools_open(req: ToolReq):
     f = Path(req.file)
     if not f.exists():
-        raise HTTPException(status_code=404, detail="ファイルが存在しません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが存在しません"))
     if req.tool == "reveal":
         _reveal_in_explorer(f)
         return {"ok": True}

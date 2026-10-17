@@ -315,3 +315,196 @@ def test_the_print_recommendations_are_translated():
             if item not in en.MESSAGES:
                 missing.append(f"{key}: {item[:40]}")
     assert missing == [], "訳が無い:\n  " + "\n  ".join(missing)
+
+
+# ------------------------------------------------ 変数で引く msgid（AST の盲点）
+
+def test_the_verdict_words_are_translated():
+    """判定語は `i18n.t(v)` と**変数で**引くので、AST の網に映らない。
+
+    値のまま残してあるのは `_finish` が status を決める鍵だから
+    （`reference_check` / `reed_seat` のモジュール注記）。表示する所だけ訳す
+    という作りなので、訳が抜けると**英語の画面に「一致」だけが残る**。
+    実際にそうなっていたのをブラウザではなく実行時走査で見つけた。
+    """
+    missing = [w for w in ("一致", "軽微", "乖離", "測定不能")
+               if w not in en.MESSAGES]
+    assert missing == [], "判定語の訳が無い: " + ", ".join(missing)
+
+
+def test_the_survey_size_fields_are_translated():
+    """採寸フォームの基準定数の見出し。**表を引いて `t()` に渡す**ので同じ盲点。
+
+    一覧を手で並べない —— 部品の `_SURVEY_SIZE_FIELDS` そのものを読むので、
+    欄を 1 つ足した日に検出側も自動で増える。
+    """
+    missing = []
+    for cid in _components():
+        comp = _specs_owner(cid)
+        for f in getattr(type(comp), "_SURVEY_SIZE_FIELDS", []):
+            if f["label"] not in en.MESSAGES:
+                missing.append(f"{cid}: {f['label']}")
+    assert missing == [], "訳が無い: " + ", ".join(missing)
+
+
+def _specs_owner(cid: str):
+    from saxsketch.core.registry import get_registry
+    return get_registry().get("saxophone").make_component(cid, "alto")
+
+
+def test_nothing_japanese_survives_in_the_english_output():
+    """**出てくる物そのもの**を見る。表に載っているかではなく。
+
+    これが本物の検出器 —— ほかの網は「訳が表にあるか」「`t()` の引数が
+    訳されているか」を見るだけなので、**引く側の配線が抜けていると緑のまま
+    通る**。実際、寸法線・感度表・採寸フォームは素の `param_specs()` を
+    読んでいて、表には訳があるのに画面には日本語が出ていた。
+    """
+    leftovers = []
+    for size in ("soprano", "alto", "tenor"):
+        for cid in _components():
+            comp = _instrument().make_component(cid, size)
+            params = {s.key: s.default for s in comp.param_specs()}
+            with i18n.use("en"):
+                for name, call in (
+                    ("simulate", lambda: comp.simulate(params)),
+                    ("dimensions", lambda: comp.dimensions(params)),
+                    ("survey_targets", lambda: comp.survey_targets(params)),
+                    ("param_bounds", lambda: comp.param_bounds(params)),
+                    ("bom", lambda: comp.bom(params)),
+                ):
+                    _collect_japanese(f"{size}.{cid}.{name}", call(), leftovers)
+    assert leftovers == [], ("英語の出力に日本語が残っている:\n  "
+                            + "\n  ".join(leftovers[:40]))
+
+
+def _instrument():
+    from saxsketch.core.registry import get_registry
+    return get_registry().get("saxophone")
+
+
+def _collect_japanese(path: str, node, out: list) -> None:
+    if isinstance(node, str):
+        if _JP.search(node):
+            out.append(f"{path}: {node[:60]}")
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            _collect_japanese(f"{path}.{k}", v, out)
+    elif isinstance(node, (list, tuple)):
+        for i, v in enumerate(node):
+            _collect_japanese(f"{path}[{i}]", v, out)
+
+
+# ------------------------------------------------------------ 書き出し
+
+def test_the_exports_carry_no_japanese_in_english():
+    """仕様書・部品表・入稿 ZIP の README。**画面と同じ網を書き出しにも掛ける。**
+
+    書き出しは「画面で見ていた言語」に従う（`i18n` のモジュール注記）ので、
+    英語で設計した人が日本語の仕様書を受け取ったら、それは配線の抜け。
+    ここは実際に文字列を組み立てて見る —— 表に訳があるかでは足りない。
+    """
+    from saxsketch.export.bom import bom_csv
+    from saxsketch.export.package import readme_text
+    from saxsketch.export.spec import spec_html
+
+    inst = _instrument()
+    comp = inst.make_component("mouthpiece", "alto")
+    params = {s.key: s.default for s in comp.param_specs()}
+
+    with i18n.use("en"):
+        specs = i18n.localize_specs("mouthpiece", comp.param_specs())
+        sim = comp.simulate(params)
+        bom_rows = comp.bom(params)
+        # 仕様書が受け取るのは `spec_extras` の (見出し, 値) の並び
+        # （`server/app.py` と同じ組み立て方にする。ここだけ別の形で渡すと、
+        # 網が本番と違う経路を見ることになる）。
+        dims = comp.spec_extras(params).get("dimensions", [])
+        out = {
+            "spec.html": spec_html(
+                "Test", i18n.t("サクソフォン"), i18n.component_label(
+                    "mouthpiece", "マウスピース"),
+                "alto", params, specs, dims, bom_rows, sim,
+                [], "resin"),
+            "bom.csv": bom_csv(bom_rows, "Test"),
+            "README.txt": readme_text("Test", dims, i18n.choice_label(
+                "resin", "レジン(光造形)")),
+        }
+
+    leftovers = [f"{name}: {_JP.search(text).group()} …"
+                 + text[max(_JP.search(text).start() - 30, 0):
+                        _JP.search(text).start() + 40].replace("\n", " ")
+                 for name, text in out.items() if _JP.search(text)]
+    assert leftovers == [], "書き出しに日本語が残っている:\n  " + "\n  ".join(
+        leftovers)
+
+
+def test_every_table_that_feeds_t_by_variable_is_translated():
+    """`t()` に**変数で**渡す表を、表そのものを読んで突き合わせる。
+
+    msgid が literal で出ない呼び方は AST の網の盲点になる。盲点は 1 つでは
+    なかった —— `measure.UNMEASURABLE` の 14 本は**まるごと訳が無いまま**で、
+    実行時走査にも映らなかった（逆算はメッシュが要るので走らせていない）。
+    だから一覧を手で並べず、**引かれている表を列挙して**そこから引く。
+    新しい表を `t(変数)` に渡すときは、ここに 1 行足す。
+    """
+    from saxsketch.acoustics.brightness import _MODEL_RANGE
+    from saxsketch.instruments.saxophone.components.measure import UNMEASURABLE
+
+    tables = {
+        "measure.UNMEASURABLE": list(UNMEASURABLE.values()),
+        "brightness._MODEL_RANGE": [v[2] for v in _MODEL_RANGE.values()],
+        "verdicts": ["一致", "軽微", "乖離", "測定不能"],
+    }
+    missing = [f"{name}: {s[:50]}"
+               for name, items in tables.items()
+               for s in items if s not in en.MESSAGES]
+    assert missing == [], "訳が無い:\n  " + "\n  ".join(missing)
+
+
+def _descriptor_labels() -> set[str]:
+    """`Instrument.summary()` が `t()` に渡す名前。**器から引く。**
+
+    テンプレート名は `descriptor.json` ではなく `templates/*.json` 側にある。
+    JSON を直接読んで並べると、そこを取りこぼす（実際に取りこぼした）。
+    """
+    inst = _instrument()
+    names = {inst.descriptor.get("label", inst.id)}
+    names |= {t.get("label", tid) for tid, t in inst.templates.items()}
+    names |= {s.get("label", s["id"]) for s in inst.descriptor.get("sets", [])}
+    return {n for n in names if n}
+
+
+def test_the_descriptor_labels_are_translated():
+    """楽器名・テンプレート名・セット名は JSON から来て `t()` に変数で渡る。"""
+    missing = sorted(n for n in _descriptor_labels()
+                     if _JP.search(n) and n not in en.MESSAGES)
+    assert missing == [], "訳が無い: " + ", ".join(missing)
+
+
+def test_the_message_table_has_no_dead_entries():
+    """使われていない訳が残っていない（フロントに掛けている網をサーバにも）。
+
+    変数で引く msgid は AST に出ないので、**上の 2 本が読んでいる表を
+    そのまま足して**「使われている」とみなす。表を増やしたらここも増える。
+    """
+    from saxsketch.acoustics.brightness import _MODEL_RANGE
+    from saxsketch.export.spec import PRINT_RECOMMENDATIONS
+    from saxsketch.instruments.saxophone.components.measure import UNMEASURABLE
+
+    used = {m for _, m in _t_msgids()}
+    used |= set(UNMEASURABLE.values())
+    used |= {v[2] for v in _MODEL_RANGE.values()}
+    used |= {"一致", "軽微", "乖離", "測定不能"}
+    for cid in _components():
+        comp = _specs_owner(cid)
+        used |= {f["label"]
+                 for f in getattr(type(comp), "_SURVEY_SIZE_FIELDS", [])}
+    for d in PRINT_RECOMMENDATIONS.values():
+        used.add(d["label"])
+        used |= set(d["items"])
+    used |= _descriptor_labels()
+
+    dead = sorted(k for k in en.MESSAGES if k not in used)
+    assert dead == [], "どこからも引かれていない訳:\n  " + "\n  ".join(
+        d[:70] for d in dead)

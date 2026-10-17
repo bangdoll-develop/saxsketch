@@ -294,6 +294,7 @@ const EN: Record<string, string> = {
     "The position that fits under the reference conditions (25 °C, target note). In real "
     + "playing it also moves with the reed, the ligature and the embouchure",
   "実用域（挿し込み）": "Usable range (insertion)",
+  "{lo}〜{hi}": "{lo}–{hi}",
   "感度（1mm 押し込んだときの第1共鳴）":
     "Sensitivity (1st resonance per 1 mm pushed on)",
   "セント/mm": "cents/mm",

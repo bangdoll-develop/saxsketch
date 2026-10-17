@@ -52,6 +52,8 @@ Lebayle Jazz Metal × リード 2 本 × z 4 点の 16 組すべて +0.50〜+1.4
 """
 from __future__ import annotations
 
+from saxsketch import i18n
+
 from . import profiles
 from . import reed_profiles as rp
 
@@ -182,18 +184,21 @@ def cover_row(window: dict | None, size_info: dict) -> dict:
     from .reference_check import _verdict, reed_tip_width_is_measured
 
     if window is None:
-        return {"row": ["（参考）窓へのかかり代 最小", "窓が開いていません"],
+        return {"row": [i18n.t("（参考）窓へのかかり代 最小"),
+                        i18n.t("窓が開いていません")],
                 "verdict": None}
     mm = window["mm"]
-    text = f"{mm:+.2f} mm（z={window['z']:.1f}）"
+    text = i18n.t("{mm} mm（z={z}）",
+                  mm=f"{mm:+.2f}", z=f"{window['z']:.1f}")
+    floats = i18n.t("　縁が窓の上に浮いています") if mm < 0 else ""
     if not reed_tip_width_is_measured(size_info):
-        return {"row": ["（参考）窓へのかかり代 最小",
-                        text + ("　縁が窓の上に浮いています" if mm < 0 else "")
-                        + "　このサイズは規格リード幅が未実測のため判定しない"],
+        return {"row": [i18n.t("（参考）窓へのかかり代 最小"),
+                        text + floats
+                        + i18n.t("　このサイズは規格リード幅が未実測のため判定しない")],
                 "verdict": None}
     v = _verdict(max(-mm, 0.0), OVER_TOL, OVER_TOL_MINOR)
-    return {"row": ["窓へのかかり代 最小",
-                    text + ("　縁が窓の上に浮いています" if mm < 0 else "") + f"  {v}"],
+    return {"row": [i18n.t("窓へのかかり代 最小"),
+                    text + floats + f"  {i18n.t(v)}"],
             "verdict": v}
 
 
@@ -204,17 +209,17 @@ def _seat_finish(title: str, rows: list, verdicts: list, note: str) -> dict:
     2 つの部品の当たりなので、そのまま借りると判定の意味がすり替わる。
     """
     if "乖離" in verdicts:
-        status, big = "bad", "縁がレールから外れる区間があります"
+        status, big = "bad", i18n.t("縁がレールから外れる区間があります")
     elif "軽微" in verdicts:
-        status, big = "warn", "縁がわずかにレールから外れる区間があります"
+        status, big = "warn", i18n.t("縁がわずかにレールから外れる区間があります")
     else:
-        status, big = "ok", "帯までは全幅が載っています"
+        status, big = "ok", i18n.t("帯までは全幅が載っています")
     return {"title": title, "big": big, "status": status,
             "rows": rows, "advice": note}
 
 
 def seat_card(m: dict, r: dict, size_info: dict, seat_end: float | None = None,
-              reed_label: str = "同サイズのテンプレート") -> dict:
+              reed_label: str | None = None) -> dict:
     """「リードが載るか」の①（裏面が密着するか）。
 
     **判定するのは 2 つ**: 窓へのかかり代（規格リードの先端幅が実測されたサイズ
@@ -227,10 +232,15 @@ def seat_card(m: dict, r: dict, size_info: dict, seat_end: float | None = None,
     from .reference_check import _verdict
 
     s = seat_summary(m, r, seat_end)
-    rows = [["想定リード",
-             f"{reed_label}（先端 {r['tip_width']:.1f} / "
-             f"踵 {r['heel_width']:.1f} mm）"],
-            ["帯の後端（区間の境目）", f"{s['seat_end']:.1f} mm"]]
+    # 既定は**呼ばれた時**に訳す —— 引数の既定値にすると取り込み時の言語で固まる。
+    if reed_label is None:
+        reed_label = i18n.t("同サイズのテンプレート")
+    rows = [[i18n.t("想定リード"),
+             i18n.t("{label}（先端 {tip} / 踵 {heel} mm）",
+                    label=reed_label,
+                    tip=f"{r['tip_width']:.1f}",
+                    heel=f"{r['heel_width']:.1f}")],
+            [i18n.t("帯の後端（区間の境目）"), f"{s['seat_end']:.1f} mm"]]
     verdicts = []
 
     cover = cover_row(s["window"], size_info)
@@ -240,31 +250,34 @@ def seat_card(m: dict, r: dict, size_info: dict, seat_end: float | None = None,
 
     t = s["table"]
     if t is None:
-        rows.append(["窓の終端〜帯の後端", "区間がありません"])
+        rows.append([i18n.t("窓の終端〜帯の後端"), i18n.t("区間がありません")])
     else:
         v = _verdict(max(t["mm"], 0.0), OVER_TOL, OVER_TOL_MINOR)
-        rows.append(["帯までのはみ出し 最大",
-                     f"{t['mm']:+.2f} mm（z={t['z']:.1f}）  {v}"])
+        rows.append([i18n.t("帯までのはみ出し 最大"),
+                     i18n.t("{mm} mm（z={z}）", mm=f"{t['mm']:+.2f}",
+                            z=f"{t['z']:.1f}") + f"  {i18n.t(v)}"])
         verdicts.append(v)
 
     tl = s["tail"]
-    rows.append(["（参考）帯より後ろのはみ出し 最大",
-                 "リードが帯の後端より短い" if tl is None else
-                 f"{tl['mm']:+.2f} mm（z={tl['z']:.1f}）"])
+    rows.append([i18n.t("（参考）帯より後ろのはみ出し 最大"),
+                 i18n.t("リードが帯の後端より短い") if tl is None else
+                 i18n.t("{mm} mm（z={z}）", mm=f"{tl['mm']:+.2f}",
+                        z=f"{tl['z']:.1f}")])
     if s["beyond_table_mm"] > 0.0:
-        rows.append(["（参考）テーブルより後ろへ出た長さ",
-                     f"{s['beyond_table_mm']:.1f} mm　この区間は載る面が無いので"
-                     "幅の比較から外しています"])
+        rows.append([
+            i18n.t("（参考）テーブルより後ろへ出た長さ"),
+            i18n.t("{mm} mm　この区間は載る面が無いので幅の比較から外しています",
+                   mm=f"{s['beyond_table_mm']:.1f}")])
 
     return _seat_finish(
-        "リードが載るか（裏面の密着）", rows, verdicts,
-        "**窓へのかかり代**は縁が窓の上に浮くと脇から漏れるので判定します"
-        "（実物のマウスピース 2 本 × リード 2 本で アルト +0.40〜+1.33mm・ソプラノ"
-        " +0.90〜+2.12mm・テナー +0.50〜+1.45mm、光にかざして 3 サイズ 30 組とも"
-        "縁がレールの上）。ただし規格リードの先端幅が未実測のサイズでは参考です。"
-        "**「窓の終端〜帯の後端」**はリガチャーが締める区間なので、縁がテーブルの"
-        "外にあると押しても密着しません。"
-        "**帯より後ろへはみ出すのは害がありません**（締めないので参考値）。"
-        "比べる相手はそのサイズの**規格リード**です —— リードを設計していても"
-        "ここは規格で見ます（リードは規格から大きく動かさない前提）。"
-        "設計中のリードとの適合はセットのカードにあります。")
+        i18n.t("リードが載るか（裏面の密着）"), rows, verdicts,
+        i18n.t("**窓へのかかり代**は縁が窓の上に浮くと脇から漏れるので判定します"
+               "（実物のマウスピース 2 本 × リード 2 本で アルト +0.40〜+1.33mm・ソプラノ"
+               " +0.90〜+2.12mm・テナー +0.50〜+1.45mm、光にかざして 3 サイズ 30 組とも"
+               "縁がレールの上）。ただし規格リードの先端幅が未実測のサイズでは参考です。"
+               "**「窓の終端〜帯の後端」**はリガチャーが締める区間なので、縁がテーブルの"
+               "外にあると押しても密着しません。"
+               "**帯より後ろへはみ出すのは害がありません**（締めないので参考値）。"
+               "比べる相手はそのサイズの**規格リード**です —— リードを設計していても"
+               "ここは規格で見ます（リードは規格から大きく動かさない前提）。"
+               "設計中のリードとの適合はセットのカードにあります。"))

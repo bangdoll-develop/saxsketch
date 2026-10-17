@@ -17,6 +17,8 @@ from __future__ import annotations
 import functools
 import math
 
+from saxsketch import i18n
+
 
 # ---------------------------------------------------------------- 基本量
 
@@ -163,14 +165,20 @@ def nose_error(p: dict) -> str | None:
     if d <= limit + 1e-9:
         return None
     if p["heel_width"] > p["tip_width"]:
-        why = "踵へ広がる側面に前縁の円弧が届きません"
-        how = "先端カーブを浅くするか、踵幅を狭く・先端幅を広く・全長を長くしてください"
+        why = i18n.t("踵へ広がる側面に前縁の円弧が届きません")
+        how = i18n.t(
+            "先端カーブを浅くするか、踵幅を狭く・先端幅を広く・"
+            "全長を長くしてください")
     else:
-        why = "前縁の円弧が半円を越えて閉じません"
-        how = "先端カーブを浅くするか、先端幅を広くしてください"
-    return (f"先端カーブ {d:.2f} mm では{why}: 先端幅 {p['tip_width']:.1f}・"
-            f"踵幅 {p['heel_width']:.1f}・全長 {p['reed_length']:.1f} では "
-            f"{limit:.2f} mm まで。{how}。")
+        why = i18n.t("前縁の円弧が半円を越えて閉じません")
+        how = i18n.t("先端カーブを浅くするか、先端幅を広くしてください")
+    return (i18n.t(
+        "先端カーブ {d} mm では{why}: 先端幅 {tip_width}・踵幅 "
+        "{heel_width}・全長 {reed_length} では {limit} mm まで。{how}。",
+        d=f"{d:.2f}", why=f"{why}", tip_width=f"{p['tip_width']:.1f}",
+        heel_width=f"{p['heel_width']:.1f}",
+        reed_length=f"{p['reed_length']:.1f}", limit=f"{limit:.2f}",
+        how=f"{how}"))
 
 
 #: 先端カーブの壁を動かす相手と、壁が立つ側（`nose_depth_limit` の単調性の向き）。
@@ -200,7 +208,7 @@ def nose_bounds(p: dict, static: dict) -> dict:
     widening = p["heel_width"] > p["tip_width"]
     out = {"tip_curve_depth": {
         "hi": nose_depth_limit(p),
-        "hi_by": "先端幅・踵幅・リード全長・先端角の丸み" if widening else "先端幅"}}
+        "hi_by": i18n.t("先端幅・踵幅・リード全長・先端角の丸み") if widening else i18n.t("先端幅")}}
     d = tip_curve_depth(p)
     if d <= 0.0:
         return out
@@ -220,7 +228,7 @@ def nose_bounds(p: dict, static: dict) -> dict:
                 good = mid
             else:
                 bad = mid
-        out[key] = {side: good, f"{side}_by": "先端カーブ"}
+        out[key] = {side: good, f"{side}_by": i18n.t("先端カーブ")}
     return out
 
 
@@ -451,12 +459,16 @@ def cane_layout_error(p: dict) -> str | None:
     hw = max(p["tip_width"], p["heel_width"]) / 2.0
     if hw <= limit:
         return None
-    extra = ("（ファイルドは表皮 %.2f mm を落とすぶん余分に要る）"
+    extra = (i18n.t("（ファイルドは表皮 %.2f mm を落とすぶん余分に要る）")
              % bark_thickness(p)) if p.get("file_cut") == "filed" else ""
-    return (f"リードが元のケーン管に収まりません{extra}: 最大半幅 {hw:.1f} mm に対し、"
-            f"外径 φ{2.0 * r:.1f} の管では半幅 {limit:.1f} mm までしか厚みが"
-            f"残りません。踵の側端厚（{heel_edge_thickness(p):.2f}）を上げて円弧を"
-            f"浅くするか、幅を狭くしてください。")
+    return (i18n.t(
+        "リードが元のケーン管に収まりません{extra}: 最大半幅 {hw} mm "
+        "に対し、外径 φ{r} の管では半幅 {limit} mm "
+        "までしか厚みが残りません。踵の側端厚（{heel_edge_thickness}）"
+        "を上げて円弧を浅くするか、幅を狭くしてください。",
+        extra=f"{extra}", hw=f"{hw:.1f}", r=f"{2.0 * r:.1f}",
+        limit=f"{limit:.1f}",
+        heel_edge_thickness=f"{heel_edge_thickness(p):.2f}"))
 
 
 def thickness(p: dict, z: float, x: float = 0.0) -> float:
@@ -665,23 +677,23 @@ def param_regions(p: dict) -> dict:
                 "side": side, "label": label}
 
     return {
-        "reed_length":    r(0.0, length, "all", "リード全体"),
-        "tip_width":      r(0.0, 0.15 * length, "all", "先端（ティップ）"),
-        "heel_width":     r(zv, length, "all", "踵（ヒール）"),
-        "tip_thickness":  r(0.0, 0.12 * zv, "top", "先端の削り"),
-        "heel_thickness": r(zv, length, "all", "バーク（未削部）"),
-        "heel_edge_thickness": r(zv, length, "top", "ケーンの円弧（カマボコ）"),
+        "reed_length":    r(0.0, length, "all", i18n.t("リード全体")),
+        "tip_width":      r(0.0, 0.15 * length, "all", i18n.t("先端（ティップ）")),
+        "heel_width":     r(zv, length, "all", i18n.t("踵（ヒール）")),
+        "tip_thickness":  r(0.0, 0.12 * zv, "top", i18n.t("先端の削り")),
+        "heel_thickness": r(zv, length, "all", i18n.t("バーク（未削部）")),
+        "heel_edge_thickness": r(zv, length, "top", i18n.t("ケーンの円弧（カマボコ）")),
         # 角の丸みまで含めた**実際の**先端区間（`tip_full_width_z` はフィレットが
         # 側面に接する所で、`tip_curve_depth` より 0.46〜0.59mm 後ろにある）。
-        "tip_curve_depth": r(0.0, max(tip_full_width_z(p), 0.5), "all", "前縁カーブ"),
-        "vamp_length":    r(0.0, zv, "top", "ヴァンプ（削り面）"),
-        "profile_curve":  r(0.0, zv, "top", "ヴァンプ（削り面）"),
-        "spine_ratio":    r(0.0, zv, "top", "中央の背骨"),
-        "side_rail_thin": r(0.0, zv, "top", "サイドレール（両脇）"),
-        "tip_corner_r":   r(0.0, 0.10 * zv, "top", "先端角の丸み"),
+        "tip_curve_depth": r(0.0, max(tip_full_width_z(p), 0.5), "all", i18n.t("前縁カーブ")),
+        "vamp_length":    r(0.0, zv, "top", i18n.t("ヴァンプ（削り面）")),
+        "profile_curve":  r(0.0, zv, "top", i18n.t("ヴァンプ（削り面）")),
+        "spine_ratio":    r(0.0, zv, "top", i18n.t("中央の背骨")),
+        "side_rail_thin": r(0.0, zv, "top", i18n.t("サイドレール（両脇）")),
+        "tip_corner_r":   r(0.0, 0.10 * zv, "top", i18n.t("先端角の丸み")),
         # 帯の実領域（側端でいちばん前まで伸びる）。決め打ちの ±数 mm ではない。
         "file_cut":       r(filed_band_start_z(p, p["heel_width"] / 2.0), zv,
-                            "top", "表皮を削った部分（ファイルド）"),
+                            "top", i18n.t("表皮を削った部分（ファイルド）")),
         # material / min_layer は形状に影響しない → 領域なし
     }
 

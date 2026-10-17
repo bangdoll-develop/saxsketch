@@ -29,6 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
+from saxsketch import i18n
+
 #: 壁の出所の分類。**説明のためのラベルで、硬さは決めない**（硬さを決めるのは
 #: `hard_min`/`hard_max` があるかどうかだけ。`ParamSpec.bounds`）。既定は
 #: `unclassified` ＝「まだ誰も分類していない」で、`hard_*` も無いのが普通なので
@@ -137,8 +139,11 @@ class ParamSpec:
                 "requested": value, "applied": self.default, "edge": "choice",
                 "partner": None,
                 "limit_kind": self.limit_kind, "source": self.source,
-                "message": (f"{self.label}に不明な値 {value!r} が来たので既定 "
-                            f"{self.default!r} に戻しました"),
+                "message": (i18n.t(
+                    "{self}に不明な値 {value} が来たので既定 {self2} "
+                    "に戻しました",
+                    self=f"{self.label}", value=f"{value!r}",
+                    self2=f"{self.default!r}")),
             }
         v = self.coerce(value)
         req = v
@@ -156,8 +161,8 @@ class ParamSpec:
             v, edge = hi, "max"
         if edge is None:
             return v, None
-        side = "下限" if edge == "min" else "上限"
-        src = self.source or "記載なし"
+        side = i18n.t("下限") if edge == "min" else i18n.t("上限")
+        src = self.source or i18n.t("記載なし")
         # 単位の前に空白を置くのは「比」「度」でも読めるようにするため。
         unit = f" {self.unit}" if self.unit else ""
         # **どちらの境界に当たったかを言い分ける。** 帯を広げてあるパラメータで
@@ -171,25 +176,36 @@ class ParamSpec:
             # 「なぜここで止まるのか」の答えが相手の名前そのものなので、
             # 「越えられない壁」とだけ言うと相手を動かせば届くことが伝わらない。
             at, partner = "relation", by
-            why = f"{by}で決まる壁の{side}（{by}を動かすとここも動きます）"
+            why = i18n.t(
+                "{by}で決まる壁の{side}（{by2}を動かすとここも動きます）",
+                by=f"{by}", side=f"{side}", by2=f"{by}")
         elif hard is not None:
             at = "wall"
             # 帯が片側しか無い spec でも落ちないようにしておく（いまは無いが、
             # `hard_*` だけ入れた spec を後から足せてしまう）。
             band = ("" if self.min is None or self.max is None else
-                    f"（勧める帯は {self.min:g}〜{self.max:g}{unit.strip()}）")
-            why = f"越えられない壁の{side}{band}"
+                    i18n.t(
+                        "（勧める帯は {self}〜{self2}{unit}）",
+                        self=f"{self.min:g}", self2=f"{self.max:g}",
+                        unit=f"{unit.strip()}"))
+            why = i18n.t(
+                "越えられない壁の{side}{band}",
+                side=f"{side}", band=f"{band}")
         else:
             at = "band"
-            kind = LIMIT_KIND_LABELS.get(self.limit_kind, self.limit_kind)
-            why = f"{kind}の{side}"
+            kind = i18n.limit_kind_label(
+                self.limit_kind,
+                LIMIT_KIND_LABELS.get(self.limit_kind, self.limit_kind))
+            why = i18n.t("{kind}の{side}", kind=f"{kind}", side=f"{side}")
         return v, {
             "key": self.key, "label": self.label, "unit": self.unit,
             "requested": req, "applied": v, "edge": edge, "at": at,
             "partner": partner,
             "limit_kind": self.limit_kind, "source": self.source,
-            "message": (f"{self.label} {req:g} → {v:g}{unit} に丸めました"
-                        f"（{why}、出所: {src}）"),
+            "message": (i18n.t(
+                "{self} {req} → {v}{unit} に丸めました（{why}、出所: {src}）",
+                self=f"{self.label}", req=f"{req:g}", v=f"{v:g}",
+                unit=f"{unit}", why=f"{why}", src=f"{src}")),
         }
 
 

@@ -109,7 +109,8 @@ def _acoustics_section(sim: dict) -> str:
                    f"<p class=\"note\">{_e(card.get('advice', ''))}</p>\n")
     if not blocks:
         return ""
-    return f'<h2>4. {_e(i18n.t('設計時シミュレーション'))}</h2>\n{blocks}'
+    head = _e(i18n.t("設計時シミュレーション"))
+    return f'<h2>4. {head}</h2>\n{blocks}'
 
 
 _STYLE = """
@@ -180,8 +181,9 @@ def _member_body(component_label: str, params: dict, specs: list, dimensions: li
         f"<td>{_e(r['material'])}</td><td>{_e(r['note'])}</td></tr>\n" for r in bom_rows)
     rec_items = "".join(f"<li>{_e(i18n.t(i))}</li>\n" for i in rec["items"])
     # `svg` は**こちらが組んだ HTML 片**なのでそのまま。題だけ逃がす。
+    none_note = _e(i18n.t("この部品には断面図がありません。"))
     section_html = "\n".join(f"<h3>{_e(s['title'])}</h3>\n{s['svg']}" for s in sections) \
-        or f'<p class="note">{_e(i18n.t('この部品には断面図がありません。'))}</p>'
+        or f'<p class="note">{none_note}</p>'
     title = f'<h1 class="part">{_e(heading)}</h1>\n' if heading else ""
 
     return f"""{title}<h2>1. {_e(i18n.t('主要寸法'))}</h2>

@@ -15,6 +15,8 @@ import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
 
+from saxsketch import i18n
+
 SAMPLE_COUNT = 200_000
 # 判定しきい値 [mm]
 DEV_UNCHANGED = 0.15
@@ -43,7 +45,7 @@ def _check_size(p: Path) -> None:
     size = p.stat().st_size
     if size > MAX_FILE_BYTES:
         raise ValueError(
-            "ファイルが大きすぎます: %.1fMB（上限 %dMB）"
+            i18n.t("ファイルが大きすぎます: %.1fMB（上限 %dMB）")
             % (size / 1048576.0, MAX_FILE_BYTES // 1048576))
 
 
@@ -51,7 +53,7 @@ def _check_faces(m: trimesh.Trimesh) -> trimesh.Trimesh:
     """読んだあとの面数を見る。圧縮の向こう側はサイズでは測れない。"""
     n = len(getattr(m, "faces", ()))
     if n > MAX_FACES:
-        raise ValueError("面が多すぎます: %d 面（上限 %d 面）" % (n, MAX_FACES))
+        raise ValueError(i18n.t("面が多すぎます: %d 面（上限 %d 面）") % (n, MAX_FACES))
     return m
 
 
@@ -71,7 +73,9 @@ def load_mesh(path: str | Path) -> trimesh.Trimesh:
             export_model(part, f, "stl", tolerance=0.02)
             m = trimesh.load(str(f), force="mesh")
     else:
-        raise ValueError(f"未対応の形式です: {suffix}（STL / 3MF / STEP に対応）")
+        raise ValueError(i18n.t(
+            "未対応の形式です: {suffix}（STL / 3MF / STEP に対応）",
+            suffix=f"{suffix}"))
     if isinstance(m, trimesh.Scene):
         m = m.to_mesh()
     return _check_faces(m)
@@ -171,12 +175,12 @@ def _exact_dist(pts: np.ndarray, other: trimesh.Trimesh,
 
 def _verdict(dev: float | None) -> str:
     if dev is None:
-        return "判定不可"
+        return i18n.t("判定不可")
     if dev < DEV_UNCHANGED:
-        return "変化なし"
+        return i18n.t("変化なし")
     if dev < DEV_MINOR:
         return "軽微"
-    return "変化あり"
+    return i18n.t("変化あり")
 
 
 def region_deviations(ref: trimesh.Trimesh, edited: trimesh.Trimesh,

@@ -228,10 +228,12 @@ class AppState:
         ps = ParamSet(component.param_specs(),
                       component.template.get(component_id, {}),
                       bounds_provider=component.param_bounds)
-        tmpl_label = inst.templates[self.project.template_id].get(
-            "label", self.project.template_id)
+        tmpl_label = i18n.t(inst.templates[self.project.template_id].get(
+            "label", self.project.template_id))
         return Member(component_id=component_id,
-                      name=name or f"{tmpl_label} {component.label}",
+                      name=name or f"{tmpl_label} "
+                                   + i18n.component_label(component_id,
+                                                          component.label),
                       params=dict(ps.values))
 
     def _mount(self, member: Member) -> list[str]:
@@ -275,20 +277,26 @@ class AppState:
         いない物の寸法が設計値のように従属部品へ流れる。
         """
         inst = self.registry.get(instrument_id)
-        tmpl_label = inst.templates[template_id].get("label", template_id)
+        # 既定の名前は**作った時の言語**で組む（保存されるデータなので、
+        # 引くたびに訳すのではなく 1 回だけ）。
+        tmpl_label = i18n.t(inst.templates[template_id].get("label",
+                                                            template_id))
         if set_id:
             sdef = inst.set_def(set_id)
             member_ids = [m["component"] for m in sdef["members"]
                           if m.get("required", True)]
             active = inst.set_master(set_id)
-            set_name = name or f"{tmpl_label} {sdef.get('label', set_id)}"
+            set_name = name or (f"{tmpl_label} "
+                                + i18n.t(sdef.get("label", set_id)))
         else:
             if component_id is None:
-                raise ValueError("component_id か set_id のどちらかが必要です")
+                raise ValueError(i18n.t("component_id か set_id のどちらかが必要です"))
             member_ids = [component_id]
             active = component_id
             set_name = name or (
-                f"{tmpl_label} {inst.component_classes[component_id].label}")
+                f"{tmpl_label} "
+                + i18n.component_label(
+                    component_id, inst.component_classes[component_id].label))
 
         self.project = Project(instrument_id=instrument_id, template_id=template_id,
                                name=set_name, members={}, active=active,
@@ -370,7 +378,7 @@ class AppState:
             })
         return {
             "set_id": self.project.set_id,
-            "label": i18n.t(sdef.get("label", "セット")),
+            "label": i18n.t(sdef.get("label", i18n.t("セット"))),
             # 実際に組になっているか（単体だが育てられる状態は False）
             "is_set": self.project.is_set,
             "active": self.project.active,
@@ -469,7 +477,9 @@ class AppState:
         """編集対象の部品を切り替える。"""
         assert self.project is not None
         if not self.project.has(component_id):
-            raise ValueError(f"この プロジェクト に「{component_id}」はありません")
+            raise ValueError(i18n.t(
+                "この プロジェクト に「{component_id}」はありません",
+                component_id=f"{component_id}"))
         self.project.active = component_id
         self._bind_all_refs()
         self.notices = []
@@ -484,9 +494,9 @@ class AppState:
         inst = self.registry.get(self.project.instrument_id)
         cls = inst.component_classes.get(component_id)
         if cls is None or not cls.available():
-            raise ValueError("このコンポーネントは未実装です")
+            raise ValueError(i18n.t("このコンポーネントは未実装です"))
         if self.project.has(component_id):
-            raise ValueError(f"「{cls.label}」は既にこのセットにあります")
+            raise ValueError(i18n.t("「{cls}」は既にこのセットにあります", cls=f"{cls.label}"))
         self.project.add_member(self._new_member(component_id))
         self._mount(self.project.member(component_id))
         self._adopt_set_id(component_id)
@@ -512,15 +522,19 @@ class AppState:
                 continue
             if getattr(ms.component, "REQUIRES_REF", None) == component_id:
                 raise ValueError(
-                    f"「{ms.component.label}」が「"
-                    f"{inst.component_classes[component_id].label}」に従属しています。"
-                    f"先にそちらを外してください。")
+                    i18n.t(
+                        "「{ms}」が「{inst}」に従属しています。"
+                        "先にそちらを外してください。",
+                        ms=f"{ms.component.label}",
+                        inst=f"{inst.component_classes[component_id].label}"))
         sdef = self.set_definition() or {}
         for m in sdef.get("members", []):
             if m["component"] == component_id and m.get("role") == "master":
                 raise ValueError(
-                    f"「{inst.component_classes[component_id].label}」はこのセットの"
-                    f"土台なので外せません。他の部品が寸法をここから取ります。")
+                    i18n.t(
+                        "「{inst}」はこのセットの土台なので外せません。"
+                        "他の部品が寸法をここから取ります。",
+                        inst=f"{inst.component_classes[component_id].label}"))
         notices = self._affected_by(component_id, removing=True)
         self.project.remove_member(component_id)
         self.members.pop(component_id, None)
@@ -559,15 +573,26 @@ class AppState:
                 had = bool(self.project.member(cid).refs.get(component_id, {})
                            .get("source"))
                 out.append(
-                    f"「{ms.component.label}」は{label}に従属します。"
-                    f"これ以降はセットの{label}に追従します"
-                    + ("（取り込んでいた参照は使われなくなります）" if had else ""))
+                    i18n.t(
+                        "「{ms}」は{label}に従属します。"
+                        "これ以降はセットの{label2}に追従します",
+                        ms=f"{ms.component.label}", label=f"{label}",
+                        label2=f"{label}")
+                    + (i18n.t("（取り込んでいた参照は使われなくなります）") if had else ""))
             elif component_id in getattr(ms.component, "OPTIONAL_REFS", ()):
                 out.append(
-                    f"「{ms.component.label}」は{label}の寸法を参照します。"
-                    + (f"{label}を外したので、同サイズのテンプレート値へ戻ります"
+                    i18n.t(
+                        "「{ms}」は{label}の寸法を参照します。",
+                        ms=f"{ms.component.label}", label=f"{label}")
+                    + (i18n.t(
+                        "{label}を外したので、同サイズのテンプレー"
+                        "ト値へ戻ります",
+                        label=f"{label}")
                        if removing else
-                       f"これ以降は設計中の{label}の実寸に合わせた形になります"))
+                       i18n.t(
+                           "これ以降は設計中の{label}の実寸に合わせた形になり"
+                           "ます",
+                           label=f"{label}")))
         return out
 
     def import_member(self, path: str) -> str:
@@ -580,25 +605,32 @@ class AppState:
         assert self.project is not None
         src = Project.load(path)
         if len(src.members) != 1:
-            raise ValueError("セットのプロジェクトはメンバーとして取り込めません。"
-                             "取り込みたい部品を単体 .wproj へ書き出してください。")
+            raise ValueError(i18n.t(
+                "セットのプロジェクトはメンバーとして取り込めません。"
+                "取り込みたい部品を単体 .wproj へ書き出してください。"))
         if (src.instrument_id != self.project.instrument_id
                 or src.template_id != self.project.template_id):
             raise ValueError(
-                f"このプロジェクトは「{self._template_label(src)}」用です。"
-                f"「{self._template_label(self.project)}」のものを選んでください。")
+                i18n.t(
+                    "このプロジェクトは「{self}」用です。「{self2}」"
+                    "のものを選んでください。",
+                    self=f"{self._template_label(src)}",
+                    self2=f"{self._template_label(self.project)}"))
         cid = src.component_id
         inst = self.registry.get(self.project.instrument_id)
         if cid not in inst.component_classes:
-            raise ValueError(f"未知のコンポーネントです: {cid}")
+            raise ValueError(i18n.t("未知のコンポーネントです: {cid}", cid=f"{cid}"))
         if self.project.has(cid):
             # **黙って置き換えない。** 上書きすると、いまセットで設計している
             # ぶんが戻せないまま消える（取り消しの仕組みは無い）。
             raise ValueError(
-                f"このセットには既に「{inst.component_classes[cid].label}」があります。"
-                f"取り込んだもので置き換えるなら、先に今の"
-                f"「{inst.component_classes[cid].label}」を外してください"
-                f"（残しておきたい場合は単体 .wproj へ書き出してから）。")
+                i18n.t(
+                    "このセットには既に「{inst}」があります。"
+                    "取り込んだもので置き換えるなら、先に今の「{inst2}」"
+                    "を外してください（残しておきたい場合は単体 .wproj "
+                    "へ書き出してから）。",
+                    inst=f"{inst.component_classes[cid].label}",
+                    inst2=f"{inst.component_classes[cid].label}"))
         member = src.active_member
         member.refs = {}          # セット内では兄弟メンバーが正（生きた参照）
         self.project.add_member(member)
@@ -619,14 +651,18 @@ class AppState:
         """
         assert self.project is not None
         if not self.project.has(component_id):
-            raise ValueError(f"この プロジェクト に「{component_id}」はありません")
+            raise ValueError(i18n.t(
+                "この プロジェクト に「{component_id}」はありません",
+                component_id=f"{component_id}"))
         self._sync_params()
         src = self.project.member(component_id)
         refs = copy.deepcopy(self.members[component_id].component.refs)
         for entry in refs.values():
             if entry.get("source") == "set":
                 entry["source"] = None
-                entry["label"] = f"{entry.get('label', '')}（セットから書出）".strip()
+                entry["label"] = i18n.t(
+                    "{label}（セットから書出）",
+                    label=f"{entry.get('label', '')}").strip()
         member = Member(
             component_id=component_id, name=src.name, params=dict(src.params),
             refs=refs, notes=src.notes, frozen=copy.deepcopy(src.frozen),
@@ -657,7 +693,9 @@ class AppState:
             "label", self.project.template_id)
         return {
             "source": None,
-            "label": f"{tmpl_label} テンプレート既定値",
+            "label": i18n.t(
+                "{tmpl_label} テンプレート既定値",
+                tmpl_label=f"{tmpl_label}"),
             "params": dict(ps.values),
         }
 
@@ -720,28 +758,38 @@ class AppState:
         required = getattr(self.component, "REQUIRES_REF", None)
         if required != ref_id:
             raise ValueError(
-                f"{self.component.label} は「{ref_id}」を参照しません")
+                i18n.t(
+                    "{self} は「{ref_id}」を参照しません",
+                    self=f"{self.component.label}", ref_id=f"{ref_id}"))
         if self.project.has(ref_id):
             # セット内に本体が居る。取り込むと「どちらが正か」が 2 つになる。
             raise ValueError(
-                f"このセットの{self.members[ref_id].component.label}が参照元です"
-                f"（設計中の値に追従します）。別のものを使いたい場合は、"
-                f"セットの{self.members[ref_id].component.label}側で取り込んでください。")
+                i18n.t(
+                    "このセットの{self}が参照元です（設計中の値に追従します）"
+                    "。別のものを使いたい場合は、セットの{self2}側で取り込んで"
+                    "ください。",
+                    self=f"{self.members[ref_id].component.label}",
+                    self2=f"{self.members[ref_id].component.label}"))
         if path is None:
             self.project.refs[ref_id] = self._default_ref(ref_id)
         else:
             src = Project.load(path)
             if src.component_id != ref_id:
                 raise ValueError(
-                    f"このプロジェクトは「{src.component_id}」です。"
-                    f"「{ref_id}」の .wproj を選んでください。")
+                    i18n.t(
+                        "このプロジェクトは「{src}」です。「{ref_id}」の ."
+                        "wproj を選んでください。",
+                        src=f"{src.component_id}", ref_id=f"{ref_id}"))
             # 楽器・サイズが違う参照は通さない。自コンポーネントの size_info（規格寸法）や
             # BOM のサイズ表記は自テンプレート由来のままなので、形だけ別サイズになる。
             if (src.instrument_id != self.project.instrument_id
                     or src.template_id != self.project.template_id):
                 raise ValueError(
-                    f"このマウスピースは「{self._template_label(src)}」用です。"
-                    f"「{self._template_label(self.project)}」のものを選んでください。")
+                    i18n.t(
+                        "このマウスピースは「{self}」用です。「{self2}」"
+                        "のものを選んでください。",
+                        self=f"{self._template_label(src)}",
+                        self2=f"{self._template_label(self.project)}"))
             inst = self.registry.get(src.instrument_id)
             ref_comp = inst.make_component(ref_id, src.template_id)
             ps = ParamSet(ref_comp.param_specs(),
@@ -971,7 +1019,7 @@ class AppState:
         ref_id = getattr(self.component, "REQUIRES_REF", None)
         entry = self.component.refs.get(ref_id or "", {})
         if not ref_id or not entry.get("params"):
-            raise ValueError("参照コンポーネントがありません")
+            raise ValueError(i18n.t("参照コンポーネントがありません"))
 
         ms = self.member_state
         key = f"{self.ref_hash()}:{tolerance}"
@@ -1191,10 +1239,15 @@ class AppState:
                        "delta_pct": round(delta_pct, 2)}
             if abs(delta_pct) > 5.0:
                 analysis["warnings"].append(
-                    f"⚠ 体積が {delta_pct:+.1f}% 変化しています。削りすぎ／穴あきの疑い。")
+                    i18n.t(
+                        "⚠ 体積が {delta_pct}% 変化しています。"
+                        "削りすぎ／穴あきの疑い。",
+                        delta_pct=f"{delta_pct:+.1f}"))
         else:
             analysis["warnings"].append(
-                "⚠ メッシュが水密ではありません。修復しないと印刷できません。")
+                i18n.t(
+                    "⚠ メッシュが水密ではありません。"
+                    "修復しないと印刷できません。"))
 
         # STL バイト列を保持（STEP等は解析メッシュから STL 化）
         import trimesh  # noqa: F401
@@ -1259,7 +1312,7 @@ class AppState:
         assert self.project is not None
         pd = self._pending_derived
         if pd is None:
-            raise ValueError("先に編集済みモデルを取込・解析してください")
+            raise ValueError(i18n.t("先に編集済みモデルを取込・解析してください"))
         self.project.derived = {
             "imported_at": datetime.now(timezone.utc).isoformat(),
             "source_file": pd["source_file"],
@@ -1373,7 +1426,7 @@ class AppState:
         assert self.project is not None
         cp = (self.project.survey or {}).get("checkpoint")
         if not cp:
-            raise ValueError("復元点がありません。先に採寸を確定してください。")
+            raise ValueError(i18n.t("復元点がありません。先に採寸を確定してください。"))
         self.apply_params(dict(cp["params"]))
         if cp.get("refs") is not None:
             # セット内の参照は兄弟メンバーが正なので、復元しても束ね直しで上書き

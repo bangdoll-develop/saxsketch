@@ -12,6 +12,8 @@ from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 from saxsketch.geometry.builders import loft_sections
 
+from saxsketch import i18n
+
 from . import profiles
 from . import reed_profiles as rp
 from . import reed_seat
@@ -38,9 +40,13 @@ def _reach_text(value: float | None, limit: tuple[float, float] | None,
     2.72 にしかならない。届かないことは届かないと言う。
     """
     if value is not None:
-        return f"{value:.2f} mm（現在 {current:.2f}）"
+        return i18n.t(
+            "{value} mm（現在 {current}）",
+            value=f"{value:.2f}", current=f"{current:.2f}")
     edge, got = limit
-    return f"届かない（可動域の端 {edge:.2f} mm でも {got:.1f}）"
+    return i18n.t(
+        "届かない（可動域の端 {edge} mm でも {got}）",
+        edge=f"{edge:.2f}", got=f"{got:.1f}")
 
 
 def _specs(t: dict) -> list[ParamSpec]:
@@ -174,7 +180,8 @@ class ReedComponent(Component):
         判定は `rp.nose_bounds` / `params_error` の持ち主（`rp`）に書き、ここは
         繋ぐだけ（2 か所に書くと片方だけ直る）。
         """
-        spec = {s.key: s for s in self.param_specs()}
+        # `lo_by` / `hi_by` に相手の **label** を出すので訳した複製で引く。
+        spec = {s.key: s for s in self.localized_specs()}
         crown = rp.MIN_CROWN_MM
         out = {"heel_edge_thickness": {"hi": params["heel_thickness"] - crown,
                                        "hi_by": spec["heel_thickness"].label}}
@@ -199,20 +206,22 @@ class ReedComponent(Component):
             # **`reed_width` を「テーブル幅」と呼ばない**（Phase 4-F）。あれは窓幅の
             # 公称値で、マウスピースの面を 1 つも決めていない。テーブルは平面カット
             # なので実幅は半径とカット深さから決まり、z で変わる。
-            ("テーブル実幅（帯の中央）",
+            (i18n.t("テーブル実幅（帯の中央）"),
              f"{profiles.table_flat_width(m, (seat0 + seat1) / 2.0):.2f} mm"),
-            ("リード幅（規格の呼び）", f"{m['reed_width']:.1f} mm"),
+            (i18n.t("リード幅（規格の呼び）"), f"{m['reed_width']:.1f} mm"),
             # 指定値ではなく**実際に開く長さ**。`window_length` はボアの始まりで
             # 頭打ちになることがある（`profiles.window_length_effective`）。
             # リードが合わせる相手は形であって、スライダの値ではない。
-            ("ウィンドウ長", f"{profiles.window_length_effective(m):.1f} mm"),
-            ("フェイシング長", f"{m['facing_length']:.1f} mm"),
-            ("ティップ開き", f"{m['tip_opening']:.2f} mm"),
+            (i18n.t("ウィンドウ長"), f"{profiles.window_length_effective(m):.1f} mm"),
+            (i18n.t("フェイシング長"), f"{m['facing_length']:.1f} mm"),
+            (i18n.t("ティップ開き"), f"{m['tip_opening']:.2f} mm"),
             # **先端カーブにそのまま写す値ではない**（Phase 4-F 実測）。輪郭は
             # 角の近くで急に落ちる（alto で x=7.4→8.2 の 0.8mm で 1.9mm）ので、
             # 実物の幅 16.4 の角で読むと前縁の円弧とは別物になる。合わせたいときは
             # リードの適合カードの「輪郭に最も合う値」を読む。
-            (f"ティップ輪郭の落ち込み（x=±{m['reed_width'] / 2.0:.1f}）",
+            (i18n.t(
+                "ティップ輪郭の落ち込み（x=±{reed_width}）",
+                reed_width=f"{m['reed_width'] / 2.0:.1f}"),
              f"{self._ref_contour_depth(m):.2f} mm"),
         ]
 
@@ -344,7 +353,7 @@ class ReedComponent(Component):
         入力欄が 1 つも出なかった（`registry.Component` の既定は空）。サーバも
         フロントも部品を選ばないので、ここを埋めるだけでワークフローが通る。
         """
-        specs = {s.key: s for s in self.param_specs()}
+        specs = {s.key: s for s in self.localized_specs()}
         params = []
         for k in self._SURVEY_PARAM_KEYS:
             if k not in specs:
@@ -363,12 +372,14 @@ class ReedComponent(Component):
             hi = self.param_bounds(base)["tip_curve_depth"]["hi"]
             params.append({
                 "key": self.SURVEY_TIP_KEY,
-                "label": "先端カーブ（側面がまっすぐになる所まで）", "unit": "mm",
+                "label": i18n.t("先端カーブ（側面がまっすぐになる所まで）"), "unit": "mm",
                 "min": round(rp.tip_full_width_z({**base, "tip_curve_depth": lo}), 2),
                 "max": round(rp.tip_full_width_z({**base, "tip_curve_depth": hi}), 2),
                 "step": specs["tip_curve_depth"].step,
                 "current": round(rp.tip_full_width_z(base), 2)})
-        return {"params": params, "size": [dict(f) for f in self._SURVEY_SIZE_FIELDS]}
+        return {"params": params,
+                "size": [dict(f, label=i18n.t(f["label"]))
+                         for f in self._SURVEY_SIZE_FIELDS]}
 
     def survey_params(self, measured: dict, values: dict) -> dict:
         """先端カーブの欄を `tip_curve_depth` へ逆算する（ほかは素通し）。
@@ -387,17 +398,20 @@ class ReedComponent(Component):
                     measured_params: dict, measured_size: dict) -> dict | None:
         """採寸値 vs 採寸前。判定は `reference_check.survey_card`（1 か所）。"""
         return reference_check.survey_card(
-            "採寸 vs 設計（リード）",
-            {s.key: s for s in self.param_specs()},
-            {f["key"]: (f["label"], f["unit"]) for f in self._SURVEY_SIZE_FIELDS},
+            i18n.t("採寸 vs 設計（リード）"),
+            {s.key: s for s in self.localized_specs()},
+            {f["key"]: (i18n.t(f["label"]), f["unit"])
+             for f in self._SURVEY_SIZE_FIELDS},
             before_params, before_size, measured_params, measured_size,
-            "実測をプロジェクトへ反映しました。**1 本だけ入れないこと** ——"
-            "銘柄・カットで寸法は動くので（全長はソプラノ 58.3〜62.0 / アルト "
-            "70.2〜72.8 / テナー 81.05〜82.7 と 2.6〜3.7mm 振れる）、"
-            "同じサイズを複数本まとめて測って"
-            "から入れてください。先端カーブは「側面がまっすぐになる所」まで"
-            "測った値を入れれば、見かけの角（パラメータ）へ逆算して取り込みます。"
-            "設計をいじって破綻したら「採寸時点へ戻す」で復元できます。")
+            i18n.t(
+                "実測をプロジェクトへ反映しました。**1 本だけ入れないこと** —"
+                "—銘柄・カットで寸法は動くので（全長はソプラノ 58.3〜62.0 / "
+                "アルト 70.2〜72.8 / テナー 81.05〜82.7 と 2.6〜3.7mm "
+                "振れる）、同じサイズを複数本まとめて測ってから入れてください"
+                "。先端カーブは「側面がまっすぐになる所」"
+                "まで測った値を入れれば、見かけの角（パラメータ）"
+                "へ逆算して取り込みます。設計をいじって破綻したら「採寸時点へ"
+                "戻す」で復元できます。"))
 
     # ------------------------------------------------------------ 形状生成
 
@@ -435,35 +449,41 @@ class ReedComponent(Component):
     def _stiffness_card(self, params: dict, props: dict) -> dict:
         p = params
         rows = [
-            ["リード共振 f_reed", f"{props['f_reed_hz']:.0f} Hz"],
-            ["自由振動長", f"{props['l_eff_mm']:.1f} mm"],
-            ["曲げ剛性 EI", f"{props['ei_n_mm2']:.0f} N·mm²"],
-            ["先端たわみ", f"{props['tip_compliance_mm_per_kpa']:.2f} mm / kPa"],
+            [i18n.t("リード共振 f_reed"), f"{props['f_reed_hz']:.0f} Hz"],
+            [i18n.t("自由振動長"), f"{props['l_eff_mm']:.1f} mm"],
+            [i18n.t("曲げ剛性 EI"), f"{props['ei_n_mm2']:.0f} N·mm²"],
+            [i18n.t("先端たわみ"), f"{props['tip_compliance_mm_per_kpa']:.2f} mm / kPa"],
             # 「硬さは材質と厚さで決まるのか」への答え。たわみは z³ の重みなので
             # 固定端側が支配し、先端 1/4 の寄与は 6% 前後しかない。
-            ["たわみの寄与（先端→根元）",
+            [i18n.t("たわみの寄与（先端→根元）"),
              " / ".join(f"{v:.0f}%" for v in props["deflection_bands"])],
-            [f"3番相当にする先端厚（{reed_model.material_label(p['material'])}）",
+            [i18n.t(
+                "3番相当にする先端厚（{material}）",
+                material=f"{reed_model.material_label(p['material'])}"),
              _reach_text(props["recommended_tip_mm"],
                          props["recommended_tip_limit"], p["tip_thickness"])],
-            ["3番相当にするヴァンプ長",
+            [i18n.t("3番相当にするヴァンプ長"),
              _reach_text(props["recommended_vamp_mm"],
                          props["recommended_vamp_limit"], rp.vamp_start_z(p))],
         ]
         s = props["strength_equiv"]
         if s < 1.5:
             status = "warn"
-            advice = ("柔らかすぎます。先端が閉じきって音が詰まりやすく、耐久も"
-                      "落ちます。" + self._lever_hint(p, props))
+            advice = (i18n.t(
+                "柔らかすぎます。先端が閉じきって音が詰まりやすく、"
+                "耐久も落ちます。") + self._lever_hint(p, props))
         elif s > 5.0:
             status = "warn"
-            advice = ("硬すぎます。鳴らすのに強い吹圧が要り、低音が出にくく"
-                      "なります。" + self._lever_hint(p, props))
+            advice = (i18n.t(
+                "硬すぎます。鳴らすのに強い吹圧が要り、"
+                "低音が出にくくなります。") + self._lever_hint(p, props))
         else:
             status, advice = "ok", (
-                "一般的な硬さのレンジです。数値は片持ち梁近似による推定なので、"
-                "絶対値ではなくパラメータを動かしたときの変化方向を見てください。")
-        return {"title": "硬さ・剛性", "big": props["strength_label"],
+                i18n.t(
+                    "一般的な硬さのレンジです。数値は片持ち梁近似による推定な"
+                    "ので、絶対値ではなくパラメータを動かしたときの変化方向を"
+                    "見てください。"))
+        return {"title": i18n.t("硬さ・剛性"), "big": props["strength_label"],
                 "status": status, "rows": rows, "advice": advice}
 
     @staticmethod
@@ -479,29 +499,36 @@ class ReedComponent(Component):
         moves = []
         v = props["recommended_vamp_mm"]
         if v is not None:
-            moves.append(f"ヴァンプ長を {v:.1f}mm へ（現在 {rp.vamp_start_z(p):.1f}）")
+            moves.append(i18n.t(
+                "ヴァンプ長を {v}mm へ（現在 {rp}）",
+                v=f"{v:.1f}", rp=f"{rp.vamp_start_z(p):.1f}"))
         t = props["recommended_tip_mm"]
         if t is not None:
-            moves.append(f"先端厚を {t:.2f}mm へ（現在 {p['tip_thickness']:.2f}）")
-        head = (f"効くのはヴァンプ長とプロファイル曲線です —— たわみは先端からの"
-                f"距離の 3 乗で効くので固定端側が支配し、**先端厚の寄与は"
-                f" {tip_pct:.0f}% しかありません**。")
+            moves.append(i18n.t(
+                "先端厚を {t}mm へ（現在 {tip_thickness}）",
+                t=f"{t:.2f}", tip_thickness=f"{p['tip_thickness']:.2f}"))
+        head = (i18n.t(
+            "効くのはヴァンプ長とプロファイル曲線です —— "
+            "たわみは先端からの距離の 3 乗で効くので固定端側が支配し、"
+            "**先端厚の寄与は {tip_pct}% しかありません**。",
+            tip_pct=f"{tip_pct:.0f}"))
         if not moves:
-            return (head + "この材料と形では 3番相当に届きません。"
-                    "プロファイル曲線を「直線」寄りにするか、材料を硬いものへ"
-                    "変えてください。")
-        return head + "3番相当にするなら " + " か ".join(moves) + "。"
+            return (head + i18n.t(
+                "この材料と形では 3番相当に届きません。"
+                "プロファイル曲線を「直線」寄りにするか、"
+                "材料を硬いものへ変えてください。"))
+        return head + i18n.t("3番相当にするなら ") + i18n.t(" か ").join(moves) + "。"
 
     def _fit_card(self, params: dict) -> dict:
         """参照マウスピースとの適合。ここが Phase 3 の「自動整合」の可視化。"""
         m = self.ref_params()
         p = params
-        rows = [["リード先端幅 / 踵幅",
+        rows = [[i18n.t("リード先端幅 / 踵幅"),
                  f"{p['tip_width']:.1f} / {p['heel_width']:.1f} mm"]]
-        status, advice = "ok", "マウスピースのテーブル・レールに整合しています。"
+        status, advice = "ok", i18n.t("マウスピースのテーブル・レールに整合しています。")
         if not m:
-            return {"title": "マウスピース適合", "big": None, "status": "warn",
-                    "rows": rows, "advice": "参照マウスピースが未設定です。"}
+            return {"title": i18n.t("マウスピース適合"), "big": None, "status": "warn",
+                    "rows": rows, "advice": i18n.t("参照マウスピースが未設定です。")}
 
         # **裏面が密着するかは全長で見る**（Phase 4-F）。ここは長らく
         # `tip_width − reed_width` の 1 本だけで、相手はマウスピースの面を
@@ -510,67 +537,99 @@ class ReedComponent(Component):
         sw, st = seat["window"], seat["table"]
         cover = reed_seat.cover_row(sw, self.size_info)
         rows.append(cover["row"])
-        rows.append(["帯までのはみ出し 最大",
-                     "区間がありません" if st is None else
-                     f"{st['mm']:+.2f} mm（z={st['z']:.1f}）"])
+        rows.append([i18n.t("帯までのはみ出し 最大"),
+                     i18n.t("区間がありません") if st is None else
+                     i18n.t("{mm} mm（z={z}）",
+                            mm=f"{st['mm']:+.2f}", z=f"{st['z']:.1f}")])
         over = 0.0 if st is None else max(st["mm"], 0.0)
         zv = rp.vamp_start_z(p)
         win = profiles.window_length_effective(m)
-        rows.append(["ヴァンプ長 / ウィンドウ長", f"{zv:.1f} / {win:.1f} mm"])
+        rows.append([i18n.t("ヴァンプ長 / ウィンドウ長"), f"{zv:.1f} / {win:.1f} mm"])
         seat0, seat1 = profiles.ligature_seat_range(m)
-        rows.append(["踵位置 / リガチャー座",
-                     f"{p['reed_length']:.1f} / {seat0:.1f}〜{seat1:.1f} mm"])
+        rows.append([i18n.t("踵位置 / リガチャー座"),
+                     f"{p['reed_length']:.1f} / "
+                     + i18n.t("{lo}〜{hi}", lo=f"{seat0:.1f}",
+                              hi=f"{seat1:.1f}") + " mm"])
         gap = self._tip_contour_gap(p, m)
         best_d, best_gap = self._best_curve_depth(p, m)
         # **MP 側の輪郭が未実測のサイズでは判定しない**（数字は出す）。ソプラノで
         # 実物と食い違った（`reference_check.mp_tip_contour_is_measured`）。
         contour_judged = reference_check.mp_tip_contour_is_measured(self.size_info)
-        rows.append(["先端カーブ / MPの輪郭に最も合う値",
-                     f"{p['tip_curve_depth']:.2f} / {best_d:.2f} mm"
-                     f"（最大ずれ {gap:+.2f}、合わせると {best_gap:+.2f}）"
+        rows.append([i18n.t("先端カーブ / MPの輪郭に最も合う値"),
+                     i18n.t(
+                         "{tip_curve_depth} / {best_d} mm（最大ずれ {gap}、"
+                         "合わせると {best_gap}）",
+                         tip_curve_depth=f"{p['tip_curve_depth']:.2f}",
+                         best_d=f"{best_d:.2f}", gap=f"{gap:+.2f}",
+                         best_gap=f"{best_gap:+.2f}")
                      + ("" if contour_judged else
-                        "　参考: MP の輪郭が未実測のため判定しない")])
+                        i18n.t("　参考: MP の輪郭が未実測のため判定しない"))])
         # 角は丸みの半径ぶん後ろへ逃げる。意図した造形なので判定には入れないが、
         # ティップレールがどれだけ露出するかは設計者が読める所に出しておく。
         reed_corner, mp_corner = self._corner_relief(p, m)
-        rows.append(["角の位置（リード / MP）",
-                     f"{reed_corner:.2f} / {mp_corner:.2f} mm"
-                     f"（丸み {p['tip_corner_r']:.1f} ぶん {reed_corner - mp_corner:+.2f}）"])
+        rows.append([i18n.t("角の位置（リード / MP）"),
+                     i18n.t(
+                         "{reed_corner} / {mp_corner} mm（丸み "
+                         "{tip_corner_r} ぶん {reed_corner2}）",
+                         reed_corner=f"{reed_corner:.2f}",
+                         mp_corner=f"{mp_corner:.2f}",
+                         tip_corner_r=f"{p['tip_corner_r']:.1f}",
+                         reed_corner2=f"{reed_corner - mp_corner:+.2f}")])
 
         if cover["verdict"] in ("軽微", "乖離"):
             status = "warn"
-            advice = (f"窓の区間（z={sw['z']:.1f}）でリードの縁がサイドレールに載らず、"
-                      f"窓の上に {-sw['mm']:.2f}mm 浮いています。脇から漏れます。"
-                      f"先端幅を広げるか、マウスピースの窓を狭めてください。")
+            advice = (i18n.t(
+                "窓の区間（z={z}）でリードの縁がサイドレールに載らず、"
+                "窓の上に {mm}mm 浮いています。脇から漏れます。"
+                "先端幅を広げるか、マウスピースの窓を狭めてください。",
+                z=f"{sw['z']:.1f}", mm=f"{-sw['mm']:.2f}"))
         elif over > reed_seat.OVER_TOL:
             status = "warn"
-            advice = (f"リガチャーが締める区間（z={st['z']:.1f}）で縁がテーブルの外へ "
-                      f"{over:.2f}mm 出ています。押しても密着しないので、そこは"
-                      f"漏れます。踵幅を詰めるか、マウスピースのボディ径を"
-                      f"大きくしてください。**後ろへはみ出すぶんは害がありません** "
-                      f"——締めない区間なので参考値です。")
+            advice = (i18n.t(
+                "リガチャーが締める区間（z={z}）で縁がテーブルの外へ "
+                "{over}mm 出ています。押しても密着しないので、"
+                "そこは漏れます。踵幅を詰めるか、マウスピー"
+                "スのボディ径を大きくしてください。"
+                "**後ろへはみ出すぶんは害がありません** ——"
+                "締めない区間なので参考値です。",
+                z=f"{st['z']:.1f}", over=f"{over:.2f}"))
         elif zv < win * 0.75:
             status = "warn"
-            advice = ("ヴァンプがウィンドウ長に対して短く、削り面が窓に届いていません。"
-                      "振動部が硬くなり鳴りにくくなります。")
+            advice = (i18n.t(
+                "ヴァンプがウィンドウ長に対して短く、"
+                "削り面が窓に届いていません。振動部が硬くなり鳴りにくくなりま"
+                "す。"))
         elif p["reed_length"] < seat1 - SEAT_REACH_TOL:
             status = "warn"
-            advice = (f"踵がリガチャー座の後端（{seat1:.1f}mm）まで届いていません。"
-                      f"リガチャーがリードの無い位置を締めることになり、固定できません。"
-                      f"全長を伸ばしてください。")
+            advice = (i18n.t(
+                "踵がリガチャー座の後端（{seat1}mm）まで届いていません。"
+                "リガチャーがリードの無い位置を締めることになり、"
+                "固定できません。全長を伸ばしてください。",
+                seat1=f"{seat1:.1f}"))
         elif contour_judged and abs(gap) > TIP_CONTOUR_TOL:
             status = "warn"
-            fix = (f"先端カーブを {best_d:.1f}mm にすると最大ずれが {abs(best_gap):.2f}mm "
-                   f"まで縮みます。" if abs(best_gap) <= TIP_CONTOUR_TOL else
-                   f"円弧の前縁ではこの輪郭に {TIP_CONTOUR_TOL}mm 以内まで寄せられません"
-                   f"（いちばん近いのは {best_d:.1f}mm で {abs(best_gap):.2f}mm）。")
+            fix = (i18n.t(
+                "先端カーブを {best_d}mm にすると最大ずれが {best_gap}mm "
+                "まで縮みます。",
+                best_d=f"{best_d:.1f}", best_gap=f"{abs(best_gap):.2f}") if abs(best_gap) <= TIP_CONTOUR_TOL else
+                   i18n.t(
+                       "円弧の前縁ではこの輪郭に {tip_contour_tol}mm "
+                       "以内まで寄せられません（いちばん近いのは {best_d}mm "
+                       "で {best_gap}mm）。",
+                       tip_contour_tol=f"{TIP_CONTOUR_TOL}",
+                       best_d=f"{best_d:.1f}", best_gap=f"{abs(best_gap):.2f}"))
             advice = (
-                f"前縁がマウスピースのティップ輪郭から最大 {abs(gap):.2f}mm "
-                f"{'後退しています（レールが露出）' if gap > 0 else '前へ張り出します'}。"
+                i18n.t(
+                    "前縁がマウスピースのティップ輪郭から最大 {gap}mm {vif}。",
+                    gap=f"{abs(gap):.2f}",
+                    vif=(i18n.t("後退しています（レールが露出）")
+                         if gap > 0 else i18n.t("前へ張り出します")))
                 + fix +
-                "ただし市販のリードは規格品でマウスピース個体に合わせて作られていない"
-                "ので、揃えるかどうかは設計の判断です。")
-        return {"title": "マウスピース適合", "big": None, "status": status,
+                i18n.t(
+                    "ただし市販のリードは規格品でマウスピー"
+                    "ス個体に合わせて作られていないので、"
+                    "揃えるかどうかは設計の判断です。"))
+        return {"title": i18n.t("マウスピース適合"), "big": None, "status": status,
                 "rows": rows, "advice": advice}
 
     def _print_card(self, params: dict, props: dict) -> dict:
@@ -591,38 +650,47 @@ class ReedComponent(Component):
         str_floor = props["min_thickness_mm"]
         mat = f"{reed_model.material_label(p['material'])} / " \
               f"{reed_model.material_process(p['material'])}"
-        binds = "解像度" if res_floor >= str_floor else "実用強度"
+        binds = i18n.t("解像度") if res_floor >= str_floor else i18n.t("実用強度")
         rows = [
-            ["先端厚（中央）", f"{p['tip_thickness']:.2f} mm"],
-            [f"解像度の下限（積層 {p['min_layer']:.2f} × 3）",
-             f"{res_floor:.2f} mm" + ("  ← 効いている" if binds == "解像度" else "")],
-            [f"実用強度の下限（{mat}）",
-             f"{str_floor:.2f} mm" + ("  ← 効いている" if binds == "実用強度" else "")],
-            ["側端厚", f"{rp.edge_thickness(p, 0.0):.2f} mm"],
-            ["材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"],
+            [i18n.t("先端厚（中央）"), f"{p['tip_thickness']:.2f} mm"],
+            [i18n.t(
+                "解像度の下限（積層 {min_layer} × 3）",
+                min_layer=f"{p['min_layer']:.2f}"),
+             f"{res_floor:.2f} mm" + (i18n.t("  ← 効いている") if binds == "解像度" else "")],
+            [i18n.t("実用強度の下限（{mat}）", mat=f"{mat}"),
+             f"{str_floor:.2f} mm" + (i18n.t("  ← 効いている") if binds == "実用強度" else "")],
+            [i18n.t("側端厚"), f"{rp.edge_thickness(p, 0.0):.2f} mm"],
+            [i18n.t("材料体積"), f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"],
         ]
         if p["tip_thickness"] < res_floor:
-            return {"title": "印刷可否", "big": "造形不可", "status": "bad", "rows": rows,
-                    "advice": f"先端厚が解像度の下限（積層 {p['min_layer']:.2f} × 3 "
-                              f"= {res_floor:.2f}mm）を下回ります。積層を細かくするか"
-                              f"先端厚を上げてください。"}
+            return {"title": i18n.t("印刷可否"), "big": i18n.t("造形不可"), "status": "bad", "rows": rows,
+                    "advice": i18n.t(
+                        "先端厚が解像度の下限（積層 {min_layer} × 3 "
+                        "= {res_floor}mm）を下回ります。"
+                        "積層を細かくするか先端厚を上げてください。",
+                        min_layer=f"{p['min_layer']:.2f}",
+                        res_floor=f"{res_floor:.2f}")}
         if not props["printable"]:
-            return {"title": "印刷可否", "big": "要注意", "status": "warn", "rows": rows,
-                    "advice": f"造形はできますが、{mat} の実用強度の下限 "
-                              f"{str_floor:.2f}mm を下回ります。**この下限は出典の"
-                              f"無い仮定**で、この薄さが屈曲に耐えるかは未確認です"
-                              f"（実物のリードは先端 0.1mm 前後ですが、それはケーンの"
-                              f"繊維方向の強さがあってのものです）。"}
-        return {"title": "印刷可否", "big": "造形可", "status": "ok", "rows": rows,
-                "advice": "解像度・実用強度の下限をどちらも上回っています。"
-                          "積層方向はリード長手方向に平行（面内）にしてください。"}
+            return {"title": i18n.t("印刷可否"), "big": i18n.t("要注意"), "status": "warn", "rows": rows,
+                    "advice": i18n.t(
+                        "造形はできますが、{mat} の実用強度の下限 "
+                        "{str_floor}mm を下回ります。"
+                        "**この下限は出典の無い仮定**で、"
+                        "この薄さが屈曲に耐えるかは未確認です（実物のリー"
+                        "ドは先端 0.1mm 前後ですが、それはケー"
+                        "ンの繊維方向の強さがあってのものです）。",
+                        mat=f"{mat}", str_floor=f"{str_floor:.2f}")}
+        return {"title": i18n.t("印刷可否"), "big": i18n.t("造形可"), "status": "ok", "rows": rows,
+                "advice": i18n.t(
+                    "解像度・実用強度の下限をどちらも上回っています。"
+                    "積層方向はリード長手方向に平行（面内）にしてください。")}
 
     # ------------------------------------------------------------ Tier3（物理モデル音）
 
     def _require_ref(self) -> dict:
         m = self.ref_params()
         if not m:
-            raise RuntimeError("参照マウスピースが未設定のため音合成できません")
+            raise RuntimeError(i18n.t("参照マウスピースが未設定のため音合成できません"))
         return m
 
     def _override(self, params: dict) -> dict:
@@ -692,7 +760,7 @@ class ReedComponent(Component):
         `dim()` が公称値として併記する（意図した造形なので警告にはしない）。
         """
         p = params
-        sp = {s.key: s for s in self.param_specs()}
+        sp = {s.key: s for s in self.localized_specs()}
         L = p["reed_length"]
         zv = rp.vamp_start_z(p)
         zf = rp.tip_full_width_z(p)
@@ -724,16 +792,18 @@ class ReedComponent(Component):
         ]
 
     def bom(self, params: dict) -> list[dict]:
-        size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]
+        size_label = {"soprano": i18n.t("ソプラノ"), "alto": i18n.t("アルト"), "tenor": i18n.t("テナー")}[self.size]
         # 規格長は 1 点ではない（同じソプラノ用でケーン 59.1 / 樹脂 62.0 の実測差）。
         span = reference_check.reed_length_span(self.size_info)
-        note = f"口に触れる部品。食品接触適合材料を使用のこと（規格長 {span}mm）"
+        note = i18n.t(
+            "口に触れる部品。食品接触適合材料を使用のこと（規格長 {span}mm）",
+            span=f"{span}")
         return [
-            {"type": "3Dプリント", "name": f"リード（{size_label}）", "qty": 1,
+            {"type": i18n.t("3Dプリント"), "name": i18n.t("リード（{size_label}）", size_label=f"{size_label}"), "qty": 1,
              "material": reed_model.material_label(params["material"]),
              "note": note},
-            {"type": "市販品", "name": "リードケース", "qty": 1, "material": "-",
-             "note": "反り防止（任意）"},
+            {"type": i18n.t("市販品"), "name": i18n.t("リードケース"), "qty": 1, "material": "-",
+             "note": i18n.t("反り防止（任意）")},
         ]
 
     def _section_svg(self, params: dict) -> str:
@@ -747,8 +817,9 @@ class ReedComponent(Component):
             {"pts": pr["edge"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["table"], "stroke": "#cc3300", "width": 0.8, "dash": "2 2"},
             {"pts": [(zv, 0.0), (zv, top)], "stroke": "#888", "width": 0.8, "dash": "3 3"},
-        ], "厚みプロファイル（実線=中央 / 青破線=側端 / 赤破線=テーブル面 / "
-           "灰=ヴァンプ端） 単位:mm")
+        ], i18n.t(
+            "厚みプロファイル（実線=中央 / 青破線=側端 / 赤破線=テーブル面 /"
+            " 灰=ヴァンプ端） 単位:mm"))
 
     def _heel_section_svg(self, params: dict) -> str:
         """踵の断面図（カマボコ）。上面に残る元のケーン管の円弧を示す。"""
@@ -759,42 +830,46 @@ class ReedComponent(Component):
             {"pts": list(pts) + [pts[0]], "stroke": "#222", "width": 1.5},
             {"pts": [(-p["heel_width"] / 2.0, 0.0), (p["heel_width"] / 2.0, 0.0)],
              "stroke": "#cc3300", "width": 0.8, "dash": "2 2"},
-        ], f"踵の断面（上面＝ケーン外径 φ{2.0 * rp.cane_radius(p):.1f} の円弧 / "
-           f"赤破線＝テーブル面） 単位:mm")
+        ], i18n.t(
+            "踵の断面（上面＝ケーン外径 φ{rp} の円弧 / 赤破線＝テーブル面） "
+            "単位:mm",
+            rp=f"{2.0 * rp.cane_radius(p):.1f}"))
 
     def spec_extras(self, params: dict) -> dict:
         p = params
         dims = [
-            ("全長", f"{p['reed_length']:.1f} mm"),
-            ("先端幅 × 踵幅", f"{p['tip_width']:.1f} × {p['heel_width']:.1f} mm"),
-            ("先端厚（中央/側端）",
+            (i18n.t("全長"), f"{p['reed_length']:.1f} mm"),
+            (i18n.t("先端幅 × 踵幅"), f"{p['tip_width']:.1f} × {p['heel_width']:.1f} mm"),
+            (i18n.t("先端厚（中央/側端）"),
              f"{p['tip_thickness']:.2f} / {rp.edge_thickness(p, 0.0):.2f} mm"),
-            ("踵厚（中央/側端）",
+            (i18n.t("踵厚（中央/側端）"),
              f"{p['heel_thickness']:.2f} / {rp.heel_edge_thickness(p):.2f} mm"),
             # 側端厚は未実測なので、そこから導いたケーン外径も未実測。実物の踵端面を
             # 1 点測れば決まる（中央厚と踵幅は規格値なので、残りの自由度はこれだけ）。
-            ("ケーン外径（側端厚からの導出）",
-             f"φ{2.0 * rp.cane_radius(p):.1f} mm（側端厚は未実測）"),
-            ("ヴァンプ長", f"{rp.vamp_start_z(p):.1f} mm"),
+            (i18n.t("ケーン外径（側端厚からの導出）"),
+             i18n.t(
+                 "φ{rp} mm（側端厚は未実測）",
+                 rp=f"{2.0 * rp.cane_radius(p):.1f}")),
+            (i18n.t("ヴァンプ長"), f"{rp.vamp_start_z(p):.1f} mm"),
             # 2 つ出すのは値が違うから。`tip_curve_depth` は前縁アークの理論的な角で、
             # 実際に全幅へ達するのは角の丸みぶん後ろ（既定で +0.46〜0.59mm）。
-            ("先端カーブ / 全幅に達する位置",
+            (i18n.t("先端カーブ / 全幅に達する位置"),
              f"{p['tip_curve_depth']:.2f} / {rp.tip_full_width_z(p):.2f} mm"),
-            ("材料体積", f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
+            (i18n.t("材料体積"), f"{rp.blade_volume_mm3(p) / 1000.0:.2f} cc"),
         ]
         m = self.ref_params()
         props = reed_model.reed_properties(p, m)
-        dims.append(("硬さ相当（推定）", props["strength_label"]))
-        dims.append(("リード共振 f_reed（推定）", f"{props['f_reed_hz']:.0f} Hz"))
+        dims.append((i18n.t("硬さ相当（推定）"), props["strength_label"]))
+        dims.append((i18n.t("リード共振 f_reed（推定）"), f"{props['f_reed_hz']:.0f} Hz"))
         if m:
             # `reed_width` を「テーブル幅」と呼ばない（`ref_dimensions` の注記）。
-            dims.append(("参照マウスピース リード幅（規格の呼び）",
+            dims.append((i18n.t("参照マウスピース リード幅（規格の呼び）"),
                          f"{m['reed_width']:.1f} mm"))
-            dims.append(("先端カーブ / 参照マウスピースの輪郭に最も合う値",
+            dims.append((i18n.t("先端カーブ / 参照マウスピースの輪郭に最も合う値"),
                          f"{p['tip_curve_depth']:.2f} / "
                          f"{self._best_curve_depth(p, m)[0]:.2f} mm"))
         return {"dimensions": dims,
-                "sections": [{"title": "厚みプロファイル",
+                "sections": [{"title": i18n.t("厚みプロファイル"),
                               "svg": self._section_svg(p)},
-                             {"title": "踵の断面（カマボコ）",
+                             {"title": i18n.t("踵の断面（カマボコ）"),
                               "svg": self._heel_section_svg(p)}]}

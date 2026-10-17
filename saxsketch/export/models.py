@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from saxsketch import i18n
+
 
 def export_model(part, out_path: str | Path, fmt: str,
                  tolerance: float = 0.02, angular_tolerance: float = 0.1) -> Path:
@@ -61,7 +63,7 @@ def export_model(part, out_path: str | Path, fmt: str,
                          angular_deflection=angular_tolerance)
         mesher.write(str(out_path))
     else:
-        raise ValueError(f"未対応の形式: {fmt}")
+        raise ValueError(i18n.t("未対応の形式: {fmt}", fmt=f"{fmt}"))
     return out_path
 
 

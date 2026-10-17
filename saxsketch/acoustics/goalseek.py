@@ -8,6 +8,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize
 
+from saxsketch import i18n
+
 from . import brightness as br
 from . import volume as vol
 
@@ -99,5 +101,5 @@ def goal_seek(params: dict, specs: list, targets: dict, size_info: dict,
         "predicted_metrics": predicted,
         "predicted_tier1": t1,
         "residual": round(float(res.fun), 4),
-        "note": "推定モデル上の逆算提案です。適用前に差分を確認してください。",
+        "note": i18n.t("推定モデル上の逆算提案です。適用前に差分を確認してください。"),
     }

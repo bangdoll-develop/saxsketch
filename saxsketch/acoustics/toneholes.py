@@ -28,6 +28,8 @@ import math
 
 import numpy as np
 
+from saxsketch import i18n
+
 #: 接合部の「合流体積」を質量に含めるか。**OpenWind の既定は False** なので
 #: 揃えてある。ここを True にするなら OpenWind 側にも `matching_volume=True` を
 #: 渡すこと（片方だけ変えると 2 エンジンが違う楽器を解く）。
@@ -139,5 +141,5 @@ def successive_fingerings(holes: list[dict]) -> list[tuple[str, tuple[bool, ...]
         flags = [False] * len(holes)
         for i in finger_idx[len(finger_idx) - k:]:      # ベル寄りから k 本
             flags[i] = True
-        out.append(("全閉" if k == 0 else f"{k}孔開", tuple(flags)))
+        out.append((i18n.t("全閉") if k == 0 else i18n.t("{k}孔開", k=f"{k}"), tuple(flags)))
     return out

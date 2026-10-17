@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+from saxsketch import i18n
+
 from . import ligature_profiles as lp
 from . import reed_profiles as rp
 from . import reed_seat
@@ -60,30 +62,35 @@ def set_card(size_info: dict, members: dict) -> dict | None:
     rows, verdicts = [], []
 
     band0, band1 = lp.seat_range(m, p)
-    rows.append(["リガチャー帯の位置（前端→後端）", f"{band0:.1f} → {band1:.1f} mm"])
+    rows.append([i18n.t("リガチャー帯の位置（前端→後端）"),
+                 f"{band0:.1f} → {band1:.1f} mm"])
 
     if reed_p is None:
-        rows.append(["想定リード", "同サイズのテンプレート値"
-                                   f"（踵厚 {assumed['heel_thickness']:.2f} / "
-                                   f"踵幅 {assumed['heel_width']:.1f} mm）"])
+        rows.append([
+            i18n.t("想定リード"),
+            i18n.t("同サイズのテンプレート値（踵厚 {heel} / 踵幅 {width} mm）",
+                   heel=f"{assumed['heel_thickness']:.2f}",
+                   width=f"{assumed['heel_width']:.1f}")])
         return _finish(
-            "セットの適合（MP＋リガチャー）", rows, verdicts,
-            "リードはまだセットにありません。リガチャーの当たり面は**同サイズの"
-            "テンプレート リード**を想定して作られています。リードを設計して"
-            "セットに足すと、その実寸に合わせた形へ変わります"
-            "（変わったことは通知に出ます）。")
+            i18n.t("セットの適合（MP＋リガチャー）"), rows, verdicts,
+            i18n.t("リードはまだセットにありません。リガチャーの当たり面は**同サイズの"
+                   "テンプレート リード**を想定して作られています。リードを設計して"
+                   "セットに足すと、その実寸に合わせた形へ変わります"
+                   "（変わったことは通知に出ます）。"))
 
-    rows.append(["想定リード", f"このセットのリード"
-                               f"（踵厚 {assumed['heel_thickness']:.2f} / "
-                               f"踵幅 {assumed['heel_width']:.1f} mm）"])
+    rows.append([
+        i18n.t("想定リード"),
+        i18n.t("このセットのリード（踵厚 {heel} / 踵幅 {width} mm）",
+               heel=f"{assumed['heel_thickness']:.2f}",
+               width=f"{assumed['heel_width']:.1f}")])
 
     # (1) 踵が帯の後端まで届いているか。**非対称**に見る。届かなければリードの
     #     後端が宙に浮いて締まらない。長い分は帯の外へ出るだけで害が無い。
     length = float(reed_p["reed_length"])
     short = band1 - length
     v = "一致" if short <= SEAT_REACH_TOL else ("軽微" if short <= 3.0 else "乖離")
-    rows.append(["リード全長 / 帯の後端",
-                 f"{length:.1f} / {band1:.1f} mm  {v}"])
+    rows.append([i18n.t("リード全長 / 帯の後端"),
+                 f"{length:.1f} / {band1:.1f} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     # (2) 帯が削った部分を締めていないか。バーク端より前に**接触が当たる**と、
@@ -95,9 +102,11 @@ def set_card(size_info: dict, members: dict) -> dict | None:
     bite = vamp - touch          # 正 = 接触が削り部へ食い込んでいる
     v = "一致" if bite <= VAMP_CLEAR_TOL else (
         "軽微" if bite <= VAMP_CLEAR_TOL_MINOR else "乖離")
-    rows.append(["接触が当たる最前 / リードの削り始め",
-                 f"{touch:.1f} / {vamp:.1f} mm  {v}"
-                 + ("" if abs(touch - band0) < 1e-9 else f"（帯の前端は {band0:.1f}）")])
+    rows.append([
+        i18n.t("接触が当たる最前 / リードの削り始め"),
+        f"{touch:.1f} / {vamp:.1f} mm  {i18n.t(v)}"
+        + ("" if abs(touch - band0) < 1e-9
+           else i18n.t("（帯の前端は {z}）", z=f"{band0:.1f}"))])
     verdicts.append(v)
 
     # (3) 裏面が密着するか。**1 点では決まらない**（Phase 4-F）—— 以前はここで
@@ -115,22 +124,24 @@ def set_card(size_info: dict, members: dict) -> dict | None:
         verdicts.append(cover["verdict"])
     t = seat["table"]
     if t is None:
-        rows.append(["帯までのはみ出し 最大", "区間がありません"])
+        rows.append([i18n.t("帯までのはみ出し 最大"), i18n.t("区間がありません")])
     else:
         v = _verdict(max(t["mm"], 0.0), reed_seat.OVER_TOL, reed_seat.OVER_TOL_MINOR)
-        rows.append(["帯までのはみ出し 最大",
-                     f"{t['mm']:+.2f} mm（z={t['z']:.1f}）  {v}"])
+        rows.append([i18n.t("帯までのはみ出し 最大"),
+                     i18n.t("{mm} mm（z={z}）", mm=f"{t['mm']:+.2f}",
+                            z=f"{t['z']:.1f}") + f"  {i18n.t(v)}"])
         verdicts.append(v)
     tl = seat["tail"]
-    rows.append(["（参考）帯より後ろのはみ出し 最大",
-                 "リードが帯の後端より短い" if tl is None else
-                 f"{tl['mm']:+.2f} mm（z={tl['z']:.1f}）"])
+    rows.append([i18n.t("（参考）帯より後ろのはみ出し 最大"),
+                 i18n.t("リードが帯の後端より短い") if tl is None else
+                 i18n.t("{mm} mm（z={z}）", mm=f"{tl['mm']:+.2f}",
+                        z=f"{tl['z']:.1f}")])
 
     # (3b) タブがこのリードを収められるか。**判定はリガチャーのカードが持つ**
     #      （切り詰めの警告は `ligature._fit_card`）。ここは「どのリードで
     #      タブを切ったか」を出すだけ —— しきい値を 2 か所に置かない。
     z_mid = (band0 + band1) / 2.0
-    rows.append(["リード踵幅 / タブ幅",
+    rows.append([i18n.t("リード踵幅 / タブ幅"),
                  f"{reed_p['heel_width']:.1f} / "
                  f"{lp.flat_half_width(m, p, assumed) * 2.0:.1f} mm"])
 
@@ -141,19 +152,19 @@ def set_card(size_info: dict, members: dict) -> dict | None:
     delta = actual - assumed["heel_thickness"]
     a = abs(delta)
     v = "一致" if a <= THICKNESS_TOL else ("軽微" if a <= THICKNESS_TOL_MINOR else "乖離")
-    rows.append(["帯の下のリード厚 / リガチャーの想定",
-                 f"{actual:.2f} / {assumed['heel_thickness']:.2f} mm  {v}"])
+    rows.append([i18n.t("帯の下のリード厚 / リガチャーの想定"),
+                 f"{actual:.2f} / {assumed['heel_thickness']:.2f} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     return _finish(
-        "セットの適合（MP＋リガチャー＋リード）", rows, verdicts,
-        "ここに出るのは**3 部品が揃わないと決まらない量**だけです"
-        "（帯の位置はマウスピースの座・リガチャーの幅と座位置・リードの全長で"
-        "決まります）。各部品ごとの規格照合はそれぞれのカードにあります。"
-        "リードの z はマウスピースと同じく先端が 0 で、組んだときティップレールに"
-        "合わせる前提です —— ティップ輪郭の落ち込み（0.1mm 級）は無視しています。"
-        "**裏面の密着は 1 点ではなく全長で見ています**（`reed_seat`）—— 判定するのは"
-        "窓へのかかり代とリガチャーが締める区間で、後ろへはみ出すぶんは害が無いので"
-        "参考値です。かかり代は規格リードの先端幅が実測されたサイズでだけ判定します"
-        "（実物のアルトで +0.40〜+1.33mm、光にかざして 10 組とも縁がレールの上）。"
-        "マウスピース単体のカードは**規格リード**で同じことを見ています。")
+        i18n.t("セットの適合（MP＋リガチャー＋リード）"), rows, verdicts,
+        i18n.t("ここに出るのは**3 部品が揃わないと決まらない量**だけです"
+               "（帯の位置はマウスピースの座・リガチャーの幅と座位置・リードの全長で"
+               "決まります）。各部品ごとの規格照合はそれぞれのカードにあります。"
+               "リードの z はマウスピースと同じく先端が 0 で、組んだときティップレールに"
+               "合わせる前提です —— ティップ輪郭の落ち込み（0.1mm 級）は無視しています。"
+               "**裏面の密着は 1 点ではなく全長で見ています**（`reed_seat`）—— 判定するのは"
+               "窓へのかかり代とリガチャーが締める区間で、後ろへはみ出すぶんは害が無いので"
+               "参考値です。かかり代は規格リードの先端幅が実測されたサイズでだけ判定します"
+               "（実物のアルトで +0.40〜+1.33mm、光にかざして 10 組とも縁がレールの上）。"
+               "マウスピース単体のカードは**規格リード**で同じことを見ています。"))

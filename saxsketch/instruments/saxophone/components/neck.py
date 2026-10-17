@@ -13,6 +13,8 @@ from __future__ import annotations
 from saxsketch.core.registry import Component
 from saxsketch.core.schema import Choice, ParamSpec
 
+from saxsketch import i18n
+
 from . import neck_profiles as npf
 from . import reference_check
 
@@ -165,46 +167,62 @@ class NeckComponent(Component):
         fit = reference_check.INTERFERENCE_FIT_MM
         need = p["tenon_od"] + 2.0 * p["cork_thickness"]
         rows = [
-            ["テノン外径", f"{p['tenon_od']:.1f} mm"],
-            ["コルク厚（片側）", f"{p['cork_thickness']:.2f} mm"],
-            ["コルク込み外径（自由状態）", f"{need:.2f} mm"],
-            ["合うマウスピースのボア径", f"{need - fit:.2f} mm（締め代 {fit:.1f}mm）"],
-            ["規格テノン外径（descriptor）", f"{self.size_info['neck_tenon_od_mm']:.1f} mm"],
+            [i18n.t("テノン外径"), f"{p['tenon_od']:.1f} mm"],
+            [i18n.t("コルク厚（片側）"), f"{p['cork_thickness']:.2f} mm"],
+            [i18n.t("コルク込み外径（自由状態）"), f"{need:.2f} mm"],
+            [i18n.t("合うマウスピースのボア径"), i18n.t(
+                "{need} mm（締め代 {fit}mm）",
+                need=f"{need - fit:.2f}", fit=f"{fit:.1f}")],
+            [i18n.t("規格テノン外径（descriptor）"), f"{self.size_info['neck_tenon_od_mm']:.1f} mm"],
         ]
         # ボアは非対称: 小さいと物理的に挿さらない、大きい分はコルクで吸収できる。
         dv = p["tenon_od"] - self.size_info["neck_tenon_od_mm"]
         if abs(dv) <= 0.4:
-            status, big = "ok", "規格テノン径に整合"
-            advice = ("マウスピース側のボアが {0:.1f}mm 前後なら勘合します"
-                      "（自由状態のコルク込み {1:.1f}mm を {2:.1f}mm 潰して食いつかせる）。"
-                      "規格テノン径に一致しているので市販マウスピースが使えます。"
+            status, big = "ok", i18n.t("規格テノン径に整合")
+            advice = (i18n.t(
+                "マウスピース側のボアが {0:.1f}mm "
+                "前後なら勘合します（自由状態のコルク込み {1:.1f}mm を "
+                "{2:.1f}mm 潰して食いつかせる）。"
+                "規格テノン径に一致しているので市販マウスピースが使えます。")
                       ).format(need - fit, need, fit)
         elif dv > 0:
-            status, big = "warn", "テノンが規格より太い"
-            advice = (f"規格より {dv:.1f}mm 太く、市販マウスピースが入らない恐れがあります。"
-                      f"テノン外径を {self.size_info['neck_tenon_od_mm']:.1f}mm に近づけてください。")
+            status, big = "warn", i18n.t("テノンが規格より太い")
+            advice = (i18n.t(
+                "規格より {dv}mm 太く、市販マウスピー"
+                "スが入らない恐れがあります。テノン外径を "
+                "{neck_tenon_od_mm}mm に近づけてください。",
+                dv=f"{dv:.1f}",
+                neck_tenon_od_mm=f"{self.size_info['neck_tenon_od_mm']:.1f}"))
         else:
-            status, big = "warn", "テノンが規格より細い"
-            advice = (f"規格より {abs(dv):.1f}mm 細く、コルクを厚めに巻かないとガタつきます。"
-                      f"コルク厚での調整、またはテノン外径を上げてください。")
-        return {"title": "マウスピース適合", "big": big, "status": status,
+            status, big = "warn", i18n.t("テノンが規格より細い")
+            advice = (i18n.t(
+                "規格より {dv}mm 細く、コルクを厚めに巻かないとガタつきます。"
+                "コルク厚での調整、またはテノン外径を上げてください。",
+                dv=f"{abs(dv):.1f}"))
+        return {"title": i18n.t("マウスピース適合"), "big": big, "status": status,
                 "rows": rows, "advice": advice}
 
     def _taper_card(self, params: dict) -> dict:
         p = params
         large = npf.bore_large_id(p, self.size_info)
         rows = [
-            ["小端ボア内径", f"{p['bore_small_id']:.1f} mm"],
-            ["大端ボア内径", f"{large:.1f} mm"],
-            ["円錐半頂角（descriptor）", f"{self.size_info['cone_half_angle_deg']:.2f} °"],
-            ["曲げ角", f"{p['bend_angle']:.0f} °（{'ストレート' if p['bend_angle'] <= 0 else 'グースネック'}）"],
+            [i18n.t("小端ボア内径"), f"{p['bore_small_id']:.1f} mm"],
+            [i18n.t("大端ボア内径"), f"{large:.1f} mm"],
+            [i18n.t("円錐半頂角（descriptor）"), f"{self.size_info['cone_half_angle_deg']:.2f} °"],
+            [i18n.t("曲げ角"),
+             i18n.t("{deg} °（{kind}）",
+                    deg=f"{p['bend_angle']:.0f}",
+                    kind=(i18n.t("ストレート") if p["bend_angle"] <= 0
+                          else i18n.t("グースネック")))],
         ]
-        note = ("ネックは楽器全体で最も細いスロートで、ボア径は音程の基準になります。"
-                "テーパは直線円錐近似のため音程は近似です。手元の実物ネックを採寸校正すると"
-                "実用域に寄ります。")
+        note = (i18n.t(
+            "ネックは楽器全体で最も細いスロートで、"
+            "ボア径は音程の基準になります。テー"
+            "パは直線円錐近似のため音程は近似です。"
+            "手元の実物ネックを採寸校正すると実用域に寄ります。"))
         if p["taper_from_cone"] != "on":
-            note = "大端径を直接指定中（円錐角から導出していません）。" + note
-        return {"title": "ボア・テーパー／ベンド", "big": None, "status": "ok",
+            note = i18n.t("大端径を直接指定中（円錐角から導出していません）。") + note
+        return {"title": i18n.t("ボア・テーパー／ベンド"), "big": None, "status": "ok",
                 "rows": rows, "advice": note}
 
     def _vent_card(self, params: dict) -> dict | None:
@@ -212,40 +230,49 @@ class NeckComponent(Component):
         if p["octave_vent"] != "on":
             return None
         rows = [
-            ["ベント位置（弧長比）", f"{p['vent_position']:.2f}"],
-            ["ベント径", f"{p['vent_dia']:.1f} mm"],
-            ["チムニー高さ", f"{p['chimney_height']:.1f} mm"],
-            ["パッド座平坦化", "有効" if p["seat_flat"] == "on" else "無効"],
-            ["キー取付ボス", "有効" if p["key_mount_bosses"] == "on" else "無効"],
+            [i18n.t("ベント位置（弧長比）"), f"{p['vent_position']:.2f}"],
+            [i18n.t("ベント径"), f"{p['vent_dia']:.1f} mm"],
+            [i18n.t("チムニー高さ"), f"{p['chimney_height']:.1f} mm"],
+            [i18n.t("パッド座平坦化"), i18n.t("有効") if p["seat_flat"] == "on" else i18n.t("無効")],
+            [i18n.t("キー取付ボス"), i18n.t("有効") if p["key_mount_bosses"] == "on" else i18n.t("無効")],
         ]
-        return {"title": "オクターブベント（注意）", "big": "キー機構は非実装", "status": "warn",
+        return {"title": i18n.t("オクターブベント（注意）"), "big": i18n.t("キー機構は非実装"), "status": "warn",
                 "rows": rows,
-                "advice": ("ベント孔の幾何のみです。キー／パッド機構はありません。孔が常時開だと"
-                           "低音域が漏れて鳴りません。奏者が指で塞ぐ、またはプラグで塞ぐ運用が前提です。"
-                           "正確な第2レジスタ運用にはパッド付きキー（後段フェーズ）が必要です。"
-                           "『キー取付ボス』を有効にすると後段のキー機構をネック再設計なしで載せられます。")}
+                "advice": (i18n.t(
+                    "ベント孔の幾何のみです。キー／パッド機構はありません。"
+                    "孔が常時開だと低音域が漏れて鳴りません。"
+                    "奏者が指で塞ぐ、またはプラグで塞ぐ運用が前提です。"
+                    "正確な第2レジスタ運用にはパッド付きキー（後段フェーズ）"
+                    "が必要です。『キー取付ボス』を有効にすると後段のキー"
+                    "機構をネック再設計なしで載せられます。"))}
 
     def _print_card(self, params: dict) -> dict:
         p = params
         vol_cc = npf.neck_volume_mm3(p, self.size_info) / 1000.0
         dens = MAT_DENSITY.get(p["material"], 1.15)
         rows = [
-            ["肉厚", f"{p['wall_thickness']:.1f} mm"],
-            ["最小肉厚（下限）", f"{p['min_wall']:.1f} mm"],
-            ["材料体積", f"{vol_cc:.1f} cc"],
-            ["概算質量", f"{vol_cc * dens:.0f} g"],
-            ["全長（弧長）", f"{p['neck_length']:.0f} mm"],
+            [i18n.t("肉厚"), f"{p['wall_thickness']:.1f} mm"],
+            [i18n.t("最小肉厚（下限）"), f"{p['min_wall']:.1f} mm"],
+            [i18n.t("材料体積"), f"{vol_cc:.1f} cc"],
+            [i18n.t("概算質量"), f"{vol_cc * dens:.0f} g"],
+            [i18n.t("全長（弧長）"), f"{p['neck_length']:.0f} mm"],
         ]
         if p["wall_thickness"] < p["min_wall"]:
-            return {"title": "印刷・肉厚・気密", "big": "肉厚不足", "status": "bad", "rows": rows,
-                    "advice": (f"肉厚が下限 {p['min_wall']:.1f}mm を下回ります。管壁が薄いと気密と強度が"
-                               "出ません。肉厚を上げてください。")}
-        advice = ("管体は層間の気密が要ります。FDM では層間ポロシティで漏れやすいので、"
-                  "レジン（光造形）か、印刷後のシーリングを推奨します。")
+            return {"title": i18n.t("印刷・肉厚・気密"), "big": i18n.t("肉厚不足"), "status": "bad", "rows": rows,
+                    "advice": (i18n.t(
+                        "肉厚が下限 {min_wall}mm を下回ります。"
+                        "管壁が薄いと気密と強度が出ません。"
+                        "肉厚を上げてください。",
+                        min_wall=f"{p['min_wall']:.1f}"))}
+        advice = (i18n.t(
+            "管体は層間の気密が要ります。FDM では層間ポロシティで漏れやすいの"
+            "で、レジン（光造形）か、印刷後のシーリングを推奨します。"))
         if p["neck_length"] > BED_HINT_MM:
-            advice += (f" 全長が実用ベッド目安 {BED_HINT_MM:.0f}mm を超えています。"
-                       "造形サイズ自動分割（後段 4-B.3）で対応予定です。")
-        return {"title": "印刷・肉厚・気密", "big": "造形可", "status": "ok",
+            advice += (i18n.t(
+                " 全長が実用ベッド目安 {bed_hint_mm}mm を超えています。"
+                "造形サイズ自動分割（後段 4-B.3）で対応予定です。",
+                bed_hint_mm=f"{BED_HINT_MM:.0f}"))
+        return {"title": i18n.t("印刷・肉厚・気密"), "big": i18n.t("造形可"), "status": "ok",
                 "rows": rows, "advice": advice}
 
     # ------------------------------------------------------------ 採寸ワークフロー（Phase 4-A 再利用）
@@ -253,7 +280,7 @@ class NeckComponent(Component):
     _SURVEY_PARAM_KEYS = ["neck_length", "bore_small_id", "bore_large_id", "tenon_od"]
 
     def survey_targets(self, values: dict | None = None) -> dict:
-        specs = {s.key: s for s in self.param_specs()}
+        specs = {s.key: s for s in self.localized_specs()}
         params = [
             {"key": k, "label": specs[k].label, "unit": specs[k].unit,
              "min": specs[k].min, "max": specs[k].max, "step": specs[k].step}
@@ -263,7 +290,7 @@ class NeckComponent(Component):
 
     def survey_card(self, before_params: dict, before_size: dict,
                     measured_params: dict, measured_size: dict) -> dict | None:
-        specs = {s.key: s for s in self.param_specs()}
+        specs = {s.key: s for s in self.localized_specs()}
         rows, verdicts = [], []
         for k, mv in measured_params.items():
             s = specs.get(k)
@@ -271,15 +298,17 @@ class NeckComponent(Component):
                 continue
             step = s.step or 0.1
             r, v = reference_check._row(
-                f"{s.label} 実測/設計", float(mv), float(before_params[k]),
+                i18n.t("{s} 実測/設計", s=f"{s.label}"), float(mv), float(before_params[k]),
                 s.unit, max(0.6 * step, 0.05), max(2.5 * step, 0.2))
             rows.append(r)
             verdicts.append(v)
         if not rows:
             return None
         return reference_check._finish(
-            "採寸 vs 設計", rows, verdicts,
-            "実測をプロジェクトへ反映しました。破綻したら「採寸時点へ戻す」で復元できます。")
+            i18n.t("採寸 vs 設計"), rows, verdicts,
+            i18n.t(
+                "実測をプロジェクトへ反映しました。"
+                "破綻したら「採寸時点へ戻す」で復元できます。"))
 
     def survey_measure_mesh(self, mesh) -> dict:
         """外部ネック メッシュ（3mf/STL）から外形バルク寸法だけを実測。
@@ -304,8 +333,10 @@ class NeckComponent(Component):
         measured["neck_length"] = round(L, 2)
         confidence["neck_length"] = info["axis_conf"]
         if info["axis_conf"] == "low":
-            notes.append("主軸が不確実なため全長も参考値です。")
-        notes.append("曲げネックでは主軸長＝弦長のため、全長（弧長）は実際よりやや短めに出ます。")
+            notes.append(i18n.t("主軸が不確実なため全長も参考値です。"))
+        notes.append(i18n.t(
+            "曲げネックでは主軸長＝弦長のため、全長（弧長）"
+            "は実際よりやや短めに出ます。"))
 
         # ---- 両端の断面リング内径（小端＝-Z 側 / 大端＝シャンク +Z 側）
         outer_r = info["outer_radius_mm"]
@@ -330,7 +361,7 @@ class NeckComponent(Component):
             confidence["tenon_od"] = "med"
 
         if "bore_small_id" not in measured and "bore_large_id" not in measured:
-            notes.append("ボア内径を確実に測れませんでした（ノギス実測を推奨）。")
+            notes.append(i18n.t("ボア内径を確実に測れませんでした（ノギス実測を推奨）。"))
         return {"measured": measured, "measured_size": {},
                 "confidence": confidence, "notes": notes}
 
@@ -341,18 +372,24 @@ class NeckComponent(Component):
 
     def bom(self, params: dict) -> list[dict]:
         p = params
-        size_label = {"soprano": "ソプラノ", "alto": "アルト", "tenor": "テナー"}[self.size]
+        size_label = {"soprano": i18n.t("ソプラノ"), "alto": i18n.t("アルト"), "tenor": i18n.t("テナー")}[self.size]
         vol_cc = npf.neck_volume_mm3(p, self.size_info) / 1000.0
         rows = [
-            {"type": "3Dプリント", "name": f"ネック本体（{size_label}）", "qty": 1,
-             "material": MAT_LABELS.get(p["material"], p["material"]),
-             "note": f"材料体積 約{vol_cc:.1f}cc。気密のためレジン/シーリング推奨"},
-            {"type": "市販品", "name": "テノン コルクストリップ", "qty": 1,
-             "material": "コルク", "note": f"厚 {p['cork_thickness']:.1f}mm（マウスピース勘合）"},
+            {"type": i18n.t("3Dプリント"), "name": i18n.t("ネック本体（{size_label}）", size_label=f"{size_label}"), "qty": 1,
+             "material": i18n.choice_label(
+                 p["material"], MAT_LABELS.get(p["material"],
+                                               p["material"])),
+             "note": i18n.t(
+                 "材料体積 約{vol_cc}cc。気密のためレジン/シーリング推奨",
+                 vol_cc=f"{vol_cc:.1f}")},
+            {"type": i18n.t("市販品"), "name": i18n.t("テノン コルクストリップ"), "qty": 1,
+             "material": i18n.t("コルク"), "note": i18n.t(
+                 "厚 {cork_thickness}mm（マウスピース勘合）",
+                 cork_thickness=f"{p['cork_thickness']:.1f}")},
         ]
         if p["octave_vent"] == "on":
-            rows.append({"type": "市販品", "name": "オクターブベント プラグ／パッチ", "qty": 1,
-                         "material": "-", "note": "常時開防止（キー化までの暫定。奏者が塞ぐ）"})
+            rows.append({"type": i18n.t("市販品"), "name": i18n.t("オクターブベント プラグ／パッチ"), "qty": 1,
+                         "material": "-", "note": i18n.t("常時開防止（キー化までの暫定。奏者が塞ぐ）")})
         return rows
 
     def _section_svg(self, params: dict) -> str:
@@ -363,21 +400,24 @@ class NeckComponent(Component):
             {"pts": pr["outer_bot"], "stroke": "#222", "width": 1.5},
             {"pts": pr["bore_top"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
             {"pts": pr["bore_bot"], "stroke": "#0066cc", "width": 1.2, "dash": "5 3"},
-        ], "側面断面図（実線=外形 / 青破線=ボア） 単位:mm")
+        ], i18n.t("側面断面図（実線=外形 / 青破線=ボア） 単位:mm"))
 
     def spec_extras(self, params: dict) -> dict:
         p = params
         large = npf.bore_large_id(p, self.size_info)
         vol_cc = npf.neck_volume_mm3(p, self.size_info) / 1000.0
         dims = [
-            ("全長（弧長）", f"{p['neck_length']:.0f} mm"),
-            ("小端 → 大端ボア", f"φ{p['bore_small_id']:.1f} → φ{large:.1f} mm"),
-            ("テノン外径 × 長さ", f"φ{p['tenon_od']:.1f} × {p['tenon_length']:.0f} mm"),
-            ("曲げ角", f"{p['bend_angle']:.0f} °"),
-            ("肉厚", f"{p['wall_thickness']:.1f} mm"),
-            ("材料体積", f"{vol_cc:.1f} cc"),
+            (i18n.t("全長（弧長）"), f"{p['neck_length']:.0f} mm"),
+            (i18n.t("小端 → 大端ボア"), f"φ{p['bore_small_id']:.1f} → φ{large:.1f} mm"),
+            (i18n.t("テノン外径 × 長さ"), f"φ{p['tenon_od']:.1f} × {p['tenon_length']:.0f} mm"),
+            (i18n.t("曲げ角"), f"{p['bend_angle']:.0f} °"),
+            (i18n.t("肉厚"), f"{p['wall_thickness']:.1f} mm"),
+            (i18n.t("材料体積"), f"{vol_cc:.1f} cc"),
         ]
         if p["octave_vent"] == "on":
-            dims.append(("オクターブベント", f"φ{p['vent_dia']:.1f} mm @ 弧長比 {p['vent_position']:.2f}"))
+            dims.append((i18n.t("オクターブベント"), i18n.t(
+                "φ{vent_dia} mm @ 弧長比 {vent_position}",
+                vent_dia=f"{p['vent_dia']:.1f}",
+                vent_position=f"{p['vent_position']:.2f}")))
         return {"dimensions": dims,
-                "sections": [{"title": "断面図", "svg": self._section_svg(p)}]}
+                "sections": [{"title": i18n.t("断面図"), "svg": self._section_svg(p)}]}

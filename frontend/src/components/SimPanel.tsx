@@ -132,7 +132,8 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
         <table>
           <tbody>
             <tr><td>{t("実用域（挿し込み）")}</td>
-                <td className="num">{t1.cork_range_mm[0]}〜{t1.cork_range_mm[1]} mm</td></tr>
+                <td className="num">{t("{lo}〜{hi}",
+                  { lo: t1.cork_range_mm[0], hi: t1.cork_range_mm[1] })} mm</td></tr>
             <tr><td>{t("感度（1mm 押し込んだときの第1共鳴）")}</td>
                 <td className="num">{t1.cents_per_mm > 0 ? "+" : ""}{t1.cents_per_mm} {t("セント/mm")}</td></tr>
             <tr><td>{t("現在 {mm} mm でのズレ", { mm: t1.current_mm })}</td>
