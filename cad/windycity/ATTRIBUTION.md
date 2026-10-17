@@ -28,8 +28,10 @@ Windy City Woodwinds は 2024 年半ばに廃業し、そのときに設計を�
 2. 手元のファイルは**原作者の投稿そのものではなく、誰かが Bambu Studio で
    開いて書き出し直した版**である。`Metadata/model_settings.config` に
    第三者のローカルパス
-   `C:\Users\<third-party>\OneDrive\Documents\Printables\Printable Mpc -  SAX\WindyCity-Tenor-72-100-LS.3mf`
+   `C:\Users\<第三者>\OneDrive\Documents\Printables\Printable Mpc -  SAX\WindyCity-Tenor-72-100-LS.3mf`
    が残っている（Printables 経由で入手した物を再書き出ししたらしい）。
+   **利用者名は伏せた** —— 来歴の論点は「Printables 経由の再書き出し
+   である」ことであって、見ず知らずの人の名前ではない（原本は手元の 3mf にある）。
 3. **その経路でメッシュは改変されていない** ——
    `mesh_stat edges_fixed="0" degenerate_facets="0" facets_removed="0"
    facets_reversed="0" backwards_edges="0"`。
