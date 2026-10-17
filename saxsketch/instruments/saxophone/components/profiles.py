@@ -915,7 +915,6 @@ def facing_cut_segments(p: dict,
     ティップ側が粗くなってスプラインが暴れる）。z<0 側は持ち上がりが
     `tip_opening` で頭打ちなので直線。
     """
-    length = p["overall_length"]
     fl = p["facing_length"]
     z_lo, z_hi = facing_cut_z_range(p)
     segs: list[list[tuple[float, float]]] = []

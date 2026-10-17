@@ -24,6 +24,39 @@ function WarningsCard({ items }: { items?: string[] }) {
   );
 }
 
+/** 口に入れる部品を作らせる道具なので、画面にも 1 枚置く。
+ *
+ *  **たたまない。** これまで安全の記述は 609 行の README の最後の 3 行と、
+ *  生成物（仕様書・入稿 ZIP）の中にしか無かったので、**エクスポートせずに
+ *  3D だけ見て印刷した人は 1 行も読まずに済んだ**。
+ *
+ *  いちばん下に置くのは、設計の判断材料より前に出すと読み飛ばされるから
+ *  （`WarningsCard` がいちばん上なのは、あれが「いまのパラメータの話」で
+ *  行動を変えるものだから。こちらは常に同じで、出口で読めばよい）。 */
+function SafetyCard() {
+  return (
+    <div className="simcard safetycard">
+      <h3>⚠ 口に入れる部品です</h3>
+      <div className="warnline">
+        材料は<b>食品接触適合のもの</b>を指定してください。
+      </div>
+      <div className="warnline">
+        レジンは二次硬化と洗浄を十分に。<b>未硬化のレジンは皮膚感作性があります</b>。
+      </div>
+      <div className="warnline">
+        PLA は約 55℃ で変形します。熱湯での洗浄・車内放置は不可。
+      </div>
+      <div className="warnline">
+        使う前に<b>割れ・欠け・鋭い縁</b>を点検してください。印刷物は割れます。
+      </div>
+      <div className="advice">
+        ここに出る寸法と音響指標は推定です。できあがる物の安全性・耐久性・
+        適合性は保証しません（詳しくは SAFETY.md）。製作と使用は自己責任で。
+      </div>
+    </div>
+  );
+}
+
 /** 汎用カード（リード/リガチャー）。マウスピースの .simcard スタイルを流用する */
 function Card({ card }: { card: SimCard }) {
   return (
@@ -62,6 +95,7 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
         {sim.cards.map((c) => <Card key={c.title} card={c} />)}
         {sim.has_impedance && <ImpedancePanel paramsKey={paramsKey} />}
         {sim.harmonics && <SoundPreview harmonics={sim.harmonics} />}
+        <SafetyCard />
       </div>
     );
   }
@@ -133,6 +167,8 @@ export default function SimPanel({ sim, setCard, compare, paramsKey, onGoalSeek 
       <ImpedancePanel paramsKey={paramsKey} />
 
       <SoundPreview harmonics={sim.harmonics} />
+
+      <SafetyCard />
     </div>
   );
 }

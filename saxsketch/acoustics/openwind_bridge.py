@@ -50,9 +50,10 @@ CARBON_DIOXIDE = 4e-4
 def sound_speed(temp_c: float = TEMPERATURE_C,
                 humidity: float = HUMIDITY,
                 carbon: float = CARBON_DIOXIDE) -> float:
-    """空気中の音速 [m/s]。OpenWind の `Physics`（既定 `ref_phy_coef='RR'`）と同じ式。
+    """空気中の音速 [m/s]。原典は Zuckerwar の展開式（下の `h` の行に出典）で、
+    OpenWind の `Physics`（既定 `ref_phy_coef='RR'`）も同じ原典に拠る。
 
-    式を写してあるのは、OpenWind 未導入の環境（TMM だけが走る）でも同じ音速を
+    ここに式を置いてあるのは、OpenWind 未導入の環境（TMM だけが走る）でも同じ音速を
     使うため。「20.05·√T」のような教科書式では OpenWind の値を再現できない
     （20℃ 343.9878 / 25℃ 347.1324 で、係数が一定にならない）ので推測しない。
     OpenWind があるときは `Physics(TEMPERATURE_C).c(0)` と一致することを

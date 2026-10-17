@@ -126,11 +126,11 @@ ALL_PASS
 ## 再生成
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/baffle/render_baffle_types.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/baffle/render_baffle_types.py"
 ```
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/baffle/render_section_ui.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/baffle/render_section_ui.py"
 ```
 
 - `baffle_types.png` — 4型の中央断面（灰=実ソリッドの断面 / 橙点=実測天井 / 青=法則）

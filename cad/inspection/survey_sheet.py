@@ -43,11 +43,10 @@
 欄名は採寸フォームと同じ仮想キー `tip_full_width_z` で、設計値も同じ量で刷る ——
 パラメータ `tip_curve_depth`（丸みを無視した見かけの角）はノギスで当てられない。
 
-実行（OCCT が要るので WSL2。出力は Windows 正本へ直接書く）:
+実行（OCCT が要るので WSL2）。`wsl` は Windows 側の作業ディレクトリを
+引き継ぐので、**リポジトリ直下から呼べば出力はそのままここへ落ちる**:
 
-  cd ~/mp_design && source .venv/bin/activate
-  python cad/inspection/survey_sheet.py \
-    --out /mnt/c/HOME/<user>/develop/claude/mp_design/cad/inspection/survey_sheet.html
+  wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/inspection/survey_sheet.py"
 """
 from __future__ import annotations
 

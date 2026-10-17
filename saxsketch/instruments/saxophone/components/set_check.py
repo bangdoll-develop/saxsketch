@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from . import ligature_profiles as lp
-from . import profiles
 from . import reed_profiles as rp
 from . import reed_seat
 from .reference_check import SEAT_REACH_TOL, _finish, _verdict

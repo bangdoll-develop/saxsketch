@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
@@ -48,6 +49,69 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="SaxSketch", version="0.1.0", lifespan=_lifespan)
 
+
+# ------------------------------------------------------------------ 外から触られない
+#
+# このサーバは「自分の机の上のデスクトップアプリ」で、API は任意の絶対パスを
+# 読み書きし、外部ツールを起動する。**それは設計であって欠陥ではない** ——
+# 入口は OS のファイルダイアログで、利用者が自分で選んだ絶対パスが返ってくる。
+# パスをルート配下へ閉じ込めると製品が壊れるので、守るのはパスではなく
+# **誰がこの API を叩けるか** のほう。
+#
+# ブラウザから外へ開いてしまう経路は 2 つしかない:
+#
+#   1. **DNS リバインディング** —— 悪意あるページが自分のドメインを 127.0.0.1 へ
+#      張り替えると、ブラウザはこのサーバを同一オリジンとみなすので CORS が
+#      効かなくなる。このとき `Host:` は攻撃者のドメインのままなので、
+#      **サーバが自分の名前を知っていれば弾ける**。
+#   2. **クロスサイトの単純リクエスト** —— preflight の要らない形。
+#      `Sec-Fetch-Site` を見れば弾ける。
+#
+# ローカルに閉じている限りこの 2 つで足りるので、認証トークンは置かない ——
+# トークンをフロントへ渡す経路のほうが新しい弱点になる。
+
+#: `Host:` に来てよい名前（ポートは落として比較する）。
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+#: ループバック以外へ出すことを明示的に許すスイッチ。
+#: LAN へ出す＝**認証の無いファイルシステム API を公開する**ことなので、
+#: 既定では `main()` が起動そのものを断る。立てるとこの検査も丸ごと外れる。
+ALLOW_REMOTE = bool(os.environ.get("WF_ALLOW_REMOTE"))
+
+
+def _host_name(header: str) -> str:
+    """`Host:` からポートを落とす。IPv6 の `[::1]:8712` も剥く。"""
+    h = (header or "").strip().lower()
+    if h.startswith("["):
+        return h[:h.index("]") + 1] if "]" in h else h
+    if h.count(":") > 1:
+        return h          # 角括弧の無い素の IPv6（curl -g など）。ポートは付かない
+    return h.rsplit(":", 1)[0] if ":" in h else h
+
+
+def _refuse(status: int, why: str) -> Response:
+    return Response(status_code=status, content=why,
+                    media_type="text/plain; charset=utf-8")
+
+
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+    """他所のページから叩かれたリクエストを落とす（上のコメントの実装）。
+
+    ヘッダが**無い**ときは通す。curl・テスト・古いブラウザが該当するが、
+    守る相手は「利用者のブラウザで動く他人のページ」であって、ヘッダを
+    送ってこない相手はもうローカルの権限を持っている。
+    """
+    if not ALLOW_REMOTE:
+        host = _host_name(request.headers.get("host", ""))
+        if host and host not in _LOCAL_HOSTS:
+            return _refuse(400, "Host %r は許可されていません。"
+                                "SaxSketch はローカル専用です。" % host)
+    if request.headers.get("sec-fetch-site", "") in ("cross-site", "same-site"):
+        return _refuse(403, "他のサイトからは操作できません。")
+    return await call_next(request)
+
+
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 #: 殻が読み込んでいるモジュールスクリプトの名前。Vite が内容ハッシュを付けるので、
@@ -78,6 +142,18 @@ def frontend_asset() -> str | None:
 # 実体は `hostenv.py`。`filedialog.py` と `state.py` も要るので切り出した
 # （この app が filedialog を import するので、逆向きは循環になる）。
 # 旧来の `app.IS_WSL` を見ている呼び出し（`scripts/wsl_sync.sh`）のため名前は残す。
+
+
+#: `tool="browser"` で既定アプリに渡してよい拡張子。
+#:
+#: `os.startfile` と `cmd /c start` は**拡張子の関連付けで実行する**ので、
+#: `.bat` `.ps1` `.hta` `.lnk` を渡せばそれが走る。渡すのはアプリ自身が
+#: 書き出した物だけのはずなので、その形式に限る（禁止リストではなく許可リスト
+#: にするのは、関連付けで実行される拡張子を数え上げきれないから）。
+_OPENABLE_SUFFIXES = frozenset({
+    ".html", ".htm", ".csv", ".zip", ".svg", ".txt", ".md", ".json",
+    ".stl", ".step", ".stp", ".3mf", ".wav", ".png", ".pdf",
+})
 
 
 def _open_default_app(path: Path) -> None:
@@ -143,7 +219,11 @@ class NewProject(BaseModel):
 
 @app.post("/api/project/new")
 def project_new(req: NewProject):
-    inst = STATE.registry.get(req.instrument_id)
+    try:
+        inst = STATE.registry.get(req.instrument_id)
+    except KeyError:
+        raise HTTPException(status_code=400,
+                            detail="知らない楽器です: %s" % req.instrument_id)
     if req.set_id:
         try:
             sdef = inst.set_def(req.set_id)
@@ -943,7 +1023,11 @@ def acoustics_scale():
 # ------------------------------------------------------------------ 外部ツール連携
 
 class ToolReq(BaseModel):
-    tool: str          # freecad | slicer | reveal | browser
+    #: **文字列にしない。** かつてここは `str` で、コメントだけが 4 種と
+    #: 言っていた。`settings["external_tools"]` は任意のキーを受けていたので、
+    #: 「設定に任意の exe を登録 → それを `tool` 名で起動」が 2 リクエストで
+    #: 通った。型で閉じておけば FastAPI が 422 で落とす。
+    tool: Literal["freecad", "slicer", "reveal", "browser"]
     file: str
 
 
@@ -956,6 +1040,10 @@ def tools_open(req: ToolReq):
         _reveal_in_explorer(f)
         return {"ok": True}
     if req.tool == "browser":
+        if f.suffix.lower() not in _OPENABLE_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail="この形式は既定アプリで開きません: %s" % f.suffix)
         _open_default_app(f)  # 既定アプリ（spec.html など）
         return {"ok": True}
     tool_path = STATE.settings.get("external_tools", {}).get(req.tool, "")
@@ -986,8 +1074,38 @@ class SettingsReq(BaseModel):
     settings: dict
 
 
+#: 書き換えてよい設定キー。`external_tools` だけは中身も絞る（下）。
+_SETTABLE = frozenset({"external_tools", "export_root", "recent_projects"})
+
+#: 外部ツールとして登録してよい名前。`ToolReq` の Literal と**同じ集合**で、
+#: 片方だけ増えると「登録できるのに起動できない」か、その逆になる。
+_TOOL_KEYS = frozenset({"freecad", "slicer"})
+
+
 @app.put("/api/settings")
 def settings_put(req: SettingsReq):
+    """設定を更新する。**知っているキーだけ**通す。
+
+    かつては受け取った dict を丸ごと `update` してディスクへ書いていた。
+    `external_tools` に任意の名前で任意の exe を登録でき、それを
+    `/api/tools/open` が起動したので、2 リクエストで任意コード実行になっていた。
+    """
+    unknown = sorted(set(req.settings) - _SETTABLE)
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail="知らない設定キー: %s" % ", ".join(unknown))
+    tools = req.settings.get("external_tools")
+    if tools is not None:
+        if not isinstance(tools, dict):
+            raise HTTPException(status_code=400, detail="external_tools は辞書")
+        bad = sorted(set(tools) - _TOOL_KEYS)
+        if bad:
+            raise HTTPException(status_code=400,
+                                detail="知らない外部ツール: %s" % ", ".join(bad))
+        # 既存のキー（旧版の openwind_note など）を消さずに重ねる
+        merged = dict(STATE.settings.get("external_tools", {}))
+        merged.update({k: str(v) for k, v in tools.items()})
+        req.settings = {**req.settings, "external_tools": merged}
     STATE.settings.update(req.settings)
     STATE.save_settings()
     return STATE.settings
@@ -1024,6 +1142,16 @@ if FRONTEND_DIST.exists():
         """
         return FileResponse(FRONTEND_DIST / "index.html",
                             headers={"cache-control": "no-store"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """bind 先がループバックか。名前は `localhost` だけ認める。"""
+    if host.lower() in ("localhost", "::1", "[::1]"):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def _in_use(host: str, port: int) -> bool:
@@ -1071,6 +1199,22 @@ def main():
 
     host = os.environ.get("WF_HOST", "127.0.0.1")
     want = int(os.environ.get("WF_PORT", "8712"))
+
+    # 認証が無いので、ループバック以外へ bind するのは
+    # **ファイルシステム API を無防備に公開する**のと同じ。黙って従わない。
+    if not _is_loopback_host(host) and not ALLOW_REMOTE:
+        print("✗ WF_HOST=%s はループバックではありません。" % host,
+              file=sys.stderr)
+        print("  SaxSketch は認証を持たず、API は任意の絶対パスを読み書きし、",
+              file=sys.stderr)
+        print("  外部ツールを起動します。LAN へ出すと誰でもそれを使えます。",
+              file=sys.stderr)
+        print("  それでも出すなら WF_ALLOW_REMOTE=1 を立ててください（自分の責任で）。",
+              file=sys.stderr)
+        sys.exit(1)
+    if ALLOW_REMOTE:
+        print(f"⚠ WF_ALLOW_REMOTE が立っています。{host} からは認証なしで"
+              f"ファイルを読み書きできます。")
 
     if _in_use(host, want):
         if _is_saxsketch(host, want):

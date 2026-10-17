@@ -85,7 +85,7 @@ def windows_documents() -> Path | None:
         return None
     # **base64 で受け取る。** PowerShell の標準出力はコンソールのコードページ
     # （日本語環境では CP932）で流れてくるので、日本語を含むパス
-    # （実測: `C:\Users\<user>\OneDrive\ドキュメント`）を UTF-8 として読むと
+    # （実測: `C:\Users\<利用者>\OneDrive\ドキュメント`）を UTF-8 として読むと
     # `UnicodeDecodeError` になり、この関数が黙って None を返していた。
     script = ("$p=[Environment]::GetFolderPath('MyDocuments');"
               "[Console]::Out.Write("

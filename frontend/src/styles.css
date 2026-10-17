@@ -130,6 +130,12 @@ button:disabled { opacity: 0.45; cursor: default; }
 .simcard .warnline { color: var(--warn); font-size: 11.5px; line-height: 1.7; }
 .simcard .warnline + .warnline { margin-top: 8px; }
 
+/* 安全上の注意。**常に出る**ので、警告カードと同じ色にはしない
+   （出ていること自体が合図、という警告カードの意味が薄れる）。
+   枠だけ立てて、本文は警告色のまま読ませる。 */
+.safetycard { border-color: var(--warn); border-left-width: 4px; opacity: 0.92; }
+.safetycard h3 { color: var(--warn); }
+
 .sugg { font-size: 11.5px; color: var(--muted); line-height: 1.7; }
 .sugg b { color: var(--accent2); }
 

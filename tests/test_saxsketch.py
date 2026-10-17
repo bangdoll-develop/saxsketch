@@ -1,5 +1,6 @@
 """SaxSketch 結合テスト: ジオメトリ・音響・プロジェクトI/O・API。"""
 import collections
+import subprocess
 import json
 import math
 from pathlib import Path
@@ -21,6 +22,14 @@ def alto():
 # ------------------------------------------------------------------ 実物基準の校正（Phase 3.5）
 
 SIZES = ("soprano", "alto", "tenor")
+
+#: `TestClient` の Host。
+#:
+#: 既定の `http://testserver` だと `Host: testserver` になり、
+#: DNS リバインディング除けのミドルウェア（`app._local_only`）に弾かれる
+#: ——**それが正しい挙動**。ブラウザが実際に送るのと同じ Host で叩く。
+_LOCAL_BASE = "http://127.0.0.1:8712"
+
 
 
 def _size_info(template_id: str) -> dict:
@@ -1011,7 +1020,7 @@ def test_api_reports_clamping_to_the_browser(tmp_path):
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     assert c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "mouthpiece"}).status_code == 200
@@ -1071,7 +1080,7 @@ def test_the_warning_reaches_every_tab_not_just_the_section(alto):
     from saxsketch.server.app import app
 
     comp, base = alto
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     assert c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "mouthpiece"}).status_code == 200
@@ -2500,7 +2509,7 @@ def test_the_moving_wall_reaches_the_browser_and_moves_there():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     assert c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "mouthpiece"}).status_code == 200
@@ -2822,8 +2831,8 @@ def test_remote_client_gets_no_native_dialog():
     from saxsketch.server import filedialog
     from saxsketch.server.app import app
 
-    local = TestClient(app, client=("127.0.0.1", 51000))
-    remote = TestClient(app, client=("192.168.1.50", 51000))
+    local = TestClient(app, base_url=_LOCAL_BASE, client=("127.0.0.1", 51000))
+    remote = TestClient(app, base_url=_LOCAL_BASE, client=("192.168.1.50", 51000))
     # ローカルは「この環境で出せるか」がそのまま出る（CI にはどちらも無い）
     assert (local.get("/api/capabilities").json()["native_dialogs"]
             is filedialog.available())
@@ -5170,7 +5179,7 @@ def test_export_all_components(tmp_path):
     import re
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     for comp in ("mouthpiece", "reed", "ligature"):
         r = c.post("/api/project/new", json={
             "instrument_id": "saxophone", "template_id": "alto",
@@ -5698,9 +5707,11 @@ def test_tier2_directions(alto):
     from saxsketch.acoustics.brightness import tone_metrics
     _, p = alto
     base = tone_metrics(p)
-    hi = dict(p); hi["baffle_height"] = 5.0
+    hi = dict(p)
+    hi["baffle_height"] = 5.0
     assert tone_metrics(hi)["brightness"] > base["brightness"]
-    big_throat = dict(p); big_throat["throat_ratio"] = 1.35
+    big_throat = dict(p)
+    big_throat["throat_ratio"] = 1.35
     assert tone_metrics(big_throat)["brightness"] < base["brightness"]
 
 
@@ -5710,7 +5721,8 @@ def test_goalseek_moves_toward_target(alto):
     result = goal_seek(p, comp.param_specs(), {"brightness": 8.0},
                        comp.goal_seek_size_info(), comp.cavity_volume)
     from saxsketch.acoustics.brightness import tone_metrics
-    q = dict(p); q.update(result["proposal"])
+    q = dict(p)
+    q.update(result["proposal"])
     assert tone_metrics(q)["brightness"] > tone_metrics(p)["brightness"]
 
 
@@ -5805,7 +5817,7 @@ def test_impedance_param_sensitivity(alto):
 def test_acoustics_impedance_endpoint():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "mouthpiece"})
@@ -5939,8 +5951,9 @@ def test_tier1_and_tier2_agree():
 def test_sound_speed_matches_openwind_physics():
     """自前の `sound_speed()` が OpenWind の `Physics` と一致すること。
 
-    式を写してあるのは OpenWind 未導入の環境でも同じ音速を使うため。写し間違えると
-    ジオメトリの全長（`c/(2·f1)` 由来）とソルバがまた食い違う ——
+    自前の式は Zuckerwar の原典から書いてあり、OpenWind の `Physics` も同じ原典に
+    拠る。両方に置いてあるのは OpenWind 未導入の環境でも同じ音速を使うため。
+    書き間違えるとジオメトリの全長（`c/(2·f1)` 由来）とソルバがまた食い違う ——
     343.0 と 347.13 の差 1.2% が 20.7 セントになったのが Stage E の出発点。
     """
     pytest.importorskip("openwind")
@@ -6119,7 +6132,7 @@ def test_open_reports_migrated_params(tmp_path):
     import zipfile
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     old = tmp_path / "legacy_lig.wproj"
     with zipfile.ZipFile(old, "w") as zf:
@@ -6153,7 +6166,7 @@ def test_reference_endpoint(tmp_path):
     from saxsketch.instruments.saxophone.components import ligature_profiles as lp
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     # 差し替え元: ボディ径を広げたマウスピース プロジェクト
     src = tmp_path / "wide.wproj"
@@ -6208,7 +6221,7 @@ def test_ref_overlay_is_declared_by_the_component():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     def new(component_id):
         return c.post("/api/project/new",
@@ -6226,7 +6239,7 @@ def test_ref_model_is_404_without_a_shared_frame():
     """座標系が一致しないコンポーネントでは参照モデルを出さないこと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     for component_id in ("mouthpiece", "reed"):
         c.post("/api/project/new",
@@ -6245,7 +6258,7 @@ def test_ref_model_is_the_reference_mouthpiece(tmp_path):
     from saxsketch.analysis import meshdiff
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     c.post("/api/project/new", json={"instrument_id": "saxophone",
                                      "template_id": "alto",
@@ -6272,7 +6285,7 @@ def test_ref_model_is_cached_by_the_reference(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE, AppState
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     built = []
     original = AppState._build_stl
@@ -6317,7 +6330,7 @@ def test_frozen_refs_marks_stale(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     # 差替え用に body_dia だけ違うアルトのマウスピースを用意
     wide = tmp_path / "wide.wproj"
@@ -6356,7 +6369,7 @@ def test_frozen_without_refs_is_backward_compatible():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     c.post("/api/project/new", json={"instrument_id": "saxophone",
                                      "template_id": "alto",
                                      "component_id": "ligature"})
@@ -6384,7 +6397,7 @@ def test_set_new_creates_required_members_only():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     r = _new_set(c)
     assert r.status_code == 200
     info = r.json()["set"]
@@ -6411,7 +6424,7 @@ def test_single_project_can_grow_into_a_set():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     r = c.post("/api/project/new", json={"instrument_id": "saxophone",
                                          "template_id": "alto",
                                          "component_id": "mouthpiece"})
@@ -6439,7 +6452,7 @@ def test_set_reference_is_live():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.put("/api/project/params", json={"params": {"body_dia": 30.0}})
 
@@ -6463,7 +6476,7 @@ def test_set_reference_import_is_refused_inside_set():
     """セットに本体が居る参照は取込めないこと（正が 2 つになる）。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/active", json={"component_id": "ligature"})
     r = c.post("/api/project/reference",
@@ -6477,7 +6490,7 @@ def test_set_roundtrip(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.put("/api/project/params", json={"params": {"body_dia": 29.7}})
     c.post("/api/set/member/add", json={"component_id": "reed"})
@@ -6505,7 +6518,7 @@ def test_set_member_export_freezes_reference(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.put("/api/project/params", json={"params": {"body_dia": 30.2}})
     c.post("/api/set/active", json={"component_id": "ligature"})
@@ -6537,7 +6550,7 @@ def test_set_member_import(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     # 先に単体のリードを作って保存
     c.post("/api/project/new", json={"instrument_id": "saxophone",
                                      "template_id": "alto",
@@ -6571,7 +6584,7 @@ def test_set_remove_blocked_when_depended_on():
     """必須参照の相手（マウスピース）は、従属部品が居るうちは外せないこと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     r = c.post("/api/set/member/remove", json={"component_id": "mouthpiece"})
     assert r.status_code == 400
@@ -6592,7 +6605,7 @@ def test_set_required_member_can_still_be_removed():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     info = c.get("/api/project").json()["set"]
     lig = next(m for m in info["members"] if m["component_id"] == "ligature")
@@ -6676,7 +6689,7 @@ def test_set_freeze_stales_on_master_edit(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/active", json={"component_id": "ligature"})
     e = c.post("/api/export", json={"formats": ["stl"], "make_package": False,
@@ -6700,7 +6713,7 @@ def test_ligature_uses_set_reed_dimensions():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/member/add", json={"component_id": "reed"})
     c.put("/api/project/params", json={"params": {"heel_thickness": 3.2,
@@ -6723,7 +6736,7 @@ def test_adding_reed_notifies_shape_change():
     """リードの足し引きで形が変わることを**黙って**やらないこと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     added = c.post("/api/set/member/add", json={"component_id": "reed"}).json()
     assert any("リガチャー" in n and "リード" in n for n in added["notices"])
@@ -6741,7 +6754,7 @@ def test_template_reed_in_set_is_bit_identical():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     _new_set(c)                                    # リード無し（テンプレート想定）
     c.post("/api/set/active", json={"component_id": "ligature"})
@@ -6777,7 +6790,7 @@ def test_set_card_rows_and_source():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     r = _new_set(c)
     card = r.json()["set_card"]
     assert card is not None
@@ -6899,7 +6912,7 @@ def test_reed_assembly_places_the_blade_outside_the_table():
         worst, deep = -1e9, 1e9
         for sec in rp.sections(r):
             for (x, y) in sec["pts"]:
-                X, Y, Z = -x, -y, sec["z"]              # flip_z（Z 軸 180°）
+                Y, Z = -y, sec["z"]                     # flip_z（Z 軸 180°。x は読まない）
                 y2 = Y * c - Z * sn + pl["origin"][1]   # R_x
                 z2 = Y * sn + Z * c + pl["origin"][2]
                 d = y2 - profiles.table_plane_y(m, z2)
@@ -6931,7 +6944,7 @@ def test_set_placement_is_relative_to_active():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/member/add", json={"component_id": "reed"})
 
@@ -6973,7 +6986,7 @@ def test_the_app_shell_is_never_cached_but_assets_are():
     from saxsketch.server import app as appmod
     if not appmod.FRONTEND_DIST.exists():
         pytest.skip("frontend/dist が無い（未ビルド）")
-    c = TestClient(appmod.app)
+    c = TestClient(appmod.app, base_url=_LOCAL_BASE)
     r = c.get("/")
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-store"
@@ -6996,7 +7009,7 @@ def test_capabilities_reports_the_running_app_generation():
     from saxsketch.server import app as appmod
     if not appmod.FRONTEND_DIST.exists():
         pytest.skip("frontend/dist が無い（未ビルド）")
-    c = TestClient(appmod.app)
+    c = TestClient(appmod.app, base_url=_LOCAL_BASE)
     asset = c.get("/api/capabilities").json()["asset"]
     assert asset and f'src="/assets/{asset}"' in c.get("/").text
 
@@ -7019,7 +7032,7 @@ def test_set_view_keeps_the_reed_on_the_table_side():
     from saxsketch.instruments.saxophone.components import profiles
     from saxsketch.instruments.saxophone.components import reed_profiles as rp
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     for tid in SIZES:
         _new_set(c, tid)
@@ -7055,7 +7068,7 @@ def test_set_member_stl_endpoint(tmp_path):
     """合わせ表示用に部品ごとの STL が取れ、居ない部品は 404 になること。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/active", json={"component_id": "mouthpiece"})
     r = c.get("/api/set/model.stl?member=ligature")
@@ -7075,7 +7088,7 @@ def test_set_export_one_folder(tmp_path):
     import zipfile
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/member/add", json={"component_id": "reed"})
 
@@ -7113,7 +7126,7 @@ def test_member_scope_export_is_unchanged(tmp_path):
     """単体範囲の出力は従来どおり（サブフォルダを作らない）こと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     r = c.post("/api/export", json={"formats": ["stl"], "scope": "member",
                                     "out_dir": str(tmp_path), "make_package": False})
@@ -7131,7 +7144,7 @@ def test_set_export_blocked_by_stale_member(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     _new_set(c)
     c.post("/api/set/active", json={"component_id": "ligature"})
     c.post("/api/export", json={"formats": ["stl"], "make_package": False,
@@ -7154,7 +7167,7 @@ def test_impedance_unsupported_returns_422():
     """音響を持たないコンポーネントは 500 ではなく 422 を返すこと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     c.post("/api/project/new", json={"instrument_id": "saxophone",
                                      "template_id": "alto",
                                      "component_id": "ligature"})
@@ -7168,7 +7181,7 @@ def test_reference_size_mismatch_rejected(tmp_path):
     """サイズ違いのマウスピースを参照に取れないこと。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     tenor = tmp_path / "tenor_mp.wproj"
     c.post("/api/project/new", json={"instrument_id": "saxophone",
                                      "template_id": "tenor",
@@ -7185,7 +7198,8 @@ def test_reference_size_mismatch_rejected(tmp_path):
 
 
 def test_project_future_version_rejected(tmp_path):
-    import json, zipfile
+    import json
+    import zipfile
     f = tmp_path / "future.wproj"
     with zipfile.ZipFile(f, "w") as zf:
         zf.writestr("project.json", json.dumps({
@@ -7202,7 +7216,7 @@ def test_manual_edit_flow(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.export.models import export_model
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
@@ -7278,7 +7292,7 @@ def test_manual_edit_flow(tmp_path):
 def test_api_flow(tmp_path):
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     assert c.get("/api/instruments").status_code == 200
     r = c.post("/api/project/new", json={
@@ -7353,7 +7367,7 @@ def _new_client(template_id="alto", component_id="mouthpiece"):
     from fastapi.testclient import TestClient
 
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": template_id,
         "component_id": component_id})
@@ -7849,7 +7863,7 @@ def test_neck_export_endpoint(tmp_path):
     """/api/project/new component=neck → STL/STEP/3MF 出力・仕様書・BOM が通る。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     r = c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "tenor", "component_id": "neck"})
     assert r.status_code == 200, r.text
@@ -7982,7 +7996,7 @@ def test_section_endpoint_and_preview_override():
     """/api/section が断面を返し、クエリの上書きは状態を変えない。"""
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "tenor",
         "component_id": "mouthpiece"})
@@ -8402,7 +8416,7 @@ def test_dimensions_do_not_build():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     def boom(*_a, **_k):
         raise AssertionError("寸法の経路が CAD ビルドを呼んだ")
@@ -8430,7 +8444,7 @@ def test_section_and_dimensions_agree():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
 
     def new(component_id, template_id="alto"):
         return c.post("/api/project/new",
@@ -8511,8 +8525,9 @@ def test_tone_hole_junction_matrix_is_reciprocal():
 def test_tone_hole_model_adds_no_engine_disagreement():
     """**TMM と OpenWind が同じ側孔を解いていること。**
 
-    合っているかは文献ではなく OpenWind と突き合わせて測る（`sound_speed()` が
-    `Physics` の式を写しているのと同じ扱い）。見るのは差の絶対値ではなく、
+    合っているかは文献を読んだだけでは決めず OpenWind と突き合わせて測る
+    （`sound_speed()` が Zuckerwar の式を置いてあるのと同じ扱い）。
+    見るのは差の絶対値ではなく、
     **穴を足したことで差が増えるか**。穴が無くても 2 エンジンは 3 セント前後
     違う（損失と放射モデルの違い）ので、そこを基準にする。
     """
@@ -8802,8 +8817,8 @@ def _seat(size):
     from saxsketch.instruments.saxophone.components import reed_seat as rs
     m = _template_params("mouthpiece", size)
     r = _template_params("reed", size)
-    l = _template_params("ligature", size)
-    return m, r, rs.seat_summary(m, r, lp.seat_range(m, l)[1])
+    lig = _template_params("ligature", size)
+    return m, r, rs.seat_summary(m, r, lp.seat_range(m, lig)[1])
 
 
 def test_the_window_opening_is_the_law_not_the_nominal():
@@ -8975,7 +8990,7 @@ def test_the_reed_can_finally_be_surveyed():
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
     from saxsketch.server.state import STATE
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     assert c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "mouthpiece"}).status_code == 200
@@ -9649,7 +9664,7 @@ def test_the_tip_curve_wall_reaches_the_browser():
     """
     from fastapi.testclient import TestClient
     from saxsketch.server.app import app
-    c = TestClient(app)
+    c = TestClient(app, base_url=_LOCAL_BASE)
     assert c.post("/api/project/new", json={
         "instrument_id": "saxophone", "template_id": "alto",
         "component_id": "reed"}).status_code == 200
@@ -9691,3 +9706,262 @@ def test_the_tip_curve_is_surveyed_where_the_side_turns_straight():
     got = comp.survey_params({"tip_width": 16.1, comp.SURVEY_TIP_KEY: 3.0}, p)
     assert set(got) == {"tip_width", "tip_curve_depth"}
     assert rp.tip_full_width_z({**p, **got}) == pytest.approx(3.0, abs=1e-6)
+
+
+# ------------------------------------------------------------------ 公開の衛生（他人の著作物を出さない）
+
+#: リポジトリへ入れてはいけない拡張子。中身が「他人のメッシュそのもの」か
+#: 「それを同梱した文書」になりうる形式を並べてある。
+_FORBIDDEN_SUFFIXES = (".3mf", ".stl", ".step", ".stp", ".fcstd", ".obj", ".ply")
+
+#: 基準メッシュから直接描いた図。`NOTICE` が CC BY-NC-SA だと名指ししている。
+_NC_SA_IMAGES = (
+    "cad/windycity/overlay_base.png",
+    "cad/windycity/sections_xy.png",
+    "cad/windycity/sections_yz_xz.png",
+    "cad/windycity/window_outline.png",
+    "cad/windycity/tip_rail.png",
+)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _tracked_files() -> list[str]:
+    try:
+        out = subprocess.run(["git", "ls-files"], cwd=_REPO_ROOT,
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
+        pytest.skip("git を実行できない環境")
+    if out.returncode != 0:  # pragma: no cover - 環境依存
+        pytest.skip("git リポジトリではない")
+    return out.stdout.splitlines()
+
+
+def test_no_third_party_geometry_is_tracked():
+    """**他人のメッシュをリポジトリへ入れない。**
+
+    マウスピースの基準形状は CC BY-NC-SA の配布 3mf を実測して起こしたもの
+    （`NOTICE` / `cad/windycity/ATTRIBUTION.md`）。寸法は事実なので構成式は
+    こちらの物だが、**メッシュそのものと、それを同梱した文書は再配布にあたる**。
+    具体的には `reference_aligned.stl`（整列しただけの複製）と
+    `base_tenor.FCStd`（重ね表示のため原メッシュを同梱している）。
+
+    `.gitignore` で除外してはあるが、**`git add -f` 一回で破れる**。
+    履歴に一度入ると取り消せないので、ここで固定する。
+    """
+    bad = [f for f in _tracked_files()
+           if f.lower().endswith(_FORBIDDEN_SUFFIXES)]
+    assert bad == [], (
+        "他人のメッシュを含みうる形式がトラックされている。"
+        "出所を確認して外すこと（cad/windycity/ATTRIBUTION.md）: %s" % bad)
+
+
+def test_the_license_paperwork_is_present_and_points_at_real_files():
+    """ライセンス一式があり、`NOTICE` の名指しが実在すること。
+
+    **空欄を埋めるために発明しない**のと同じ理由で、**実体の無い帰属も書かない**。
+    図を撮り直して名前を変えた日に `NOTICE` だけ古くなると、
+    「どのファイルが CC BY-NC-SA なのか」が誰にも分からなくなる。
+    """
+    for name in ("LICENSE", "NOTICE", "THIRD-PARTY.md",
+                 "cad/windycity/ATTRIBUTION.md"):
+        assert (_REPO_ROOT / name).exists(), "%s が無い" % name
+
+    notice = (_REPO_ROOT / "NOTICE").read_text(encoding="utf-8")
+    assert "CC BY-NC-SA" in notice
+    assert "thingiverse.com/thing:6645240" in notice
+
+    tracked = set(_tracked_files())
+    for img in _NC_SA_IMAGES:
+        assert (_REPO_ROOT / img).exists(), "%s が無い" % img
+        assert img in tracked, "%s がトラックされていない" % img
+        assert img in notice, "%s が NOTICE に載っていない" % img
+
+
+# ------------------------------------------------------------------ 公開の衛生（外から触られない）
+#
+# ここは**他人が自分の PC でこれを動かす**ことを前提にした網。
+# 自分だけで使っている間は 1 本も要らなかったので、339 本の中に 1 つも無かった。
+
+
+def _c():
+    from fastapi.testclient import TestClient
+    from saxsketch.server.app import app
+    return TestClient(app, base_url=_LOCAL_BASE)
+
+
+def test_a_rebound_host_header_is_refused():
+    """**DNS リバインディングを Host で弾く。**
+
+    悪意あるページが自分のドメインを 127.0.0.1 へ張り替えると、ブラウザは
+    このサーバを同一オリジンとみなすので CORS が効かなくなる。そのとき
+    `Host:` は攻撃者のドメインのままなので、そこだけが見分けになる。
+    """
+    c = _c()
+    assert c.get("/api/instruments").status_code == 200
+    for bad in ("evil.example", "evil.example:8712", "attacker.test"):
+        r = c.get("/api/instruments", headers={"host": bad})
+        assert r.status_code == 400, bad
+    # ループバックの名前は全部通る（WSL でもネイティブでも同じ UI が動く）
+    for ok in ("localhost:8712", "127.0.0.1:8712", "[::1]:8712", "localhost"):
+        assert c.get("/api/instruments", headers={"host": ok}).status_code == 200, ok
+
+
+def test_cross_site_requests_are_refused():
+    """他所のページからの単純リクエストを `Sec-Fetch-Site` で弾く。
+
+    preflight の要らない形は CORS をすり抜ける。ヘッダが**無い**ときは通す
+    （curl とテスト。守る相手はブラウザで動く他人のページであって、
+    ヘッダを送ってこない相手はもうローカルの権限を持っている）。
+    """
+    c = _c()
+    for site, code in (("same-origin", 200), ("none", 200),
+                       ("cross-site", 403), ("same-site", 403)):
+        r = c.get("/api/instruments", headers={"sec-fetch-site": site})
+        assert r.status_code == code, site
+
+
+def test_settings_only_accepts_keys_it_knows():
+    """**設定は許可制。** ここが素通しだと任意コード実行になっていた。
+
+    かつては受け取った dict を丸ごと `update` してディスクへ書いていたので、
+    `external_tools` に任意の名前で任意の exe を登録でき、それを
+    `/api/tools/open` が `Popen` した。2 リクエストで何でも起動できた。
+    """
+    c = _c()
+    assert c.put("/api/settings", json={"settings": {
+        "external_tools": {"evil": "/bin/sh"}}}).status_code == 400
+    assert c.put("/api/settings", json={"settings": {
+        "launch_on_start": "/bin/sh"}}).status_code == 400
+    assert c.put("/api/settings", json={"settings": {
+        "external_tools": "not-a-dict"}}).status_code == 400
+    # 知っているキーは通り、既存のキーは消えない
+    r = c.put("/api/settings", json={"settings": {
+        "external_tools": {"freecad": "/opt/freecad"}}})
+    assert r.status_code == 200
+    assert r.json()["external_tools"]["freecad"] == "/opt/freecad"
+    assert "slicer" in r.json()["external_tools"]
+    c.put("/api/settings", json={"settings": {"external_tools": {"freecad": ""}}})
+
+
+def test_tools_open_is_closed_by_type_and_by_suffix(tmp_path):
+    """**起動できる物を型と拡張子で閉じる。**
+
+    `tool` が `str` だった頃は、コメントだけが「4 種」と言っていた。
+    `browser` は `os.startfile` / `cmd /c start` に落ちるので、
+    `.ps1` や `.bat` を渡せばそれが走る（関連付けによる実行）。
+    """
+    c = _c()
+    f = tmp_path / "x.ps1"
+    f.write_text("echo hi", encoding="utf-8")
+    # 知らない tool 名は型で落ちる（422 = pydantic が弾いた）
+    assert c.post("/api/tools/open", json={"tool": "evil",
+                                           "file": str(f)}).status_code == 422
+    # browser でも、アプリが書き出さない形式は開かない
+    r = c.post("/api/tools/open", json={"tool": "browser", "file": str(f)})
+    assert r.status_code == 400 and ".ps1" in r.json()["detail"]
+    # 存在しないファイルは 404（拡張子の検査より前）
+    assert c.post("/api/tools/open", json={
+        "tool": "browser", "file": str(tmp_path / "nope.html")}).status_code == 404
+
+
+def test_an_unknown_instrument_is_a_400_not_a_500():
+    """知らない楽器 ID は利用者の入力ミスであって、サーバの故障ではない。"""
+    c = _c()
+    r = c.post("/api/project/new", json={"instrument_id": "trombone",
+                                         "template_id": "alto",
+                                         "component_id": "mouthpiece"})
+    assert r.status_code == 400
+
+
+def test_the_spec_sheet_escapes_the_project_name(tmp_path):
+    """**プロジェクト名は利用者が打った文字列。** 仕様書へ素通しにしない。
+
+    仕様書は既定ブラウザで開き、入稿 ZIP に入って印刷業者へ渡る。
+    `.wproj` を他人から受け取れば、その名前は他人の文字列になる。
+    """
+    c = _c()
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+    evil = '</title><script>alert(1)</script>'
+    assert c.put("/api/project/meta", json={"name": evil}).status_code == 200
+    r = c.post("/api/export", json={"formats": ["stl"], "scope": "member",
+                                    "out_dir": str(tmp_path), "make_package": False})
+    assert r.status_code == 200
+    html = (Path(r.json()["out_dir"]) / "spec.html").read_text(encoding="utf-8")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_the_bom_does_not_hand_excel_a_formula():
+    """BOM は印刷業者の Excel で開かれる。数式に化ける値を無害化する。
+
+    **数として読める値は触らない** —— 寸法や数量は負になることがあり、
+    `-1.5` にアポストロフィを付けると合計が狂う。
+    """
+    from saxsketch.export.bom import _cell, bom_csv
+    assert _cell("-1.5") == "-1.5" and _cell("+2") == "+2"
+    assert _cell("=HYPERLINK(1)").startswith("'")
+    assert _cell("@SUM(A1)").startswith("'")
+    text = bom_csv([{"type": "=cmd|calc", "name": "x", "qty": 1,
+                     "material": "PLA", "note": ""}], "p")
+    assert "'=cmd|calc" in text
+
+
+def test_a_zip_bomb_in_a_wproj_is_refused(tmp_path, monkeypatch):
+    """`.wproj` は ZIP。**他人からもらったものは展開爆弾でありうる。**
+
+    上限そのものを小さくして経路を踏む（本物の爆弾を同梱したくない）。
+    """
+    from saxsketch.core import project as proj_mod
+    from saxsketch.core.project import Project
+
+    c = _c()
+    assert c.post("/api/project/new", json={
+        "instrument_id": "saxophone", "template_id": "alto",
+        "component_id": "mouthpiece"}).status_code == 200
+    f = tmp_path / "p.wproj"
+    assert c.post("/api/project/save", json={"path": str(f)}).status_code == 200
+
+    assert Project.load(f).instrument_id == "saxophone"   # 平常時は読める
+    monkeypatch.setattr(proj_mod, "MAX_ENTRY_BYTES", 16)
+    with pytest.raises(ValueError, match="大きすぎます"):
+        Project.load(f)
+
+
+def test_a_huge_mesh_is_refused_before_it_is_read(tmp_path, monkeypatch):
+    """メッシュの入口に上限を置く。
+
+    `/api/manual/import`・`/api/external/load`・`/api/survey/measure` は
+    HTTP から絶対パスで叩ける。**3MF は ZIP なので、小さなファイルが
+    巨大な XML へ展開できる**ので、バイト数と面数の両方で止める。
+    """
+    from saxsketch.analysis import meshdiff
+
+    stl = tmp_path / "m.stl"
+    stl.write_bytes(b"solid x\nendsolid x\n")
+    monkeypatch.setattr(meshdiff, "MAX_FILE_BYTES", 4)
+    with pytest.raises(ValueError, match="大きすぎます"):
+        meshdiff.load_mesh(stl)
+
+
+def test_binding_outside_loopback_needs_an_explicit_opt_in(monkeypatch):
+    """LAN へ出す＝**認証の無いファイルシステム API を公開する**。黙って従わない。
+
+    判定だけでなく**起動を断るところまで**見る。`_is_loopback_host` が正しくても
+    `main()` がそのまま bind したら意味が無い（ここは一度、手元で終了コードを
+    測り損ねて「落ちていない」と誤読しかけた所でもある）。
+    """
+    from saxsketch.server import app as appmod
+    assert appmod._is_loopback_host("127.0.0.1")
+    assert appmod._is_loopback_host("localhost")
+    assert appmod._is_loopback_host("::1")
+    assert not appmod._is_loopback_host("0.0.0.0")
+    assert not appmod._is_loopback_host("192.168.1.50")
+
+    monkeypatch.setattr(appmod, "ALLOW_REMOTE", False)
+    monkeypatch.setenv("WF_HOST", "0.0.0.0")
+    with pytest.raises(SystemExit) as got:
+        appmod.main()
+    assert got.value.code == 1

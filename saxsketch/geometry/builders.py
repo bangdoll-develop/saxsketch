@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 
-from build123d import Edge, Face, Plane, Solid, Vector, Wire, extrude
+from build123d import Edge, Face, Solid, Vector, Wire, extrude
 
 
 def superellipse_wire(z: float, yc: float, h: float, w: float, n: float,

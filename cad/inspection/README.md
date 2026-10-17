@@ -20,12 +20,12 @@
 ```
 
 `survey_sheet.py` は **OCCT が要るので WSL2 で回す**（`survey_targets` を読むために
-コンポーネントを作る）。出力は Windows 正本へ直接書く:
+コンポーネントを作る）。`wsl` は Windows 側の作業ディレクトリを引き継ぐので、
+**リポジトリ直下から呼べば出力はそのままここへ落ちる**（`--out` の既定が
+`cad/inspection/survey_sheet.html`）:
 
 ```bash
-cd ~/mp_design && source .venv/bin/activate
-python cad/inspection/survey_sheet.py \
-  --out /mnt/c/HOME/<user>/develop/claude/mp_design/cad/inspection/survey_sheet.html
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/inspection/survey_sheet.py"
 ```
 
 **用紙の数字も手で写さない。** 設計値は registry、判定帯は `inspection_values.bands()`

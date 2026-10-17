@@ -585,7 +585,7 @@ PHROX は角丸のスロット（§11.5）なので、**形から予想される
 このシートの数値は `.wproj` から計算したもの。設計を変えたら作り直す:
 
 ```bash
-.venv/Scripts/python.exe cad/inspection/inspection_values.py "C:/Users/<user>/Downloads/AltoSaxSetTrial1.wproj"
+.venv/Scripts/python.exe cad/inspection/inspection_values.py "path/to/印刷した個体.wproj"
 ```
 
 **判定は必ず「印刷した個体の `.wproj`」に対して回す。**

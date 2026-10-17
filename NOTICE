@@ -1,0 +1,58 @@
+SaxSketch
+Copyright 2026 shin
+
+This product includes software developed as part of the SaxSketch project.
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+================================================================================
+参照形状の帰属 / Reference geometry attribution
+================================================================================
+
+マウスピースの基準形状（saxsketch/instruments/saxophone/components/profiles.py の
+構成式と、templates/*.json の既定値）は、次の 3D モデルを実測して
+パラメトリックな構成式へ書き直したものです。
+
+  Windy City Woodwinds "72" Tenor Saxophone Mouthpiece
+  by WindyCityWoodwinds (Windy City Woodwinds), 2024-06-03
+  https://www.thingiverse.com/thing:6645240
+  Licensed under Creative Commons Attribution-NonCommercial-ShareAlike
+  (CC BY-NC-SA)
+
+  変更点 / Changes made:
+    配布された 3MF メッシュをボア軸基準へ整列し、断面・輪郭・レール幅を実測して、
+    σ（= z / bore_start_z）で正規化した構成式と 33 本の設計パラメータへ
+    書き直した。3 サイズはそこからボア比で導出している。
+    Measured the distributed 3MF mesh and re-expressed it as sigma-normalised
+    constitutive laws and 33 design parameters.
+
+モデルのファイルそのもの（.3mf / .stl / .step / .FCStd）は本リポジトリに
+含まれていません。再現するには上記から各自入手してください
+（手順は cad/windycity/ATTRIBUTION.md）。
+The model files themselves are NOT distributed in this repository.
+
+次の 5 つの画像は上記モデルの形状を直接図示したものであり、
+**Apache-2.0 ではなく CC BY-NC-SA** で提供されます:
+The following 5 images are plotted directly from the licensed mesh and are
+provided under CC BY-NC-SA, NOT under Apache-2.0:
+
+  cad/windycity/overlay_base.png
+  cad/windycity/sections_xy.png
+  cad/windycity/sections_yz_xz.png
+  cad/windycity/window_outline.png
+  cad/windycity/tip_rail.png
+
+詳細と証跡は cad/windycity/ATTRIBUTION.md を参照。
+
+================================================================================
+
+第三者ソフトウェアの一覧とそれぞれのライセンスは THIRD-PARTY.md を参照。
+For third-party software and their licenses, see THIRD-PARTY.md.
+
+本プロジェクトで言及する製品名・ブランド名（WindyCity, Wood Stone, Jody Jazz,
+Vandoren, Rico, D'Addario, Légère, Forestone, Selmer, Yamaha, Yanagisawa,
+Meyer, Otto Link, Lebayle, FIBRACELL ほか）は各社の商標です。
+いずれも「ノギスを当てた個体を特定するため」に挙げているもので、
+本プロジェクトは各社と提携関係にありません。
+All product and brand names are trademarks of their respective owners and are
+used here only to identify the specimens that were measured. This project is
+not affiliated with, endorsed by, or sponsored by any of them.

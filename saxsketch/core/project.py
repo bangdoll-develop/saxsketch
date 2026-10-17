@@ -93,6 +93,31 @@ def _delegated(name: str) -> property:
     return property(getter, setter)
 
 
+#: `.wproj` の中から読み出してよい 1 エントリの上限 [byte]。
+#:
+#: `.wproj` は ZIP なので、**他人からもらったファイルは zip 爆弾でありうる**。
+#: `zf.read()` は展開後の全体をメモリへ載せるので、読む前に申告サイズを見る
+#: （申告が嘘なら展開が途中で止まるよう読み出し量でも切る）。
+#: 自分で書く project.json は数十 KB、derived の STL でも数 MB。
+MAX_ENTRY_BYTES = 256 * 1024 * 1024
+
+
+def _read_capped(zf: zipfile.ZipFile, name: str) -> bytes:
+    """ZIP の 1 エントリを上限付きで読む。超えたら読まずに断る。"""
+    info = zf.getinfo(name)
+    if info.file_size > MAX_ENTRY_BYTES:
+        raise ValueError("%s が大きすぎます: %.1fMB（上限 %dMB）"
+                         % (name, info.file_size / 1048576.0,
+                            MAX_ENTRY_BYTES // 1048576))
+    with zf.open(name) as fh:
+        data = fh.read(MAX_ENTRY_BYTES + 1)
+    if len(data) > MAX_ENTRY_BYTES:
+        # 申告サイズが嘘だった（展開してみたら上限超え）
+        raise ValueError("%s の展開後が大きすぎます（上限 %dMB）"
+                         % (name, MAX_ENTRY_BYTES // 1048576))
+    return data
+
+
 class Project:
     """セット（＝ .wproj 1 ファイル）。単体プロジェクトはメンバー 1 個。"""
 
@@ -204,7 +229,8 @@ class Project:
     def load(cls, path: str | Path) -> "Project":
         path = Path(path)
         with zipfile.ZipFile(path) as zf:
-            data = _migrate(json.loads(zf.read("project.json").decode("utf-8")))
+            data = _migrate(json.loads(_read_capped(zf, "project.json")
+                                       .decode("utf-8")))
             names = zf.namelist()
             members: dict[str, Member] = {}
             for cid, md in data["members"].items():
@@ -213,7 +239,7 @@ class Project:
                     # v2 は部品ごと。v1 から持ち上げたぶんは平置きの 1 本を拾う。
                     for arc in (f"derived/{cid}/model.stl", "derived/model.stl"):
                         if arc in names:
-                            m.derived_stl = zf.read(arc)
+                            m.derived_stl = _read_capped(zf, arc)
                             break
                 members[cid] = m
         p = cls(

@@ -5,14 +5,16 @@
 # 依存/フロントをビルドして OCP import と IS_WSL を検証する。
 #
 # 使い方（WSL Ubuntu シェルで）:
-#   bash /mnt/c/HOME/<user>/develop/claude/mp_design/scripts/wsl_sync.sh [--deps] [--test]
+#   bash /mnt/c/path/to/mp_design/scripts/wsl_sync.sh [--deps] [--test]
 #     --deps : pip の依存を入れ直す（pyproject.toml を変えた時）＋ npm install
 #     --test : 同期後に pytest を実行
 #
 # 環境変数で上書き可: WF_SRC（Windows 正本）, WF_DST（WSL 稼働コピー）
 set -euo pipefail
 
-WF_SRC="${WF_SRC:-/mnt/c/HOME/<user>/develop/claude/mp_design}"
+# 既定の正本は**このスクリプトの置き場所から導く**（他人の機械でも動く）。
+_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WF_SRC="${WF_SRC:-$(cd "$_SELF_DIR/.." && pwd)}"
 WF_DST="${WF_DST:-$HOME/mp_design}"
 
 DO_DEPS=0

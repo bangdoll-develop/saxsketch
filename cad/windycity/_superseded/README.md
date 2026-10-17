@@ -68,7 +68,7 @@ cp cad/windycity/candidate_1_faithful.json saxsketch/instruments/saxophone/templ
 
 ```bash
 # 実測とフィット（WSL2）
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/fit_windycity.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/fit_windycity.py"
 ```
 
 ```bash

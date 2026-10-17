@@ -1,9 +1,10 @@
 """側孔 1 個の音響（Phase 4-B.2b）。純数学・OCCT 非依存。
 
-**新しい物理ではない。** OpenWind 0.12.4 は `JunctionTjoint` に Dubos らの
-質量式を持っており、ここはその式を**写している**。`sound_speed()` が OpenWind の
-`Physics` を写しているのと同じ理由 —— 教科書式で推測すると 2 つのエンジンが
-違う楽器を解く。合っているかは文献ではなく **OpenWind と突き合わせて測る**
+**新しい物理ではない。** 式の原典は Dubos ら 1999（`length_corrections` に
+書誌を挙げた）で、OpenWind 0.12.4 の `JunctionTjoint` も同じ原典に拠る。
+ここは原典の式から書いてある。`sound_speed()` が Zuckerwar の式を置いてあるのと
+同じ理由 —— 教科書式で推測すると 2 つのエンジンが違う楽器を解く。
+合っているかは文献を読んだだけでは決めず、**OpenWind と突き合わせて測る**
 （`cad/body/sweep_holes.py` とテスト）。
 
 側孔は 3 つの部品でできている:
@@ -43,11 +44,11 @@ def length_corrections(
         matching_volume: bool = MATCHING_VOLUME) -> tuple[float, float, float]:
     """接合部の長さ補正 (t_i, t_mv, t_a) [m]。
 
-    OpenWind `openwind/continuous/junction.py` の
-    `JunctionTjoint.__compute_length_corr` を写したもの。原典は
-    Dubos, Kergomard, Khettabi, Dalmont, Keefe, Nederveen (1999),
+    原典は Dubos, Kergomard, Khettabi, Dalmont, Keefe, Nederveen (1999),
     "Theory of sound propagation in a duct with a branched tube using modal
     decomposition", Acta Acustica 85(2), 153-169。
+    OpenWind の `JunctionTjoint` も同じ原典の式を使っており、両者の値が
+    一致することをテストで確かめている。
 
     δ = r_side / r_main。短いチムニー近似の範囲でしか正しくない。
     """
