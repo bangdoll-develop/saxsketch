@@ -2,9 +2,23 @@
 name = "saxsketch"
 version = "0.1.0"
 description = "管楽器設計・3Dプリント統合開発環境 (Wind instrument design IDE for 3D printing)"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "bangdoll-develop", email = "281577599+bangdoll-develop@users.noreply.github.com" }]
+keywords = ["cad", "saxophone", "mouthpiece", "acoustics", "3d-printing", "parametric"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Japanese",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Sound Synthesis",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
-    "build123d>=0.7",
+    "build123d>=0.7,<1.0",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "numpy>=1.26",
@@ -13,8 +27,18 @@ dependencies = [
     "networkx>=3.0",   # trimesh の 3MF ローダ（外部モデル採寸）に必須
     "lxml>=5.0",       # 同上（3MF は XML コンテナ）
     "rtree>=1.2",
-    "python-multipart>=0.0.9",
 ]
+# python-multipart は 0.1 まで必須依存に入っていたが、`UploadFile`/`Form` を
+# 1 か所も使っていない（アップロードはせず、ネイティブのファイルダイアログが
+# 返す絶対パスを受け取る設計）。使わない物を要求すると、その CVE を
+# 利用者に背負わせることになるので外した。
+
+[project.scripts]
+saxsketch = "saxsketch.server.app:main"
+
+[project.urls]
+Source = "https://github.com/bangdoll-develop/saxsketch"
+Issues = "https://github.com/bangdoll-develop/saxsketch/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]
@@ -33,3 +57,21 @@ packages = ["saxsketch"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+# 捨てていないが、もう直さないコード。**記録として残してある**ので lint はしない。
+extend-exclude = ["cad/windycity/_superseded"]
+
+[tool.ruff.lint]
+# 既定（E4/E7/E9 + F）のまま。整形はしない ——
+# 36,000 行を整形し直すと、どの行がいつ何のために変わったかが git から消える。
+# 規則を増やすなら、増やした分を一度に直してから入れること。
+
+[tool.ruff.lint.per-file-ignores]
+# FreeCAD の中で走るスクリプト。`import FreeCAD` は `Part` / `Mesh` を
+# 読めるようにするための副作用 import で、使っていなくても外せない。
+# テストからは一度も走らないので、未使用ローカルも機械的には直さない。
+"cad/freecad/*.py" = ["F401", "F841"]
+"cad/windycity/build_base.py" = ["F401"]
+"cad/windycity/check_step_cad.py" = ["F401"]

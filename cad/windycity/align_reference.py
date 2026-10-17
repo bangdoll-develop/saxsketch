@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -33,7 +34,12 @@ sys.path.insert(0, str(_REPO))
 
 from saxsketch.analysis import align, meshdiff  # noqa: E402
 
-SRC_DEFAULT = "/mnt/c/Users/<user>/Downloads/WindyCity-Tenor-72-100-LS.3mf"
+#: 基準にしている 3mf の場所。**このファイルはリポジトリに入っていない。**
+#:
+#: 中身は他人が CC BY-NC-SA で公開した 3D モデルで、こちらから再配布はしない
+#: （出所・入手先・ライセンスは `ATTRIBUTION.md`）。環境変数 `WINDYCITY_3MF`
+#: でダウンロードしたファイルの場所を渡すこと。
+SRC_DEFAULT = os.environ.get("WINDYCITY_3MF", "")
 OUT_DEFAULT = _HERE / "reference_aligned.stl"
 
 #: 表面サンプリングの固定シード。
@@ -402,9 +408,19 @@ def align_reference(src: str) -> tuple[trimesh.Trimesh, dict]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=SRC_DEFAULT)
+    ap.add_argument("--src", default=SRC_DEFAULT,
+                    help="基準 3mf。既定は環境変数 WINDYCITY_3MF")
     ap.add_argument("--out", default=str(OUT_DEFAULT))
     args = ap.parse_args()
+    if not args.src:
+        raise SystemExit(
+            "基準の 3mf が指定されていない。\n"
+            "このファイルは他人が CC BY-NC-SA で公開したモデルなので、\n"
+            "リポジトリには入っていない。入手先は cad/windycity/ATTRIBUTION.md。\n"
+            "  export WINDYCITY_3MF=/path/to/WindyCity-Tenor-72-100-LS.3mf\n"
+            "または --src で渡すこと。")
+    if not Path(args.src).exists():
+        raise SystemExit("基準の 3mf が見つからない: %s" % args.src)
     aligned, report = align_reference(args.src)
     aligned.export(args.out)
     for k, v in report.items():

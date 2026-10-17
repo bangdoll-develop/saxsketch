@@ -36,6 +36,8 @@ import functools
 import math
 import threading
 
+from saxsketch import i18n
+
 
 # ---------------------------------------------------------------- 同一 p のあいだのキャッシュ
 #
@@ -161,10 +163,13 @@ def _pchip_table(pts: list[tuple[float, float]]) -> tuple[list, list, list, list
     for i, hi in enumerate(h):
         if hi <= 0.0:
             raise ValueError(
-                f"PCHIP の制御点 x が単調増加ではありません: "
-                f"pts[{i}]={pts[i]} と pts[{i + 1}]={pts[i + 1]} で "
-                f"x が {xs[i]!r} → {xs[i + 1]!r}（幅 {hi!r}）。"
-                f"表全体: {pts}")
+                i18n.t(
+                    "PCHIP の制御点 x が単調増加ではありません: "
+                    "pts[{i}]={pts} と pts[{i2}]={pts2} で x が {xs} → "
+                    "{xs2}（幅 {hi}）。表全体: {pts3}",
+                    i=f"{i}", pts=f"{pts[i]}", i2=f"{i + 1}",
+                    pts2=f"{pts[i + 1]}", xs=f"{xs[i]!r}",
+                    xs2=f"{xs[i + 1]!r}", hi=f"{hi!r}", pts3=f"{pts}"))
     d = [(ys[i + 1] - ys[i]) / h[i] for i in range(n - 1)]
     m = [0.0] * n
     m[0], m[-1] = d[0], d[-1]
@@ -835,8 +840,11 @@ def facing_rise(p: dict, z: float) -> float:
         # 出所不明のまま上がるのを防ぐ（掃引 `sweep_limits.py tip_opening` が
         # ちょうど 0 で踏んだ。`_pchip_table` の節点衝突と同じ型）。
         raise ValueError(
-            f"ティップ開きが {tip!r} なのでフェイシングの円弧半径が定まりません"
-            f"（radial は y(0)=tip となる R を解くので tip > 0 が要ります）。")
+            i18n.t(
+                "ティップ開きが {tip} なのでフェイシングの円弧半径が定まりませ"
+                "ん（radial は y(0)=tip となる R を解くので tip > 0 "
+                "が要ります）。",
+                tip=f"{tip!r}"))
     r = (fl * fl + tip * tip) / (2.0 * tip)
     return r - math.sqrt(max(r * r - (fl - z) ** 2, 0.0))
 
@@ -915,7 +923,6 @@ def facing_cut_segments(p: dict,
     ティップ側が粗くなってスプラインが暴れる）。z<0 側は持ち上がりが
     `tip_opening` で頭打ちなので直線。
     """
-    length = p["overall_length"]
     fl = p["facing_length"]
     z_lo, z_hi = facing_cut_z_range(p)
     segs: list[list[tuple[float, float]]] = []
@@ -1741,7 +1748,7 @@ def baffle_plateau_bounds(p: dict) -> dict:
     """
     lo, hi = _PLATEAU_RANGE.get(p.get("baffle_type", "step"), (0.10, 0.70))
     return {"baffle_plateau": {"lo": lo, "hi": hi,
-                               "lo_by": "バッフル型", "hi_by": "バッフル型"}}
+                               "lo_by": i18n.t("バッフル型"), "hi_by": i18n.t("バッフル型")}}
 
 
 def _plateau_warp(sigma: float, a: float) -> float:
@@ -2005,17 +2012,21 @@ def cavity_layout_error(p: dict) -> str | None:
     # ——`ParamSpec.hard_min` でも止めているが、成立条件はここに 1 箇所書く。
     gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
     if gap <= 0.0:
-        return (f"チェンバー→ボアの遷移が {gap:.2f}mm ＝ 長さを持ちません。"
-                f"ウィンドウの後端とボアの始まりが同じ位置になり、"
-                f"チェンバーの区間が消えます。0 より大きい値にしてください。")
+        return (i18n.t(
+            "チェンバー→ボアの遷移が {gap}mm ＝ 長さを持ちません。"
+            "ウィンドウの後端とボアの始まりが同じ位置になり、チェンバー"
+            "の区間が消えます。0 より大きい値にしてください。",
+            gap=f"{gap:.2f}"))
     # ティップ開きは**正でなければならない**。0 だと radial のフェイシング
     # 円弧半径が定まらず `facing_rise` が落ちる（掃引で発見。`params_error` は
     # `None` を返していたので、素の `ZeroDivisionError` が上がっていた）。
     # `ParamSpec.hard_min = 0.05` でも止めているが、成立条件はここに 1 箇所書く。
     if p["tip_opening"] <= 0.0:
-        return (f"ティップ開きが {p['tip_opening']:.2f}mm ＝ リードとの隙間が"
-                f"ありません。フェイシングの円弧が定義できず、息の入口も"
-                f"閉じます。0 より大きい値にしてください。")
+        return (i18n.t(
+            "ティップ開きが {tip_opening}mm ＝ リードとの隙間がありません。"
+            "フェイシングの円弧が定義できず、息の入口も閉じます。0 "
+            "より大きい値にしてください。",
+            tip_opening=f"{p['tip_opening']:.2f}"))
     # ボアも**長さを持たなければならない**。`bore_length <= 0` は「ボアが部品の
     # 外から始まる」で、削る円柱の高さが `overall_length − zb + 1.5` ＝
     # `bore_length + 1.5` なので、−1.5 を割ると `Solid.make_cylinder` が
@@ -2025,10 +2036,12 @@ def cavity_layout_error(p: dict) -> str | None:
     # ので「ボア長を縮めるほど体積が増える」逆向きの形になり、しかも
     # `cavity_stations` は平然と通る（段 1〜2 は −21mm まで素通りした）。
     if p["bore_length"] <= 0.0:
-        return (f"ボア長が {p['bore_length']:.1f}mm ＝ 長さを持ちません。"
-                f"ボアの始まり z={zb:.1f}mm が全長 "
-                f"{p['overall_length']:.1f}mm の外にあり、円筒が 1 ビットも"
-                f"削りません。0 より大きい値にしてください。")
+        return (i18n.t(
+            "ボア長が {bore_length}mm ＝ 長さを持ちません。ボアの始まり "
+            "z={zb}mm が全長 {overall_length}mm の外にあり、円筒が 1 "
+            "ビットも削りません。0 より大きい値にしてください。",
+            bore_length=f"{p['bore_length']:.1f}", zb=f"{zb:.1f}",
+            overall_length=f"{p['overall_length']:.1f}"))
     # **ちょうど最低幅は通す。** 1e-9 の遊びが無いと、`cavity_bounds` が
     # 「ここまでは置けます」と返した全長そのものを入れた瞬間に
     # `z_we - z0` が 1.9999999999999998 と出て断られる（テナーで実際に踏んだ）。
@@ -2036,17 +2049,21 @@ def cavity_layout_error(p: dict) -> str | None:
     # 同じ寄せ方 ——**言われたとおりの値を入れた直後に断られない**ようにする。
     if z_we - z0 >= _MIN_WINDOW_SPAN_MM - 1e-9:
         return None
-    return (f"空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: "
-            f"窓が z {z0:.2f}→{z_we:.2f}mm ＝ 長さ {z_we - z0:+.2f}mm しか残らず、"
-            f"最低 {_MIN_WINDOW_SPAN_MM:.1f}mm 要ります。"
-            f"ボアの始まり（全長 {p['overall_length']:.1f} − ボア長 "
-            f"{p['bore_length']:.1f} ＝ {zb:.2f}mm）が手前すぎるためで、"
-            f"「チェンバー→ボアの遷移」を縮める / ボア長を短く / 全長を長く "
-            f"すれば直ります"
-            f"（ウィンドウ長 {p['window_length']:.1f}mm はこの場合効きません —— "
-            f"窓の後端は {zb:.2f} − チェンバー→ボアの遷移 "
-            f"{p.get('chamber_to_bore_mm', _CHAMBER_TO_BORE_DEFAULT_MM):.1f} で"
-            f"頭打ちになっています）。")
+    return (i18n.t(
+        "空洞の並び（窓→チェンバー→スロート→ボア）が成立しません: 窓が z "
+        "{z0}→{z_we}mm ＝ 長さ {z_we2}mm しか残らず、最低 "
+        "{min_window_span_mm}mm 要ります。ボアの始まり（全長 "
+        "{overall_length} − ボア長 {bore_length} ＝ {zb}mm）"
+        "が手前すぎるためで、「チェンバー→ボアの遷移」を縮める / "
+        "ボア長を短く / 全長を長く すれば直ります（ウィンドウ長 "
+        "{window_length}mm はこの場合効きません —— 窓の後端は {zb2} − "
+        "チェンバー→ボアの遷移 {chamber_to_bore_mm} で頭打ちになっています）。",
+        z0=f"{z0:.2f}", z_we=f"{z_we:.2f}", z_we2=f"{z_we - z0:+.2f}",
+        min_window_span_mm=f"{_MIN_WINDOW_SPAN_MM:.1f}",
+        overall_length=f"{p['overall_length']:.1f}",
+        bore_length=f"{p['bore_length']:.1f}", zb=f"{zb:.2f}",
+        window_length=f"{p['window_length']:.1f}", zb2=f"{zb:.2f}",
+        chamber_to_bore_mm=f"{p.get('chamber_to_bore_mm', _CHAMBER_TO_BORE_DEFAULT_MM):.1f}"))
 
 
 def _window_tail_mm(p: dict) -> float:
@@ -2076,8 +2093,8 @@ def cavity_bounds(p: dict) -> dict:
     """
     tail = _window_tail_mm(p)
     return {
-        "bore_length": {"hi": p["overall_length"] - tail, "hi_by": "全長"},
-        "overall_length": {"lo": p["bore_length"] + tail, "lo_by": "ボア長"},
+        "bore_length": {"hi": p["overall_length"] - tail, "hi_by": i18n.t("全長")},
+        "overall_length": {"lo": p["bore_length"] + tail, "lo_by": i18n.t("ボア長")},
     }
 
 
@@ -2103,12 +2120,15 @@ def shank_warnings(p: dict) -> list[str]:
     # 利用者が「言われたとおりの値」を入れた直後に警告が出ることになる。
     if not (0.0 < wall < mw - 1e-6):
         return []
-    return [f"シャンクの肉厚が {wall:.2f}mm ＝ 最小肉厚 {mw:.1f}mm を"
-            f"下回っています（シャンク径 φ{r_sh * 2.0:.2f} に対しボア径 "
-            f"φ{p['bore_dia']:.2f}）。形は指定どおり出ますが、この厚みでは"
-            f"印刷したシャンクが割れます。ボア径を "
-            f"φ{r_sh * 2.0 - 2.0 * mw:.2f}mm 以下にするか、シャンク径を "
-            f"φ{p['bore_dia'] + 2.0 * mw:.2f}mm 以上にしてください。"]
+    return [i18n.t(
+        "シャンクの肉厚が {wall}mm ＝ 最小肉厚 {mw}mm "
+        "を下回っています（シャンク径 φ{r_sh} に対しボア径 φ{bore_dia}）。"
+        "形は指定どおり出ますが、この厚みでは印刷したシャンクが割れます。"
+        "ボア径を φ{r_sh2}mm 以下にするか、シャンク径を φ{bore_dia2}mm "
+        "以上にしてください。",
+        wall=f"{wall:.2f}", mw=f"{mw:.1f}", r_sh=f"{r_sh * 2.0:.2f}",
+        bore_dia=f"{p['bore_dia']:.2f}", r_sh2=f"{r_sh * 2.0 - 2.0 * mw:.2f}",
+        bore_dia2=f"{p['bore_dia'] + 2.0 * mw:.2f}")]
 
 
 def outer_layout_error(p: dict) -> str | None:
@@ -2168,37 +2188,50 @@ def outer_layout_error(p: dict) -> str | None:
     r_max, r_sh = p["body_dia"] / 2.0, shank_radius(p)
     r_bore = bore_radius(p)
     if r_bore >= r_sh:
-        return (f"ボア径がシャンク径以上です: ボア径 φ{p['bore_dia']:.2f} ≥ "
-                f"シャンク径 φ{r_sh * 2.0:.2f} mm。ボアの円筒がシャンクを"
-                f"丸ごと削り、ネックに挿す部分が無くなります（肉厚 "
-                f"{r_sh - r_bore:+.2f}mm）。ボア径を φ{r_sh * 2.0:.2f}mm 未満に"
-                f"するか、シャンク径を φ{p['bore_dia']:.2f}mm より太くして"
-                f"ください。")
+        return (i18n.t(
+            "ボア径がシャンク径以上です: ボア径 φ{bore_dia} ≥ シャンク径 "
+            "φ{r_sh} mm。ボアの円筒がシャンクを丸ごと削り、"
+            "ネックに挿す部分が無くなります（肉厚 {r_sh2}mm）。ボア径を "
+            "φ{r_sh3}mm 未満にするか、シャンク径を φ{bore_dia2}mm "
+            "より太くしてください。",
+            bore_dia=f"{p['bore_dia']:.2f}", r_sh=f"{r_sh * 2.0:.2f}",
+            r_sh2=f"{r_sh - r_bore:+.2f}", r_sh3=f"{r_sh * 2.0:.2f}",
+            bore_dia2=f"{p['bore_dia']:.2f}"))
     if r_max < r_sh:
-        return (f"最大径がシャンク径より細くなっています: 最大径 "
-                f"φ{p['body_dia']:.1f} < シャンク径 φ{r_sh * 2.0:.1f} mm。"
-                f"肩が最大径からシャンクへ**太る**向きになり、"
-                f"「最大径」の位置（z={heel_z(p):.1f}mm）が最大でなくなります。"
-                f"最大径を φ{r_sh * 2.0:.1f}mm 以上にするか、"
-                f"シャンク径を φ{p['body_dia']:.1f}mm 以下にしてください。")
+        return (i18n.t(
+            "最大径がシャンク径より細くなっています: 最大径 φ{body_dia} < "
+            "シャンク径 φ{r_sh} mm。肩が最大径からシャンクへ**太る**向きになり"
+            "、「最大径」の位置（z={heel_z}mm）が最大でなくなります。"
+            "最大径を φ{r_sh2}mm 以上にするか、シャンク径を φ{body_dia2}mm "
+            "以下にしてください。",
+            body_dia=f"{p['body_dia']:.1f}", r_sh=f"{r_sh * 2.0:.1f}",
+            heel_z=f"{heel_z(p):.1f}", r_sh2=f"{r_sh * 2.0:.1f}",
+            body_dia2=f"{p['body_dia']:.1f}"))
     if 1.0 + shoulder_ratio(p) <= 0.0:
         # 肩比 ≤ −1。踵の式の分母が 0 以下になる（掃引が素の ZeroDivisionError
         # を踏んだ点）。ここだけは「踵の z」を出せないので別文にする。
-        return (f"肩の長さ比が {shoulder_ratio(p):.3f} ＝ −1 以下です。"
-                f"踵の位置 (全長 − シャンク長)/(1 + 肩比) の分母が 0 以下に"
-                f"なり、形が定義できません。肩の長さ比を 0 より大きくして"
-                f"ください。")
+        return (i18n.t(
+            "肩の長さ比が {shoulder_ratio} ＝ −1 以下です。踵の位置 (全長 − "
+            "シャンク長)/(1 + 肩比) の分母が 0 以下になり、"
+            "形が定義できません。肩の長さ比を 0 より大きくしてください。",
+            shoulder_ratio=f"{shoulder_ratio(p):.3f}"))
     raw, floor = heel_raw(p), heel_floor(p)
     if raw < floor - 1e-9:
-        return (f"シャンク平行部と肩が全長を食い尽くしています: 踵（最大径の"
-                f"位置）が z={raw:.1f}mm ＝ 全長 {p['overall_length']:.1f}mm の"
-                f"{HEEL_FLOOR_RATIO * 100:.0f}%（{floor:.1f}mm）より前に"
-                f"来ます。この先は踵が {floor:.1f}mm で頭打ちになり、"
-                f"**シャンク長も肩比も形を動かさなくなります**"
-                f"（寸法図だけが与えた数字を印字し続けます）。"
-                f"シャンク長を {shank_length_at_heel_floor(p):.1f}mm 以下、"
-                f"または肩の長さ比を {shoulder_ratio_at_heel_floor(p):.3f} "
-                f"以下にしてください。")
+        return (i18n.t(
+            "シャンク平行部と肩が全長を食い尽くしています: "
+            "踵（最大径の位置）が z={raw}mm ＝ 全長 {overall_length}mm "
+            "の{heel_floor_ratio}%（{floor}mm）より前に来ます。"
+            "この先は踵が {floor2}mm で頭打ちになり、"
+            "**シャンク長も肩比も形を動かさなくなります**（寸法図だけが与えた"
+            "数字を印字し続けます）。シャンク長を "
+            "{shank_length_at_heel_floor}mm 以下、"
+            "または肩の長さ比を {shoulder_ratio_at_heel_floor} "
+            "以下にしてください。",
+            raw=f"{raw:.1f}", overall_length=f"{p['overall_length']:.1f}",
+            heel_floor_ratio=f"{HEEL_FLOOR_RATIO * 100:.0f}",
+            floor=f"{floor:.1f}", floor2=f"{floor:.1f}",
+            shank_length_at_heel_floor=f"{shank_length_at_heel_floor(p):.1f}",
+            shoulder_ratio_at_heel_floor=f"{shoulder_ratio_at_heel_floor(p):.3f}"))
     # (4)(5) 母線は単調（Phase B-4b）。**壊れ方が 4 通りあるので、名指しは
     # 症状の出ているほうを選ぶ** ——壁のすぐ外では逸脱量が 1µm に満たず、
     # 量を印字しても「0.00mm」としか出ない。どこで何が起きるかを言う。
@@ -2208,54 +2241,70 @@ def outer_layout_error(p: dict) -> str | None:
     if not (w_lo <= w <= w_hi):
         az, _ = outer_apex(p)
         if abs(az - heel) > 1e-3:
-            why = (f"最大径が踵（z={heel:.1f}mm）ではなく z={az:.1f}mm へ"
-                   f"移ります")
+            why = (i18n.t(
+                "最大径が踵（z={heel}mm）ではなく z={az}mm へ移ります",
+                heel=f"{heel:.1f}", az=f"{az:.1f}"))
         else:
-            why = f"胴が z={body_dip(p)[0]:.1f}mm で太るのをやめます"
-        return (f"胴の膨らみ {w:+.3f} では母線が単調でなくなります: {why}。"
-                f"「最大径に向かって単調に太る」が崩れると、リガチャー座"
-                f"（`ligature_seat_range`）が最大径ではない所に置かれます"
-                f"——**形は通り、OCCT もソリッド 1 個を返す**ので、"
-                f"出来上がりを見ても気づけません。"
-                f"{w_lo:+.3f}〜{w_hi:+.3f} の範囲にしてください。")
+            why = i18n.t(
+                "胴が z={body_dip}mm で太るのをやめます",
+                body_dip=f"{body_dip(p)[0]:.1f}")
+        return (i18n.t(
+            "胴の膨らみ {w} では母線が単調でなくなります: {why}。"
+            "「最大径に向かって単調に太る」が崩れると、リガチャー"
+            "座（`ligature_seat_range`）が最大径ではない所に置かれます——"
+            "**形は通り、OCCT もソリッド 1 個を返す**ので、"
+            "出来上がりを見ても気づけません。{w_lo}〜{w_hi} "
+            "の範囲にしてください。",
+            w=f"{w:+.3f}", why=f"{why}", w_lo=f"{w_lo:+.3f}",
+            w_hi=f"{w_hi:+.3f}"))
     k_lo, k_hi = shoulder_fullness_limits()
     k = shoulder_fullness(p)
     if not (k_lo <= k <= k_hi):
         _, dr = shoulder_dip(p)
         r_sh = shank_radius(p)
         if dr < r_sh - 1e-9:
-            why = (f"肩の途中の最小半径 {dr:.3f}mm がシャンク半径 "
-                   f"{r_sh:.3f}mm を下回り、えぐれます ——**最薄の肉厚が"
-                   f"シャンクではなくそこ**になるので、肉厚の注意の数字も"
-                   f"甘くなります")
+            why = (i18n.t(
+                "肩の途中の最小半径 {dr}mm がシャンク半径 {r_sh}mm "
+                "を下回り、えぐれます ——**最薄の肉厚がシャンクではなくそこ**に"
+                "なるので、肉厚の注意の数字も甘くなります",
+                dr=f"{dr:.3f}", r_sh=f"{r_sh:.3f}"))
         else:
-            why = f"肩が z={shoulder_bulge(p)[0]:.1f}mm で細るのをやめます"
-        return (f"肩の張り {k:+.3f} では母線が単調でなくなります: {why}。"
-                f"「最大径からシャンクへ単調に細る」が崩れます ——"
-                f"**形は通り、OCCT もソリッド 1 個を返す**ので、"
-                f"出来上がりを見ても気づけません。"
-                f"{k_lo:+.3f}〜{k_hi:+.3f} の範囲にしてください。")
+            why = i18n.t(
+                "肩が z={shoulder_bulge}mm で細るのをやめます",
+                shoulder_bulge=f"{shoulder_bulge(p)[0]:.1f}")
+        return (i18n.t(
+            "肩の張り {k} では母線が単調でなくなります: {why}。"
+            "「最大径からシャンクへ単調に細る」が崩れます ——**形は通り、"
+            "OCCT もソリッド 1 個を返す**ので、"
+            "出来上がりを見ても気づけません。{k_lo}〜{k_hi} "
+            "の範囲にしてください。",
+            k=f"{k:+.3f}", why=f"{why}", k_lo=f"{k_lo:+.3f}",
+            k_hi=f"{k_hi:+.3f}"))
     bh = p.get("beak_height")
     if bh is not None:
         top, flat = beak_height_at_body_top(p), beak_height_flat(p)
         z_bite = _BEAK_BITE * p["overall_length"]
         if bh > top:
-            return (f"ビーク高さ {bh:.2f}mm がバイトポイント（z="
-                    f"{z_bite:.1f}mm）での胴の全高 {top:.2f}mm を超えています。"
-                    f"ビークは切除ソリッドなので、稜線が胴の外へ出ると"
-                    f"**そこは何も削られず**、上面は胴のままになります ——"
-                    f"「くわえたときの口の開き量」という `beak_height` の"
-                    f"定義が成り立たなくなり、寸法図だけが与えた数字を"
-                    f"印字し続けます。{top:.2f}mm 以下にするか、最大径か"
-                    f"全長を大きくしてください。")
+            return (i18n.t(
+                "ビーク高さ {bh}mm がバイトポイント（z={z_bite}mm）"
+                "での胴の全高 {top}mm を超えています。ビー"
+                "クは切除ソリッドなので、稜線が胴の外へ出ると**そこは何も削ら"
+                "れず**、上面は胴のままになります ——"
+                "「くわえたときの口の開き量」という `beak_height` "
+                "の定義が成り立たなくなり、寸法図だけが与えた数字を印字し続け"
+                "ます。{top2}mm 以下にするか、最大径か全長を大きくしてください"
+                "。",
+                bh=f"{bh:.2f}", z_bite=f"{z_bite:.1f}", top=f"{top:.2f}",
+                top2=f"{top:.2f}"))
         if bh < flat:
-            return (f"ビーク高さ {bh:.2f}mm ではビーク稜線が**前下がり**に"
-                    f"なります（水平になるのは {flat:.2f}mm）。ティップ側の"
-                    f"頂点はテーブル＋ティップ開き＋ティップレール厚で"
-                    f"決まっているので、これを下回るとビークがティップから"
-                    f"後ろへ向かって低くなります ——実測 18.0° の"
-                    f"「ティップからバイトへ立ち上がる直線ランプ」ではもはや"
-                    f"ありません。{flat:.2f}mm 以上にしてください。")
+            return (i18n.t(
+                "ビーク高さ {bh}mm ではビーク稜線が**前下がり**になります（水"
+                "平になるのは {flat}mm）。ティップ側の頂点はテー"
+                "ブル＋ティップ開き＋ティップレール厚で決まっているので、"
+                "これを下回るとビークがティップから後ろへ向かって低くなります "
+                "——実測 18.0° の「ティップからバイトへ立ち上がる直線ランプ」"
+                "ではもはやありません。{flat2}mm 以上にしてください。",
+                bh=f"{bh:.2f}", flat=f"{flat:.2f}", flat2=f"{flat:.2f}"))
     return None
 
 
@@ -2284,22 +2333,22 @@ def outer_bounds(p: dict, step: dict | None = None) -> dict:
     return {
         # (1) ボアはシャンクの中に収まる（狭義）
         "bore_dia": {"hi": r_sh * 2.0 - (step.get("bore_dia") or 0.05),
-                     "hi_by": "シャンク径"},
+                     "hi_by": i18n.t("シャンク径")},
         # (1)(2) シャンク径はボア径と最大径に挟まれる
         "shank_dia": {"lo": p["bore_dia"] + (step.get("shank_dia") or 0.1),
-                      "lo_by": "ボア径", "hi": r_max * 2.0, "hi_by": "最大径"},
+                      "lo_by": i18n.t("ボア径"), "hi": r_max * 2.0, "hi_by": i18n.t("最大径")},
         # (2) 最大径は本当に最大（等号は通る）
-        "body_dia": {"lo": r_sh * 2.0, "lo_by": "シャンク径"},
+        "body_dia": {"lo": r_sh * 2.0, "lo_by": i18n.t("シャンク径")},
         # (3) 踵の床。**2 本は互いに相手**なので、片方の壁はもう片方の現在値で動く
         "shank_length": {"hi": shank_length_at_heel_floor(p),
-                         "hi_by": "肩の長さ比と全長"},
+                         "hi_by": i18n.t("肩の長さ比と全長")},
         "shoulder_ratio": {"hi": shoulder_ratio_at_heel_floor(p),
-                           "hi_by": "シャンク長と全長"},
+                           "hi_by": i18n.t("シャンク長と全長")},
         # (6) ビーク高さ。上は胴の全高、下は稜線が前下がりになる点
         "beak_height": {"lo": beak_height_flat(p),
-                        "lo_by": "テーブル角とティップ開き",
+                        "lo_by": i18n.t("テーブル角とティップ開き"),
                         "hi": beak_height_at_body_top(p),
-                        "hi_by": "最大径と全長"},
+                        "hi_by": i18n.t("最大径と全長")},
     }
 
 
@@ -2708,39 +2757,39 @@ def param_regions(p: dict) -> dict:
                 "side": side, "label": label}
 
     return {
-        "tip_opening":     r(0.0, fl, "bottom", "フェイシング（ティップ〜カーブ終端）"),
-        "facing_length":   r(0.0, fl, "bottom", "フェイシング（ティップ〜カーブ終端）"),
-        "facing_curve":    r(0.0, fl, "bottom", "フェイシングカーブ"),
-        "tip_rail_width":  r(0.0, max(z_start + 1.0, 2.5), "bottom", "ティップレール"),
-        "tip_rail_thickness": r(0.0, max(z_start + 1.0, 2.5), "all", "ティップレール厚"),
-        "tip_chamfer":     r(0.0, max(tip_chamfer_len(p), 0.05), "all", "ティップ前縁の面取り"),
-        "side_rail_width": r(z_start, z_we, "bottom", "サイドレール（窓の両脇）"),
-        "table_angle":     r(0.0, heel, "bottom", "テーブル平面（傾き）"),
-        "baffle_type":     r(z_start, zb, "all", "バッフル（窓の天井）"),
-        "baffle_height":   r(z_start, z_baffle_end, "all", "バッフル（窓の天井）"),
-        "baffle_plateau":  r(z_start, zb, "all", "バッフルの棚とランプ"),
-        "baffle_step_rise": r(z_baffle_end, baffle_step_end_z(p), "all", "バッフルの段"),
-        "baffle_curvature": r(z_baffle_end, zb, "all", "バッフルのカーブ"),
-        "rollover_radius": r(z_baffle_end, zb, "all", "バッフル肩の丸み"),
-        "throat_ratio":    r(zb - 6.0, zb, "all", "スロート（最狭部）"),
-        "chamber_ratio":   r(z_we, zb - 2.0, "all", "チェンバー（最大部）"),
-        "chamber_shape":   r(z_we, zb, "all", "チェンバー断面"),
-        "bore_dia":        r(zb, length, "all", "ボア（円筒部）"),
-        "bore_length":     r(zb, length, "all", "ボア（円筒部）"),
+        "tip_opening":     r(0.0, fl, "bottom", i18n.t("フェイシング（ティップ〜カーブ終端）")),
+        "facing_length":   r(0.0, fl, "bottom", i18n.t("フェイシング（ティップ〜カーブ終端）")),
+        "facing_curve":    r(0.0, fl, "bottom", i18n.t("フェイシングカーブ")),
+        "tip_rail_width":  r(0.0, max(z_start + 1.0, 2.5), "bottom", i18n.t("ティップレール")),
+        "tip_rail_thickness": r(0.0, max(z_start + 1.0, 2.5), "all", i18n.t("ティップレール厚")),
+        "tip_chamfer":     r(0.0, max(tip_chamfer_len(p), 0.05), "all", i18n.t("ティップ前縁の面取り")),
+        "side_rail_width": r(z_start, z_we, "bottom", i18n.t("サイドレール（窓の両脇）")),
+        "table_angle":     r(0.0, heel, "bottom", i18n.t("テーブル平面（傾き）")),
+        "baffle_type":     r(z_start, zb, "all", i18n.t("バッフル（窓の天井）")),
+        "baffle_height":   r(z_start, z_baffle_end, "all", i18n.t("バッフル（窓の天井）")),
+        "baffle_plateau":  r(z_start, zb, "all", i18n.t("バッフルの棚とランプ")),
+        "baffle_step_rise": r(z_baffle_end, baffle_step_end_z(p), "all", i18n.t("バッフルの段")),
+        "baffle_curvature": r(z_baffle_end, zb, "all", i18n.t("バッフルのカーブ")),
+        "rollover_radius": r(z_baffle_end, zb, "all", i18n.t("バッフル肩の丸み")),
+        "throat_ratio":    r(zb - 6.0, zb, "all", i18n.t("スロート（最狭部）")),
+        "chamber_ratio":   r(z_we, zb - 2.0, "all", i18n.t("チェンバー（最大部）")),
+        "chamber_shape":   r(z_we, zb, "all", i18n.t("チェンバー断面")),
+        "bore_dia":        r(zb, length, "all", i18n.t("ボア（円筒部）")),
+        "bore_length":     r(zb, length, "all", i18n.t("ボア（円筒部）")),
         "cork_depth":      r(length - p["cork_depth"], length, "all",
-                             "シャンク（ネック挿入部）"),
-        "window_length":   r(z_start, z_we, "bottom", "ウィンドウ（リード開口）"),
-        "reed_width":      r(z_start, z_we, "bottom", "テーブル・窓幅"),
-        "beak_height":     r(0.0, _BEAK_BLEND1 * heel, "top", "ビーク（上面）"),
-        "body_dia":        r(*ligature_seat_range(p), "all", "ボディ（リガチャー座）"),
-        "shank_dia":       r(heel, length, "all", "シャンク"),
-        "shank_length":    r(length - shank_length(p), length, "all", "シャンク平行部"),
-        "shoulder_ratio":  r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
+                             i18n.t("シャンク（ネック挿入部）")),
+        "window_length":   r(z_start, z_we, "bottom", i18n.t("ウィンドウ（リード開口）")),
+        "reed_width":      r(z_start, z_we, "bottom", i18n.t("テーブル・窓幅")),
+        "beak_height":     r(0.0, _BEAK_BLEND1 * heel, "top", i18n.t("ビーク（上面）")),
+        "body_dia":        r(*ligature_seat_range(p), "all", i18n.t("ボディ（リガチャー座）")),
+        "shank_dia":       r(heel, length, "all", i18n.t("シャンク")),
+        "shank_length":    r(length - shank_length(p), length, "all", i18n.t("シャンク平行部")),
+        "shoulder_ratio":  r(heel, shank_start_z(p), "all", i18n.t("肩（最大径→シャンク径）")),
         # 歪みの 2 つは最大径（頂点）を跨がない。領域もその境で切る。
-        "body_waist":      r(0.0, heel, "all", "胴（ティップ〜最大径）"),
-        "shoulder_fullness": r(heel, shank_start_z(p), "all", "肩（最大径→シャンク径）"),
-        "overall_length":  r(0.0, length, "all", "全体"),
-        "min_wall":        r(0.0, length, "all", "全体（肉厚）"),
+        "body_waist":      r(0.0, heel, "all", i18n.t("胴（ティップ〜最大径）")),
+        "shoulder_fullness": r(heel, shank_start_z(p), "all", i18n.t("肩（最大径→シャンク径）")),
+        "overall_length":  r(0.0, length, "all", i18n.t("全体")),
+        "min_wall":        r(0.0, length, "all", i18n.t("全体（肉厚）")),
     }
 
 
@@ -2760,20 +2809,20 @@ def anatomy_regions(p: dict) -> list[dict]:
                 "z1": round(min(z1, length), 2), "side": side}
 
     return [
-        r("ビーク", 0.0, _BEAK_BLEND1 * heel, "top"),
-        r("ティップレール", 0.0, z_start, "bottom"),
-        r("フェイシング", 0.0, fl, "bottom"),
-        r("テーブル", 0.0, heel, "bottom"),
-        r("ウィンドウ", z_start, z_we, "bottom"),
-        r("サイドレール", z_start, z_we, "bottom"),
-        r("バッフル", z_start, z_baffle_end, "top"),
-        r("ランプ", z_baffle_end, z_we, "all"),
-        r("チェンバー", z_we, z_th, "all"),
-        r("ウォール", z_we, z_th, "all"),
-        r("スロート", z_th, zb, "all"),
-        r("ボア", zb, length, "all"),
-        r("バレル", zb, heel, "all"),
-        r("シャンク", heel, length, "all"),
+        r(i18n.t("ビーク"), 0.0, _BEAK_BLEND1 * heel, "top"),
+        r(i18n.t("ティップレール"), 0.0, z_start, "bottom"),
+        r(i18n.t("フェイシング"), 0.0, fl, "bottom"),
+        r(i18n.t("テーブル"), 0.0, heel, "bottom"),
+        r(i18n.t("ウィンドウ"), z_start, z_we, "bottom"),
+        r(i18n.t("サイドレール"), z_start, z_we, "bottom"),
+        r(i18n.t("バッフル"), z_start, z_baffle_end, "top"),
+        r(i18n.t("ランプ"), z_baffle_end, z_we, "all"),
+        r(i18n.t("チェンバー"), z_we, z_th, "all"),
+        r(i18n.t("ウォール"), z_we, z_th, "all"),
+        r(i18n.t("スロート"), z_th, zb, "all"),
+        r(i18n.t("ボア"), zb, length, "all"),
+        r(i18n.t("バレル"), zb, heel, "all"),
+        r(i18n.t("シャンク"), heel, length, "all"),
     ]
 
 
@@ -2967,21 +3016,21 @@ def outer_handles(p: dict, ranges: dict) -> list[dict]:
         return (_outer_at(p, key, v_lo, z), _outer_at(p, key, v_hi, z))
 
     return [
-        h("body_waist", "胴の膨らみ", "y", z_waist, "比",
+        h("body_waist", i18n.t("胴の膨らみ"), "y", z_waist, i18n.t("比"),
           y_span("body_waist", z_waist)),
-        h("body_dia", "最大径", "y", heel, "mm", y_span("body_dia", heel)),
+        h("body_dia", i18n.t("最大径"), "y", heel, "mm", y_span("body_dia", heel)),
         # t=0 が z*=hi（平行部が最短＝シャンク長が最小）、t=1 が z*=lo。
         # **可動域は生レンジより狭い**: この外では肩比が域外になり heel_z を
         # 保てない。全域を振りたければ左のスライダを使う（最大径の位置ごと動く）。
-        h("shank_length", "肩の終わり", "z", z_sh, "mm", (hi, lo),
+        h("shank_length", i18n.t("肩の終わり"), "z", z_sh, "mm", (hi, lo),
           limits=(length - hi, length - lo),
           also=[{"key": "shoulder_ratio",
                  # ここも解の係数。9 桁まで残すと残差は 1e-7mm 台に収まる。
                  "min": round((hi - heel) / heel, 9),
                  "max": round((lo - heel) / heel, 9)}]),
-        h("shoulder_fullness", "肩の張り", "y", z_should, "比",
+        h("shoulder_fullness", i18n.t("肩の張り"), "y", z_should, i18n.t("比"),
           y_span("shoulder_fullness", z_should)),
-        h("shank_dia", "シャンク径", "y", z_shank, "mm",
+        h("shank_dia", i18n.t("シャンク径"), "y", z_shank, "mm",
           y_span("shank_dia", z_shank)),
     ]
 
@@ -3047,18 +3096,18 @@ def baffle_handles(p: dict, ranges: dict | None = None) -> list[dict]:
         }
 
     return [
-        h("baffle_height", "バッフル高さ", "y", z_h, bh_lo, bh_hi, "mm", 0.1,
+        h("baffle_height", i18n.t("バッフル高さ"), "y", z_h, bh_lo, bh_hi, "mm", 0.1,
           (_roof_at(p, "baffle_height", bh_lo, z_h),
            _roof_at(p, "baffle_height", bh_hi, z_h))),
-        h("baffle_plateau", "棚の終わり（段の位置）", "z", z_pl, pl_lo, pl_hi, "比", 0.01,
+        h("baffle_plateau", i18n.t("棚の終わり（段の位置）"), "z", z_pl, pl_lo, pl_hi, i18n.t("比"), 0.01,
           (pl_lo * zb, pl_hi * zb)),
-        h("baffle_step_rise", "段の立ち上がり", "y", z_rise, sr_lo, sr_hi, "比", 0.05,
+        h("baffle_step_rise", i18n.t("段の立ち上がり"), "y", z_rise, sr_lo, sr_hi, i18n.t("比"), 0.05,
           (_roof_at(p, "baffle_step_rise", sr_lo, z_rise),
            _roof_at(p, "baffle_step_rise", sr_hi, z_rise))),
-        h("baffle_curvature", "カーブ量", "y", z_curve, cv_lo, cv_hi, "比", 0.05,
+        h("baffle_curvature", i18n.t("カーブ量"), "y", z_curve, cv_lo, cv_hi, i18n.t("比"), 0.05,
           (_roof_at(p, "baffle_curvature", cv_lo, z_curve),
            _roof_at(p, "baffle_curvature", cv_hi, z_curve))),
-        h("rollover_radius", "肩の丸みの終わり", "z",
+        h("rollover_radius", i18n.t("肩の丸みの終わり"), "z",
           min(z_pl + p.get("rollover_radius", 8.0), zb), ro_lo, ro_hi, "mm", 0.5,
           (min(z_pl + ro_lo, zb), min(z_pl + ro_hi, zb))),
     ]
@@ -3125,12 +3174,17 @@ def cavity_warnings(p: dict) -> list[str]:
         if raw > shell_limit(p, z)["top"] - 0.02:
             hit = z if hit is None else hit
     if hit is not None:
-        out.append(f"z≈{hit:.1f}mm から先で天井がビーク下の肉厚上限に当たっています。"
-                   "これ以上バッフルを開いても形は変わりません（min_wall / beak_height で決まる上限）")
+        out.append(i18n.t(
+            "z≈{hit}mm から先で天井がビーク下の肉厚上限に当たっています。"
+            "これ以上バッフルを開いても形は変わりません（min_wall / "
+            "beak_height で決まる上限）",
+            hit=f"{hit:.1f}"))
     d = window_open_z(p) - window_front_z(p)
     if abs(d) > 0.15:
-        out.append(f"窓の開き始めが設計値より {d:+.2f}mm ずれています"
-                   "（ティップレール幅が指定どおりになりません）")
+        out.append(i18n.t(
+            "窓の開き始めが設計値より {d}mm ずれています（ティップレー"
+            "ル幅が指定どおりになりません）",
+            d=f"{d:+.2f}"))
     # 窓の後端側。`window_length` を上げても形が変わらない帯があり、しかも
     # スライダの可動域から到達できる（`window_length_effective` を見ること）。
     short = window_length_shortfall(p)
@@ -3142,24 +3196,29 @@ def cavity_warnings(p: dict) -> list[str]:
         # 挙がらない** —— `window_length` の説明文だけが「これを縮める」と
         # 言っていて、実際に読まれる警告が古い、という食い違いだった。
         gap = p.get("chamber_to_bore_mm", _CHAMBER_TO_BORE_DEFAULT_MM)
-        out.append(f"ウィンドウ長が {short:.1f}mm 届いていません"
-                   f"（指定 {p['window_length']:.1f} → 実際 "
-                   f"{window_length_effective(p):.1f}mm）。窓の後端は"
-                   f"チェンバー→ボアの遷移区間を残すため「ボアの始まり "
-                   f"{bore_start_z(p):.1f} − チェンバー→ボアの遷移 "
-                   f"{gap:.1f}mm」で頭打ちになります。ここから先へ伸ばすには"
-                   f"「チェンバー→ボアの遷移」を縮める / 全長を長く / "
-                   f"ボア長を短くしてください"
-                   f"（ウィンドウ長を上げても形は変わりません）")
+        out.append(i18n.t(
+            "ウィンドウ長が {short}mm 届いていません（指定 {window_length} "
+            "→ 実際 {window_length_effective}mm）。窓の後端はチェンバー"
+            "→ボアの遷移区間を残すため「ボアの始まり {bore_start_z} − "
+            "チェンバー→ボアの遷移 {gap}mm」で頭打ちになります。"
+            "ここから先へ伸ばすには「チェンバー→ボアの遷移」を縮める / "
+            "全長を長く / ボア長を短くしてください（ウィンドウ長を上げても形は"
+            "変わりません）",
+            short=f"{short:.1f}", window_length=f"{p['window_length']:.1f}",
+            window_length_effective=f"{window_length_effective(p):.1f}",
+            bore_start_z=f"{bore_start_z(p):.1f}", gap=f"{gap:.1f}"))
     # 息の通り道。`_soft_min` の丸め（最大 k/2）は差と見ない。
     ent, h_min, z_min = airway_min(p)
     if ent - h_min > _ROOF_SOFT_K / 2.0:
-        out.append(f"息の通り道が入口より奥で狭くなっています: 入口（ティップ）"
-                   f"{ent:.2f}mm に対し z≈{z_min:.1f}mm で {h_min:.2f}mm ＝ "
-                   f"入口の {h_min / ent * 100:.0f}%。リード先端から入った息を"
-                   f"ここで絞ります。バッフル高さ {p['baffle_height']:.1f}mm を"
-                   f"下げてください（**ティップ開きを広げると悪くなります** —— "
-                   f"上がるのは入口だけで、奥は動きません）")
+        out.append(i18n.t(
+            "息の通り道が入口より奥で狭くなっています: 入口（ティップ）"
+            "{ent}mm に対し z≈{z_min}mm で {h_min}mm ＝ 入口の {h_min2}%。"
+            "リード先端から入った息をここで絞ります。"
+            "バッフル高さ {baffle_height}mm を下げてください（**ティップ開きを"
+            "広げると悪くなります** —— 上がるのは入口だけで、奥は動きません）",
+            ent=f"{ent:.2f}", z_min=f"{z_min:.1f}", h_min=f"{h_min:.2f}",
+            h_min2=f"{h_min / ent * 100:.0f}",
+            baffle_height=f"{p['baffle_height']:.1f}"))
     return out
 
 

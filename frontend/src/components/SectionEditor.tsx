@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, inSectionPlane, type SectionData, type SectionHandle } from "../api";
+import { t, useLang } from "../i18n";
 
 interface Props {
   /** 画面が持っている現在のパラメータ。そのままサーバへ渡して断面を描く */
@@ -50,9 +51,9 @@ function valuesAt(h: SectionHandle, coord: number): Record<string, number> {
   if (Math.abs(s1 - s0) < 1e-9 || Math.abs(span) < 1e-12) {
     return { [h.key]: h.value };
   }
-  const t = Math.min(Math.max((coord - s0) / (s1 - s0), 0), 1);
+  const frac = Math.min(Math.max((coord - s0) / (s1 - s0), 0), 1);
   const step = h.step || 0.01;
-  const v = Math.min(Math.max(Math.round((h.min + t * span) / step) * step,
+  const v = Math.min(Math.max(Math.round((h.min + frac * span) / step) * step,
                               Math.min(h.min, h.max)),
                      Math.max(h.min, h.max));
   const out: Record<string, number> = { [h.key]: v };
@@ -64,6 +65,7 @@ function valuesAt(h: SectionHandle, coord: number): Record<string, number> {
 export default function SectionEditor({
   params, onChange, onPreview, modelBusy, showDims, onToggleDims, hoverKey,
 }: Props) {
+  useLang();
   const [data, setData] = useState<SectionData | null>(null);
   const [err, setErr] = useState("");
   const [zoomAll, setZoomAll] = useState(false);
@@ -160,7 +162,9 @@ export default function SectionEditor({
   // 取得に失敗しても直前の断面は残す（ドラッグ中の1本が落ちただけで画面が
   // 消えると、何を触っていたか分からなくなる）。
   if (!data) {
-    return <div className="sec-msg">{err ? `断面を取得できません: ${err}` : "断面を計算中…"}</div>;
+    return <div className="sec-msg">{err
+      ? t("断面を取得できません: {why}", { why: err })
+      : t("断面を計算中…")}</div>;
   }
 
   const c = data.curves;
@@ -246,7 +250,8 @@ export default function SectionEditor({
                   y={-((g.ay + g.by) / 2 + g.ty * 2.2)}
                   fontSize={fs} textAnchor="middle" dominantBaseline="middle">
               {`${g.d.label} ${g.d.value.toFixed(2)}${g.d.unit ? " " + g.d.unit : ""}`}
-              {g.d.requested !== undefined && `（指定 ${g.d.requested.toFixed(2)}）`}
+              {g.d.requested !== undefined
+                && t("（指定 {n}）", { n: g.d.requested.toFixed(2) })}
             </text>
           </g>
         ))}
@@ -270,16 +275,16 @@ export default function SectionEditor({
       <div className="sec-legend">
         <div className="sec-tabs">
           <button className={zoomAll ? "" : "active"} onClick={() => setZoomAll(false)}>
-            バッフル
+            {t("バッフル")}
           </button>
           <button className={zoomAll ? "active" : ""} onClick={() => setZoomAll(true)}>
-            外形（全体）
+            {t("外形（全体）")}
           </button>
         </div>
         {(data.dimensions ?? []).length > 0 && (
           <button className={"sec-dim-toggle" + (showDims ? " active" : "")}
-                  onClick={onToggleDims} title="パラメータの寸法を図示する">
-            📏 寸法
+                  onClick={onToggleDims} title={t("パラメータの寸法を図示する")}>
+            {t("📏 寸法")}
           </button>
         )}
         {handles.map((h) => (
@@ -292,23 +297,23 @@ export default function SectionEditor({
         {handles.length === 0 && (
           <span className="sec-chip">
             {group === "baffle"
-              ? "このバッフル種別に断面ハンドルはありません"
-              : "この部品に外形ハンドルはありません"}
+              ? t("このバッフル種別に断面ハンドルはありません")
+              : t("この部品に外形ハンドルはありません")}
           </span>
         )}
         {/* 断面と数値は即座に追随するが 3D は数秒遅れる。壊れているのではなく
             まだ計算中だと分かるように、断面タブからも見えるようにしておく。 */}
-        {modelBusy && <span className="sec-chip busy">⏳ 3D を再生成中…</span>}
+        {modelBusy && <span className="sec-chip busy">{t("⏳ 3D を再生成中…")}</span>}
       </div>
 
-      {err && <div className="sec-warn">⚠ 断面の更新に失敗しました: {err}</div>}
+      {err && <div className="sec-warn">{t("⚠ 断面の更新に失敗しました: ")}{err}</div>}
       {/* 平常時の警告は右パネルの「⚠ 注意」カード 1 か所に寄せてある。ここに
           残すのは**掴んでいる間だけ** —— `/api/section?key=値` は毎フレーム
           叩かれるので、離す前の値での注意が出るのはこちらだけ（右カードは
           確定＝`PUT` を待つ）。見出しを付けるのは、確定前の値で出ている行と
           右カードの行が食い違って見えるのを断つため。 */}
       {dragKey !== null && data.warnings.length > 0 && (
-        <div className="sec-warn">⚠ この位置での注意:</div>
+        <div className="sec-warn">{t("⚠ この位置での注意:")}</div>
       )}
       {dragKey !== null && data.warnings.map((w, i) => (
         <div className="sec-warn" key={i}>・{w}</div>

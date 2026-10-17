@@ -12,6 +12,9 @@ frontend/dist/
 # SaxSketch の生成物
 exports/
 *.wproj
+# ただしサンプルだけは追跡する。**これが無いと、新しく来た人は「開く」で
+# 開ける物を 1 つも持っていない**（新規作成しかできない）。
+!examples/*.wproj
 *.stl
 *.step
 *.stp
@@ -22,8 +25,15 @@ exports/
 *.FCStd
 *.FCBak
 
-# 端末固有（絶対パスの許可リスト。共有すると他環境で無意味）
+# 端末固有（絶対パス・機械ごとの設定。共有すると他環境で無意味か有害）
 .claude/settings.local.json
+.claude/launch.json
+.claude/scheduled_tasks.lock
+
+# 他人の著作物。`cad/windycity/ATTRIBUTION.md` を読むこと。
+# 上の *.3mf / *.stl / *.FCStd で既に外れているが、**理由が別**なので
+# ここにも書いておく（生成物だから、ではなく、再配布できないから）。
+cad/windycity/reference_aligned.stl
 
 # OS
 Thumbs.db

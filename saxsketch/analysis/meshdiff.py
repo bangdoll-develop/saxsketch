@@ -15,14 +15,51 @@ import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
 
+from saxsketch import i18n
+
 SAMPLE_COUNT = 200_000
 # 判定しきい値 [mm]
 DEV_UNCHANGED = 0.15
 DEV_MINOR = 0.50
 
+#: 読んでよいファイルの上限 [byte]。
+#:
+#: この入口は HTTP から絶対パスで叩ける（`/api/manual/import`・
+#: `/api/external/load`・`/api/survey/measure`）。**3MF は ZIP なので、
+#: 数十 KB のファイルがギガバイトの XML へ展開できる**（zip 爆弾）。
+#: 自分で出す model.3mf は 3 サイズとも 1MB 未満、手彫りした STL でも
+#: 数十 MB なので、128MB は実用の 100 倍以上ある。
+MAX_FILE_BYTES = 128 * 1024 * 1024
+
+#: 読んだあとの面数の上限。
+#:
+#: ファイルが小さくても展開後が巨大になりうるので、バイト数とは別に要る。
+#: `mesh_quality` の水密判定と `region_deviations` の 20 万点サンプリングは
+#: 面数に効くので、ここを抜かれると CPU と RAM が尽きる。
+#: 自分で出すメッシュは 5 万面前後。
+MAX_FACES = 5_000_000
+
+
+def _check_size(p: Path) -> None:
+    """読む前にファイルサイズを見る。超えたら読まない（読んでからでは遅い）。"""
+    size = p.stat().st_size
+    if size > MAX_FILE_BYTES:
+        raise ValueError(
+            i18n.t("ファイルが大きすぎます: %.1fMB（上限 %dMB）")
+            % (size / 1048576.0, MAX_FILE_BYTES // 1048576))
+
+
+def _check_faces(m: trimesh.Trimesh) -> trimesh.Trimesh:
+    """読んだあとの面数を見る。圧縮の向こう側はサイズでは測れない。"""
+    n = len(getattr(m, "faces", ()))
+    if n > MAX_FACES:
+        raise ValueError(i18n.t("面が多すぎます: %d 面（上限 %d 面）") % (n, MAX_FACES))
+    return m
+
 
 def load_mesh(path: str | Path) -> trimesh.Trimesh:
     p = Path(path)
+    _check_size(p)
     suffix = p.suffix.lower()
     if suffix in (".stl", ".3mf", ".obj", ".ply"):
         m = trimesh.load(str(p), force="mesh")
@@ -36,10 +73,12 @@ def load_mesh(path: str | Path) -> trimesh.Trimesh:
             export_model(part, f, "stl", tolerance=0.02)
             m = trimesh.load(str(f), force="mesh")
     else:
-        raise ValueError(f"未対応の形式です: {suffix}（STL / 3MF / STEP に対応）")
+        raise ValueError(i18n.t(
+            "未対応の形式です: {suffix}（STL / 3MF / STEP に対応）",
+            suffix=f"{suffix}"))
     if isinstance(m, trimesh.Scene):
         m = m.to_mesh()
-    return m
+    return _check_faces(m)
 
 
 def mesh_quality(m: trimesh.Trimesh) -> dict:
@@ -136,12 +175,12 @@ def _exact_dist(pts: np.ndarray, other: trimesh.Trimesh,
 
 def _verdict(dev: float | None) -> str:
     if dev is None:
-        return "判定不可"
+        return i18n.t("判定不可")
     if dev < DEV_UNCHANGED:
-        return "変化なし"
+        return i18n.t("変化なし")
     if dev < DEV_MINOR:
         return "軽微"
-    return "変化あり"
+    return i18n.t("変化あり")
 
 
 def region_deviations(ref: trimesh.Trimesh, edited: trimesh.Trimesh,

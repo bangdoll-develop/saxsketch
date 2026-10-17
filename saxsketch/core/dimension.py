@@ -15,6 +15,8 @@ import math
 
 from .schema import ParamSpec
 
+from saxsketch import i18n
+
 
 def dim(a, b, direction, *, spec: ParamSpec | None = None,
         params: dict | None = None, level: int = 0,
@@ -43,7 +45,7 @@ def dim(a, b, direction, *, spec: ParamSpec | None = None,
     dx, dy, dz = (float(v) for v in direction)
     n = math.sqrt(dx * dx + dy * dy + dz * dz)
     if n < 1e-12:
-        raise ValueError("寸法線を逃がす向きがゼロベクトルです")
+        raise ValueError(i18n.t("寸法線を逃がす向きがゼロベクトルです"))
     dx, dy, dz = dx / n, dy / n, dz / n
 
     out = {

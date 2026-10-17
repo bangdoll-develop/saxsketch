@@ -5,6 +5,13 @@ SaxSketch のマウスピース ベース形状を、実在のマウスピース
 （`WindyCity-Tenor-72-100-LS.3mf`）の実測から起こし直した。
 ここにあるのは「実測 → 構成式化 → 検証」の一式。
 
+> **この 3mf は他人の著作物で、ライセンスは CC BY-NC-SA。**
+> 原作者・取得元・来歴・リポジトリでの扱い（**何を配っていないか**、
+> どの図が CC BY-NC-SA なのか、収益化するなら何が要るのか）は
+> **[ATTRIBUTION.md](ATTRIBUTION.md) に 1 か所でまとめてある。**
+> ファイルそのものはここには無い。`align_reference.py` は環境変数
+> `WINDYCITY_3MF` で場所を受け取る。
+
 **この README で「実物」と呼んでいるのは、この 3mf のメッシュのこと。**
 物としてのマウスピースは手元に無い（2026-09-23 に確認）——
 入口は `align_reference.py` の `SRC_DEFAULT` 1 か所で、そこにあるのは
@@ -23,13 +30,13 @@ SaxSketch のマウスピース ベース形状を、実在のマウスピース
 | ファイル | 内容 |
 |---|---|
 | `align_reference.py` | 3mf を **ボア軸基準**へ整列して `reference_aligned.stl` を出す |
-| `reference_aligned.stl` | 整列済みの実物メッシュ（以降すべての基準） |
+| `reference_aligned.stl` | 整列済みの実物メッシュ（以降すべての基準）。**配らない** —— 原メッシュの複製そのもの |
 | `verify_base.py` | 新ベースと実物の突き合わせ → `verify_report.md` |
 | `verify_report.md` | ランドマーク照合・表面偏差・窓輪郭・断面法則の連続性・3サイズのビルド結果（自動生成） |
 | `build_base.py` | FreeCAD ソリッド化＋実物メッシュ重ね → `base_{tenor,alto,soprano}.FCStd` |
-| `base_tenor.FCStd` ほか | FreeCAD で開ける新ベース（tenor には実物メッシュを同梱） |
+| `base_tenor.FCStd` ほか | FreeCAD で開ける新ベース（tenor には実物メッシュを同梱）。**配らない** —— 原メッシュを抱えている |
 | `base_tenor.stl` | 検証で使ったモデル メッシュ |
-| `render_overlay.py` / `overlay_base.png` | 側面・上面の点群重ね合わせ（全体像の確認用） |
+| `render_overlay.py` / `overlay_base.png` | 側面・上面の点群重ね合わせ（全体像の確認用）。**図は CC BY-NC-SA**（原メッシュを描いている） |
 | `render_sections.py` | **各軸の断面比較図**を出す（下記3枚） |
 | `sections_xy.png` | XY 横断面（z = 2/4/8/14/22/30/38/44/60/90 の10枚） |
 | `sections_yz_xz.png` | YZ 縦断面（x=0/4/7）＋ XZ 水平断面（リード面+0.3 / y=0 / y=+6） |
@@ -1081,7 +1088,7 @@ shoulder_ratio = (z* − heel_z) / heel_z
 ## 再生成
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/align_reference.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/verify_base.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/render_sections.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/render_overlay.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/align_reference.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/verify_base.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/render_sections.py && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/render_overlay.py"
 ```
 
 ```bash
@@ -1091,7 +1098,7 @@ wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/m
 STEP 用プリミティブ表現の掃引と、FreeCAD での STEP 往復＋フィレット:
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/sweep_cad.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/windycity/sweep_cad.py"
 ```
 
 ```bash

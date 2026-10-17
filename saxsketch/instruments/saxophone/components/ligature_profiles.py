@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import math
 
+from saxsketch import i18n
+
 from . import profiles
 from . import reed_profiles as rp
 
@@ -365,10 +367,14 @@ def bridge_floor_error(lig_p: dict) -> str | None:
     need = (bridge_thickness(lig_p) + _BRIDGE_MERGE + _BRIDGE_GAP
             + _BRIDGE_MIN_FLOOR)
     if lig_p["band_thickness"] < need:
-        return (f"逆締めの橋（厚み {bridge_thickness(lig_p):.1f}mm）と逃げ "
-                f"{_BRIDGE_GAP:.1f}mm がバンド厚に収まりません（必要 "
-                f"{need:.2f}mm 以上 / いま {lig_p['band_thickness']:.1f}mm）。"
-                f"バンド厚を上げるか最小肉厚を下げてください。")
+        return (i18n.t(
+            "逆締めの橋（厚み {bridge_thickness}mm）と逃げ {bridge_gap}mm "
+            "がバンド厚に収まりません（必要 {need}mm 以上 / "
+            "いま {band_thickness}mm）。バンド厚を上げるか最小肉厚を下げてくだ"
+            "さい。",
+            bridge_thickness=f"{bridge_thickness(lig_p):.1f}",
+            bridge_gap=f"{_BRIDGE_GAP:.1f}", need=f"{need:.2f}",
+            band_thickness=f"{lig_p['band_thickness']:.1f}"))
     return None
 
 
@@ -634,7 +640,7 @@ def ear_span(ref_p: dict, lig_p: dict,
     """
     if str(lig_p.get("closure", "screw_beak")) == "screw_reed":
         if reed_p is None:
-            raise ValueError("逆締めの耳はリード形状（reed_p）が要ります")
+            raise ValueError(i18n.t("逆締めの耳はリード形状（reed_p）が要ります"))
         z0, z1 = seat_range(ref_p, lig_p)
         base = tab_outer_y(ref_p, lig_p, reed_p, (z0 + z1) / 2.0)
         return base, base - lig_p["boss_height"]
@@ -680,10 +686,10 @@ def param_regions(ref_p: dict, lig_p: dict) -> dict:
     def r(side, label):
         return {"z0": round(z0, 2), "z1": round(z1, 2), "side": side, "label": label}
 
-    band = r("all", "バンド（帯）")
-    reed_side = r("bottom", "リード接触面")
+    band = r("all", i18n.t("バンド（帯）"))
+    reed_side = r("bottom", i18n.t("リード接触面"))
     boss = r("bottom" if str(lig_p.get("closure")) == "screw_reed" else "top",
-             "ネジ座（耳）")
+             i18n.t("ネジ座（耳）"))
     return {
         "band_width": band,
         "band_thickness": band,
@@ -694,7 +700,7 @@ def param_regions(ref_p: dict, lig_p: dict) -> dict:
         "screw_count": boss,
         "screw_size": boss,
         "boss_height": boss,
-        "slit_width": r("top", "スリット（締め代）") if str(
+        "slit_width": r("top", i18n.t("スリット（締め代）")) if str(
             lig_p.get("closure")) != "screw_reed" else reed_side,
         "contact_type": reed_side,
         "contact_count": reed_side,

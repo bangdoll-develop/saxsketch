@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import type { ParamBound, ParamSpec, ReferenceInfo } from "../api";
+import { t, useLang } from "../i18n";
 
 interface Props {
   schema: ParamSpec[];
@@ -25,15 +26,15 @@ function ReferenceCard({ reference, onPick, onReset }: {
 }) {
   return (
     <div className="cat refcard">
-      <div className="cat-head"><span>参照マウスピース</span></div>
+      <div className="cat-head"><span>{t("参照マウスピース")}</span></div>
       <div className="param">
         <div className="row1">
           <label>{reference.label}</label>
         </div>
         <div className="effect" title={reference.source ?? ""}>
           {reference.live
-            ? "このセットの設計値に追従中"
-            : reference.source ?? "テンプレート既定値（取込元なし）"}
+            ? t("このセットの設計値に追従中")
+            : reference.source ?? t("テンプレート既定値（取込元なし）")}
         </div>
         <table className="reftable">
           <tbody>
@@ -44,14 +45,14 @@ function ReferenceCard({ reference, onPick, onReset }: {
         </table>
         {!reference.live && (
           <div className="abrow">
-            <button onClick={onReset} disabled={!reference.source}>既定に戻す</button>
-            <button className="primary" onClick={onPick}>.wproj から取込</button>
+            <button onClick={onReset} disabled={!reference.source}>{t("既定に戻す")}</button>
+            <button className="primary" onClick={onPick}>{t(".wproj から取込")}</button>
           </div>
         )}
         <div className="effect">
           {reference.live
-            ? "同じセットの部品なので、あちらを編集すればここも変わります。"
-            : "取込時点の寸法で固定されます。参照元を後から編集しても自動追従しません。"}
+            ? t("同じセットの部品なので、あちらを編集すればここも変わります。")
+            : t("取込時点の寸法で固定されます。参照元を後から編集しても自動追従しません。")}
         </div>
       </div>
     </div>
@@ -87,7 +88,7 @@ function NumberParam({ spec, value, bound, onChange }: {
   const byLo = bound?.lo != null ? bound.lo_by : "";
   const byHi = bound?.hi != null ? bound.hi_by : "";
   // 相手の名前は 2 つ出ることも同じことも同じことがあるので、重複を落として並べる。
-  const partners = [...new Set([byLo, byHi].filter(Boolean))].join("・");
+  const partners = [...new Set([byLo, byHi].filter(Boolean))].join(t("・"));
   const widened = wallLo !== spec.min || wallHi !== spec.max;
   const outside = spec.min !== null && spec.max !== null
     && (value < spec.min || value > spec.max);
@@ -129,9 +130,9 @@ function NumberParam({ spec, value, bound, onChange }: {
         <label>
           {spec.label}
           {outside && <span className="offband" title={
-            `勧める帯は ${spec.min}〜${spec.max}${spec.unit}。`
-            + `いまはその外です（越えられる壁ではありません）`
-          }>帯の外</span>}
+            t("勧める帯は {lo}〜{hi}{unit}。いまはその外です（越えられる壁ではありません）",
+              { lo: spec.min ?? "", hi: spec.max ?? "", unit: spec.unit })
+          }>{t("帯の外")}</span>}
         </label>
         <span className="val">
           <input
@@ -156,14 +157,17 @@ function NumberParam({ spec, value, bound, onChange }: {
         {partners
           // **相手の名前を先に言う。** 「越えられない壁」とだけ書くと、
           // 相手を動かせば届くことが伝わらない（帯の端に立てない 6 端がそれ）。
-          ? `壁 ${fmt(wallLo)}〜${fmt(wallHi)}${spec.unit}（${partners}で動きます）`
-            + ` ／ 勧める帯 ${spec.min}〜${spec.max}${spec.unit}`
+          ? t("壁 {lo}〜{hi}{unit}（{by}で動きます） ／ 勧める帯 {blo}〜{bhi}{unit}",
+              { lo: fmt(wallLo), hi: fmt(wallHi), unit: spec.unit, by: partners,
+                blo: spec.min ?? "", bhi: spec.max ?? "" })
           : widened
-          ? `勧める帯 ${spec.min}〜${spec.max}${spec.unit}（越えられます。壁は `
-            + `${wallLo}〜${wallHi}${spec.unit}）`
-          : `${KIND_LABEL[spec.limit_kind] ?? spec.limit_kind} ${spec.min}〜`
-            + `${spec.max}${spec.unit}`}
-        {" ／ 出所: "}{spec.source || "記載なし"}
+          ? t("勧める帯 {blo}〜{bhi}{unit}（越えられます。壁は {lo}〜{hi}{unit}）",
+              { blo: spec.min ?? "", bhi: spec.max ?? "", unit: spec.unit,
+                lo: String(wallLo), hi: String(wallHi) })
+          : t("{kind} {blo}〜{bhi}{unit}",
+              { kind: t(KIND_LABEL[spec.limit_kind] ?? spec.limit_kind),
+                blo: spec.min ?? "", bhi: spec.max ?? "", unit: spec.unit })}
+        {t(" ／ 出所: ")}{spec.source || t("記載なし")}
       </div>
     </>
   );
@@ -173,6 +177,7 @@ export default function ParamPanel({
   schema, params, bounds, onChange, onHover, regionKeys,
   reference, onPickReference, onResetReference,
 }: Props) {
+  useLang();
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -238,7 +243,7 @@ export default function ParamPanel({
         );
       })}
       <div className="adv-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
-        {showAdvanced ? "▾ 詳細パラメータを隠す" : "▸ 詳細パラメータを表示"}
+        {showAdvanced ? t("▾ 詳細パラメータを隠す") : t("▸ 詳細パラメータを表示")}
       </div>
     </div>
   );

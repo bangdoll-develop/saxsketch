@@ -3,6 +3,7 @@ import {
   api, type Dimension, type ManualEdit, type ParamBound, type ProjectData,
   type Region, type SetPlacement, type Simulation,
 } from "./api";
+import { setLang, t, useLang } from "./i18n";
 import type { ExtraPart } from "./components/Viewer3D";
 import ParamPanel from "./components/ParamPanel";
 import SetPanel from "./components/SetPanel";
@@ -23,6 +24,7 @@ type DialogKind = null | "new" | "goalseek" | "export" | "settings" | "manual" |
 const PART_COLORS = [0xd8b48c, 0x9fd8a8, 0xd89fb4, 0xc0b4e0];
 
 export default function App() {
+  const lang = useLang();
   const [project, setProject] = useState<ProjectData | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [sim, setSim] = useState<Simulation | null>(null);
@@ -75,6 +77,23 @@ export default function App() {
   const manualEditRef = useRef<ManualEdit | null>(null);
   useEffect(() => { manualEditRef.current = manualEdit; }, [manualEdit]);
 
+  // 言語を変えたら**サーバ由来の文字列も取り直す**。ラベル・効果・出所・
+  // 判定文・部品名はサーバが訳して返すので、フロントだけ切り替えると
+  // 画面が半分日本語のまま残る（実際そうなった）。
+  //
+  // `applyProject` は通さない —— あれは部品切替用で、重ねや視点の状態を畳んで
+  // 3D を作り直す。言語は形を 1 ビットも変えないので、文字列だけ入れ替える。
+  // 殻（index.html）のタイトルは静的なので、言語に追随させる。
+  useEffect(() => { document.title = t("SaxSketch — 管楽器設計スタジオ"); }, [lang]);
+
+  const langSettled = useRef(false);
+  useEffect(() => {
+    if (!langSettled.current) { langSettled.current = true; return; }
+    api.getProject().then((p) => {
+      setProject(p); setSim(p.simulation); setBounds(p.bounds ?? {});
+    }).catch(() => { /* プロジェクトが無ければ訳すものも無い */ });
+  }, [lang]);
+
   useEffect(() => {
     // 起動時: サーバに既存セッションがあれば復元、なければ新規ダイアログのまま
     api.getProject().then((p) => {
@@ -90,8 +109,8 @@ export default function App() {
 
   useEffect(() => {
     if (!error) return;
-    const t = setTimeout(() => setError(""), 5000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setError(""), 5000);
+    return () => clearTimeout(timer);
   }, [error]);
 
   // 丸めの報告も `error` と同じ間隔で引っ込める。**`notices` とは違う** ——
@@ -100,20 +119,20 @@ export default function App() {
   // 丸めた結果そのものはスライダの値として見えているので、説明は一度でよい。
   useEffect(() => {
     if (adjust.length === 0) return;
-    const t = setTimeout(() => setAdjust([]), 5000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setAdjust([]), 5000);
+    return () => clearTimeout(timer);
   }, [adjust]);
 
   useEffect(() => {
     if (!staleWarn) return;
-    const t = setTimeout(() => setStaleWarn(false), 9000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setStaleWarn(false), 9000);
+    return () => clearTimeout(timer);
   }, [staleWarn]);
 
   useEffect(() => {
     if (notices.length === 0) return;
-    const t = setTimeout(() => setNotices([]), 12000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setNotices([]), 12000);
+    return () => clearTimeout(timer);
   }, [notices]);
 
   useEffect(() => {
@@ -367,19 +386,19 @@ export default function App() {
     <>
       <div className="toolbar">
         <span className="logo">🎷 SaxSketch</span>
-        <button onClick={() => setDialog("new")}>新規 / 開く</button>
-        <button onClick={() => saveProject(false)} disabled={!project}>保存</button>
-        <button onClick={() => saveProject(true)} disabled={!project}>名前を付けて保存</button>
+        <button onClick={() => setDialog("new")}>{t("新規 / 開く")}</button>
+        <button onClick={() => saveProject(false)} disabled={!project}>{t("保存")}</button>
+        <button onClick={() => saveProject(true)} disabled={!project}>{t("名前を付けて保存")}</button>
         <button onClick={() => setDialog("survey")} disabled={!project}>
-          📐 採寸
+          {t("📐 採寸")}
           {project?.survey?.has_checkpoint && " ✓"}
         </button>
         <button onClick={() => setDialog("manual")} disabled={!project}>
-          🛠 外部編集
+          {t("🛠 外部編集")}
           {manualEdit?.frozen && (manualEdit.stale ? " ⚠" : " 🔒")}
         </button>
         <button className="primary" onClick={() => setDialog("export")} disabled={!project}>
-          📤 エクスポート / 入稿
+          {t("📤 エクスポート / 入稿")}
         </button>
         <span className="spacer" />
         {project && (
@@ -388,7 +407,14 @@ export default function App() {
                  onBlur={(e) => api.putMeta({ name: e.target.value }).catch(() => {})} />
         )}
         {project?.path && <span className="path" title={project.path}>{project.path}</span>}
-        <button onClick={() => setDialog("settings")}>⚙ 設定</button>
+        <button onClick={() => setDialog("settings")}>{t("⚙ 設定")}</button>
+        {/* 言語。**ブラウザの言語で初期値を決め、選択は localStorage に残す。**
+            サーバへは `X-Lang` で毎回送るので、仕様書と入稿 ZIP も同じ言語で出る。 */}
+        <button className="langswitch"
+                title={lang === "ja" ? "Switch to English" : "日本語に切り替える"}
+                onClick={() => setLang(lang === "ja" ? "en" : "ja")}>
+          {lang === "ja" ? "EN" : "日本語"}
+        </button>
       </div>
 
       <div className="main">
@@ -435,33 +461,35 @@ export default function App() {
           <div className="badge">
             {project
               ? (viewMode === "section"
-                  ? `${project.component_label} — 丸ポチをドラッグ（タブでバッフル / 外形を切替）`
+                  ? t("{part} — 丸ポチをドラッグ（タブでバッフル / 外形を切替）",
+                      { part: project.component_label })
                   : viewDerived
                     ? (manualEdit?.derived?.kind === "external"
-                        ? "外部取込モデル（整列後の形状）"
-                        : "外部編集済みモデル（凍結時の形状ベース）")
-                    : `${project.component_label} — ドラッグで回転 / ホイールで拡大縮小`) +
-                (modelBusy && viewMode === "3d" ? "　⏳ 形状を再生成中…" : "") +
+                        ? t("外部取込モデル（整列後の形状）")
+                        : t("外部編集済みモデル（凍結時の形状ベース）"))
+                    : t("{part} — ドラッグで回転 / ホイールで拡大縮小",
+                        { part: project.component_label })) +
+                (modelBusy && viewMode === "3d" ? t("　⏳ 形状を再生成中…") : "") +
                 (refBusy && viewMode === "3d"
-                  ? (showSet ? "　⏳ 他の部品を生成中…" : "　⏳ 参照を生成中…") : "")
-              : "プロジェクトを作成してください"}
+                  ? (showSet ? t("　⏳ 他の部品を生成中…") : t("　⏳ 参照を生成中…")) : "")
+              : t("プロジェクトを作成してください")}
           </div>
           {project && hasSection && (
             <div className="view-tabs">
               <button className={viewMode === "3d" ? "active" : ""}
                       onClick={() => setViewMode("3d")}>3D</button>
               <button className={viewMode === "section" ? "active" : ""}
-                      onClick={() => setViewMode("section")}>断面</button>
+                      onClick={() => setViewMode("section")}>{t("断面")}</button>
             </div>
           )}
           {manualEdit?.derived && viewMode === "3d" && (
             <div className={tabRowClass(derivedRow)}>
               <button className={viewDerived ? "" : "active"}
-                      onClick={() => setViewDerived(false)}>設計形状</button>
+                      onClick={() => setViewDerived(false)}>{t("設計形状")}</button>
               <button className={viewDerived ? "active" : ""}
                       onClick={() => setViewDerived(true)}>
-                {manualEdit.derived.kind === "external" ? "取込モデル" : "編集済み"}
-                {manualEdit.derived.kind !== "external" && manualEdit.stale ? " ⚠旧" : ""}
+                {manualEdit.derived.kind === "external" ? t("取込モデル") : t("編集済み")}
+                {manualEdit.derived.kind !== "external" && manualEdit.stale ? t(" ⚠旧") : ""}
               </button>
             </div>
           )}
@@ -470,29 +498,29 @@ export default function App() {
               {canSetView && (
                 <button className={showSet ? "active" : ""}
                         onClick={() => setShowSet((v) => !v)}
-                        title="セットの他の部品を組んだ位置に重ねる">
-                  🧩 セット
+                        title={t("セットの他の部品を組んだ位置に重ねる")}>
+                  {t("🧩 セット")}
                 </button>
               )}
               {canOverlay && !showSet && (
                 <button className={showRef ? "active" : ""}
                         onClick={() => setShowRef((v) => !v)}
-                        title="参照マウスピースを半透明で重ねる">
-                  🫥 参照MP
+                        title={t("参照マウスピースを半透明で重ねる")}>
+                  {t("🫥 参照MP")}
                 </button>
               )}
               {canDims && (
                 <button className={showDims ? "active" : ""}
                         onClick={() => setShowDims((v) => !v)}
-                        title="パラメータの寸法を図示する">
-                  📏 寸法
+                        title={t("パラメータの寸法を図示する")}>
+                  {t("📏 寸法")}
                 </button>
               )}
             </div>
           )}
           {highlight && !viewDerived && viewMode === "3d" && (
             <div className="badge region-badge">
-              🟠 変更部位: {highlight.label}
+              {t("🟠 変更部位: ")}{highlight.label}
             </div>
           )}
         </div>
@@ -531,26 +559,25 @@ export default function App() {
       )}
       {staleApp && (
         <div className="err-toast warn-toast">
-          ⚠ このページは古いアプリのまま動いています。<b>再読み込み</b>してください
-          （Ctrl+Shift+R）。3D の表示が実際の設計と食い違うことがあります。
+          {t("⚠ このページは古いアプリのまま動いています。")}<b>{t("再読み込み")}</b>
+          {t("してください（Ctrl+Shift+R）。3D の表示が実際の設計と食い違うことがあります。")}
         </div>
       )}
       {error && <div className="err-toast">{error}</div>}
       {staleWarn && (
         <div className="err-toast warn-toast">
-          ⚠ 凍結後にパラメータを変更しました。登録済みの編集済みモデルは古い形状になります
-          （入稿には使用されません）。「🛠 外部編集」から再凍結してやり直してください。
+          {t("⚠ 凍結後にパラメータを変更しました。登録済みの編集済みモデルは古い形状になります（入稿には使用されません）。「🛠 外部編集」から再凍結してやり直してください。")}
         </div>
       )}
       {notices.length > 0 && !staleWarn && (
         <div className="err-toast warn-toast">
-          ⚠ 保存時から変わったパラメータを変換しました:
+          {t("⚠ 保存時から変わったパラメータを変換しました:")}
           {notices.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}
       {adjust.length > 0 && notices.length === 0 && !staleWarn && !error && (
         <div className="err-toast warn-toast">
-          ⚠ 壁に当たったので値を丸めました:
+          {t("⚠ 壁に当たったので値を丸めました:")}
           {adjust.map((n, i) => <div key={i}>・{n}</div>)}
         </div>
       )}

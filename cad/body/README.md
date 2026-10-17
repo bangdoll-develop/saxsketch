@@ -6,7 +6,7 @@
 実行:
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_body.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_body.py"
 ```
 
 ---
@@ -321,7 +321,7 @@ OCCT はこれを噛むと返ってこず、**WSL2 の VM ごと落ちる**（`d
 サイズごと・数通りごとに分けて回すこと。
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_body.py alto 9 6"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_body.py alto 9 6"
 ```
 
 第 2・第 3 引数が開始番号と本数。落ちたら `wsl --shutdown` してから続きの番号で再開する。
@@ -336,8 +336,8 @@ wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/m
 実行:
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_holes.py acoustics"
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_holes.py build alto 0 4"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_holes.py acoustics"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/body/sweep_holes.py build alto 0 4"
 ```
 
 `acoustics` は OCCT を触らないので数秒。`build` は重いので**サイズごと・数通りごと**に。
@@ -347,8 +347,9 @@ wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/m
 ## 足したのは物理ではなく橋渡し
 
 - **TMM に分岐行列**（`acoustics/toneholes.py`）。対称 T 型で、直列 `Za = jω·m_a`、
-  並列 `Zs = jω·m_s + Z_チムニー`。質量は OpenWind の `JunctionTjoint` の
-  長さ補正式（Dubos ら 1999）を**写した**もので、推測していない。
+  並列 `Zs = jω·m_s + Z_チムニー`。質量は Dubos ら 1999 の長さ補正式を
+  **原典から書いた**もので、推測していない（OpenWind の `JunctionTjoint` も
+  同じ原典に拠るので、値が一致することをテストで確かめられる）。
   損失と放射は**管と同じモデル**を使う（側孔だけ別の近似にすると、差が出たとき
   どちらのせいか分からなくなる）。
 - **OpenWind 経路に `holes_valves` と `fingering_chart`**（list をそのまま渡せる）。

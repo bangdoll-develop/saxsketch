@@ -30,6 +30,8 @@ import threading
 import time
 from pathlib import Path
 
+from saxsketch import i18n
+
 log = logging.getLogger(__name__)
 
 #: 1 ビルドの上限 [s]。これを超えたら子を捨てて親側で作り直す。
@@ -132,7 +134,7 @@ class BuildWorker:
             if status != "ready":
                 raise RuntimeError(detail or status)
         except Exception as e:                 # noqa: BLE001
-            log.warning("ビルドワーカを起動できないので親プロセスで作ります: %s", e)
+            log.warning(i18n.t("ビルドワーカを起動できないので親プロセスで作ります: %s"), e)
             self._stop_locked()
             self.alive = False
             return False
@@ -153,8 +155,10 @@ class BuildWorker:
                 return status, detail
             except queue.Empty:
                 if self._proc is None or not self._proc.is_alive():
-                    return "boot_failed", "子プロセスが起動直後に終了しました"
-        return "boot_failed", f"{_BOOT_TIMEOUT:.0f} 秒以内に準備できませんでした"
+                    return "boot_failed", i18n.t("子プロセスが起動直後に終了しました")
+        return "boot_failed", i18n.t(
+            "{boot_timeout} 秒以内に準備できませんでした",
+            boot_timeout=f"{_BOOT_TIMEOUT:.0f}")
 
     def stop(self) -> None:
         with self._lock:
@@ -183,7 +187,7 @@ class BuildWorker:
         """
         with self._lock:
             if not self.alive and not self._start_locked():
-                raise RuntimeError("ビルドワーカが使えません")
+                raise RuntimeError(i18n.t("ビルドワーカが使えません"))
             self._gen += 1
             gen = self._gen
             self._req.put((gen, spec))
@@ -195,13 +199,14 @@ class BuildWorker:
                         timeout=max(deadline - time.monotonic(), 0.0))
                 except queue.Empty:
                     # 詰まった子は捨てる。次の依頼で上げ直す。
-                    log.warning("ビルドワーカが %.0f 秒で応答しないので作り直します",
+                    log.warning(i18n.t(
+                        "ビルドワーカが %.0f 秒で応答しないので作り直します"),
                                 _TIMEOUT)
                     self._stop_locked()
-                    raise RuntimeError("ビルドがタイムアウトしました")
+                    raise RuntimeError(i18n.t("ビルドがタイムアウトしました"))
                 except (EOFError, OSError) as e:
                     self._stop_locked()
-                    raise RuntimeError(f"ビルドワーカが落ちました: {e}")
+                    raise RuntimeError(i18n.t("ビルドワーカが落ちました: {e}", e=f"{e}"))
                 if got != gen:
                     continue          # 古い依頼の結果。読み捨てて次を待つ
                 if status == "ok":

@@ -147,7 +147,7 @@ WSL で `python -m saxsketch.server.app` を上げ、断面タブのハンドル
 ## 再生成
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/perf/bench_ui_latency.py --sizes tenor --types step --worker"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/perf/bench_ui_latency.py --sizes tenor --types step --worker"
 ```
 
 - `--worker` 無しだと親プロセスでビルドする（＝着手前と同じ経路）。

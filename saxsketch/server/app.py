@@ -1,7 +1,7 @@
 """SaxSketch FastAPI サーバ。
 
 起動:  python -m saxsketch.server.app  →  http://127.0.0.1:8712
-       （8712 占有時は WF_PORT で上書き、または空きポートへ自動退避）
+       （8712 占有時は SAX_PORT で上書き、または空きポートへ自動退避）
 """
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from saxsketch import i18n
 from saxsketch.acoustics import goalseek as gs
 from saxsketch.export.bom import bom_csv, bom_csv_set
 from saxsketch.export.models import check_mesh, export_model
@@ -47,6 +49,106 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="SaxSketch", version="0.1.0", lifespan=_lifespan)
+
+
+# ------------------------------------------------------------------ 外から触られない
+#
+# このサーバは「自分の机の上のデスクトップアプリ」で、API は任意の絶対パスを
+# 読み書きし、外部ツールを起動する。**それは設計であって欠陥ではない** ——
+# 入口は OS のファイルダイアログで、利用者が自分で選んだ絶対パスが返ってくる。
+# パスをルート配下へ閉じ込めると製品が壊れるので、守るのはパスではなく
+# **誰がこの API を叩けるか** のほう。
+#
+# ブラウザから外へ開いてしまう経路は 2 つしかない:
+#
+#   1. **DNS リバインディング** —— 悪意あるページが自分のドメインを 127.0.0.1 へ
+#      張り替えると、ブラウザはこのサーバを同一オリジンとみなすので CORS が
+#      効かなくなる。このとき `Host:` は攻撃者のドメインのままなので、
+#      **サーバが自分の名前を知っていれば弾ける**。
+#   2. **クロスサイトの単純リクエスト** —— preflight の要らない形。
+#      `Sec-Fetch-Site` を見れば弾ける。
+#
+# ローカルに閉じている限りこの 2 つで足りるので、認証トークンは置かない ——
+# トークンをフロントへ渡す経路のほうが新しい弱点になる。
+
+#: `Host:` に来てよい名前（ポートは落として比較する）。
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+#: ループバック以外へ出すことを明示的に許すスイッチ。
+#: LAN へ出す＝**認証の無いファイルシステム API を公開する**ことなので、
+#: 既定では `main()` が起動そのものを断る。立てるとこの検査も丸ごと外れる。
+ALLOW_REMOTE = bool(os.environ.get("SAX_ALLOW_REMOTE"))
+
+
+def _host_name(header: str) -> str:
+    """`Host:` からポートを落とす。IPv6 の `[::1]:8712` も剥く。"""
+    h = (header or "").strip().lower()
+    if h.startswith("["):
+        return h[:h.index("]") + 1] if "]" in h else h
+    if h.count(":") > 1:
+        return h          # 角括弧の無い素の IPv6（curl -g など）。ポートは付かない
+    return h.rsplit(":", 1)[0] if ":" in h else h
+
+
+def _refuse(status: int, why: str) -> Response:
+    return Response(status_code=status, content=why,
+                    media_type="text/plain; charset=utf-8")
+
+
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+    """他所のページから叩かれたリクエストを落とす（上のコメントの実装）。
+
+    ヘッダが**無い**ときは通す。curl・テスト・古いブラウザが該当するが、
+    守る相手は「利用者のブラウザで動く他人のページ」であって、ヘッダを
+    送ってこない相手はもうローカルの権限を持っている。
+    """
+    if not ALLOW_REMOTE:
+        host = _host_name(request.headers.get("host", ""))
+        if host and host not in _LOCAL_HOSTS:
+            return _refuse(400, i18n.t("Host {host} は許可されていません。"
+                                "SaxSketch はローカル専用です。", host=repr(host)))
+    if request.headers.get("sec-fetch-site", "") in ("cross-site", "same-site"):
+        return _refuse(403, i18n.t("他のサイトからは操作できません。"))
+    return await call_next(request)
+
+
+class LanguageMiddleware:
+    """表示言語をリクエストごとに決める（`?lang=` か `X-Lang:`）。
+
+    **純 ASGI で書いてある。** `@app.middleware("http")`（`BaseHTTPMiddleware`）は
+    下流を別タスクで走らせるので、そこで立てた `ContextVar` がエンドポイントまで
+    届くかが Starlette のバージョン依存になる。ここは同じタスクの中で立てて
+    そのまま下流を呼ぶので、依存しない。
+
+    **`Accept-Language` は見ない。** 書き出し（仕様書・入稿 ZIP）は「画面で
+    見ていた言語」で出すべきで、ブラウザの申告とは別物だから。既定の言語を
+    ブラウザから推すのは**フロントの仕事**で、フロントは決めた言語を毎回
+    `?lang=` で送ってくる。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            lang = None
+            qs = scope.get("query_string", b"").decode("latin-1")
+            for part in qs.split("&"):
+                if part.startswith("lang="):
+                    lang = part[5:]
+                    break
+            if lang is None:
+                for k, v in scope.get("headers", []):
+                    if k == b"x-lang":
+                        lang = v.decode("latin-1")
+                        break
+            i18n.set_lang(lang)
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(LanguageMiddleware)
+
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
@@ -78,6 +180,18 @@ def frontend_asset() -> str | None:
 # 実体は `hostenv.py`。`filedialog.py` と `state.py` も要るので切り出した
 # （この app が filedialog を import するので、逆向きは循環になる）。
 # 旧来の `app.IS_WSL` を見ている呼び出し（`scripts/wsl_sync.sh`）のため名前は残す。
+
+
+#: `tool="browser"` で既定アプリに渡してよい拡張子。
+#:
+#: `os.startfile` と `cmd /c start` は**拡張子の関連付けで実行する**ので、
+#: `.bat` `.ps1` `.hta` `.lnk` を渡せばそれが走る。渡すのはアプリ自身が
+#: 書き出した物だけのはずなので、その形式に限る（禁止リストではなく許可リスト
+#: にするのは、関連付けで実行される拡張子を数え上げきれないから）。
+_OPENABLE_SUFFIXES = frozenset({
+    ".html", ".htm", ".csv", ".zip", ".svg", ".txt", ".md", ".json",
+    ".stl", ".step", ".stp", ".3mf", ".wav", ".png", ".pdf",
+})
 
 
 def _open_default_app(path: Path) -> None:
@@ -123,7 +237,7 @@ def _reveal_in_explorer(path: Path) -> None:
 
 def _require_project():
     if STATE.project is None:
-        raise HTTPException(status_code=409, detail="プロジェクトが開かれていません")
+        raise HTTPException(status_code=409, detail=i18n.t("プロジェクトが開かれていません"))
 
 
 # ------------------------------------------------------------------ 楽器・プロジェクト
@@ -143,24 +257,28 @@ class NewProject(BaseModel):
 
 @app.post("/api/project/new")
 def project_new(req: NewProject):
-    inst = STATE.registry.get(req.instrument_id)
+    try:
+        inst = STATE.registry.get(req.instrument_id)
+    except KeyError:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("知らない楽器です: {what}", what=req.instrument_id))
     if req.set_id:
         try:
             sdef = inst.set_def(req.set_id)
         except KeyError:
-            raise HTTPException(status_code=400, detail="未知のセットです")
+            raise HTTPException(status_code=400, detail=i18n.t("未知のセットです"))
         missing = [m["component"] for m in sdef["members"]
                    if m.get("required", True)
                    and not (inst.component_classes.get(m["component"])
                             and inst.component_classes[m["component"]].available())]
         if missing:
             raise HTTPException(status_code=400,
-                                detail="このセットの部品に未実装のものがあります")
+                                detail=i18n.t("このセットの部品に未実装のものがあります"))
     else:
         cls = inst.component_classes.get(req.component_id or "")
         if cls is None or not cls.available():
             raise HTTPException(status_code=400,
-                                detail="このコンポーネントは未実装です（後フェーズで追加予定）")
+                                detail=i18n.t("このコンポーネントは未実装です（後フェーズで追加予定）"))
     STATE.new_project(req.instrument_id, req.template_id, req.component_id,
                       req.name, set_id=req.set_id)
     return project_get()
@@ -177,9 +295,11 @@ def project_get():
         "instrument_id": p.instrument_id,
         "template_id": p.template_id,
         "component_id": p.component_id,
-        "component_label": STATE.component.label,
+        "component_label": i18n.component_label(
+            STATE.component.id, STATE.component.label),
         "params": STATE.paramset.values,
-        "schema": STATE.paramset.schema_dicts(),
+        "schema": i18n.localize_spec_dicts(
+            STATE.component.id, STATE.paramset.schema_dicts()),
         # いまの組での**実効の壁**（Phase 4-E B-5）。スキーマの `hard_*` は
         # テンプレート値で作った掛け金なので、関係で決まる 9 本はここが上書きする。
         "bounds": STATE.param_bounds(),
@@ -207,13 +327,13 @@ def project_reference(req: ReferenceReq):
     """参照コンポーネント（リード/リガチャーが従属するマウスピース）を差し替える。"""
     _require_project()
     if req.path is not None and not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404, detail=i18n.t("ファイルが見つかりません"))
     try:
         STATE.set_reference(req.component, req.path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+        raise HTTPException(status_code=400, detail=i18n.t("読み込み失敗: {why}", why=e))
     return project_get()
 
 
@@ -262,13 +382,15 @@ def set_member_import(req: MemberImportReq):
     """既存の単体 .wproj をセットのメンバーとして取り込む。"""
     _require_project()
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         STATE.import_member(req.path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("読み込み失敗: {e}", e=f"{e}"))
     return project_get()
 
 
@@ -344,11 +466,13 @@ def project_save(req: PathReq):
 @app.post("/api/project/open")
 def project_open(req: PathReq):
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         STATE.open_project(req.path)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"読み込み失敗: {e}")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("読み込み失敗: {e}", e=f"{e}"))
     return project_get()
 
 
@@ -438,7 +562,7 @@ async def model_stl(quality: str = "preview"):
     try:
         data = await asyncio.to_thread(STATE.get_stl_bytes, tol)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+        raise HTTPException(status_code=500, detail=i18n.t("形状生成に失敗: {why}", why=e))
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -456,13 +580,15 @@ async def ref_model_stl():
     _require_project()
     if not getattr(STATE.component, "REF_SHARES_FRAME", False):
         raise HTTPException(status_code=404,
-                            detail="このコンポーネントは参照を重ねて表示できません")
+                            detail=i18n.t("このコンポーネントは参照を重ねて表示できません"))
     try:
         data = await asyncio.to_thread(STATE.ref_stl_bytes)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=i18n.t("形状生成に失敗: {e}", e=f"{e}"))
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -485,11 +611,13 @@ async def set_model_stl(member: str):
     """
     _require_project()
     if not STATE.project.has(member):
-        raise HTTPException(status_code=404, detail="この部品はセットにありません")
+        raise HTTPException(status_code=404, detail=i18n.t("この部品はセットにありません"))
     try:
         data = await asyncio.to_thread(STATE.get_stl_bytes, 0.05, member)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"形状生成に失敗: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=i18n.t("形状生成に失敗: {e}", e=f"{e}"))
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -545,7 +673,7 @@ def model_section(request: Request):
                 values[k] = spec.validate(values[k], bounds.get(k))
     data = STATE.component.section(values)
     if data is None:
-        raise HTTPException(status_code=404, detail="このコンポーネントに断面編集はありません")
+        raise HTTPException(status_code=404, detail=i18n.t("このコンポーネントに断面編集はありません"))
     # 寸法はここで**ルート側が**足す。断面を持つ部品が増えたときに
     # `section()` の中へ書き足し忘れる経路を作らないため（定義は `dimensions()`
     # の 1 か所のまま）。ドラッグ中のクエリ上書きがそのまま効くので、寸法は
@@ -590,15 +718,16 @@ async def manual_import(req: PathReq):
     _require_project()
     if STATE.project.frozen is None:
         raise HTTPException(status_code=409,
-                            detail="先に「凍結して編集用エクスポート」を実行してください")
+                            detail=i18n.t("先に「凍結して編集用エクスポート」を実行してください"))
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         return await asyncio.to_thread(STATE.analyze_derived, req.path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"解析に失敗しました: {e}")
+        raise HTTPException(status_code=500, detail=i18n.t("解析に失敗しました: {why}", why=e))
 
 
 @app.post("/api/external/load")
@@ -610,13 +739,14 @@ async def external_load(req: PathReq):
     """
     _require_project()
     if not Path(req.path).exists():
-        raise HTTPException(status_code=404, detail="ファイルが見つかりません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが見つかりません"))
     try:
         return await asyncio.to_thread(STATE.load_external, req.path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"読み込みに失敗しました: {e}")
+        raise HTTPException(status_code=500, detail=i18n.t("読み込みに失敗しました: {why}", why=e))
 
 
 @app.post("/api/manual/commit")
@@ -640,7 +770,7 @@ def manual_model():
     _require_project()
     stl = STATE.project.derived_stl
     if stl is None:
-        raise HTTPException(status_code=404, detail="編集済みモデルは未登録です")
+        raise HTTPException(status_code=404, detail=i18n.t("編集済みモデルは未登録です"))
     return Response(content=stl, media_type="application/octet-stream")
 
 
@@ -661,7 +791,7 @@ async def survey_measure(req: PathReq):
     _require_project()
     f = Path(req.path)
     if not f.exists():
-        raise HTTPException(status_code=404, detail="ファイルが存在しません")
+        raise HTTPException(status_code=404, detail=i18n.t("ファイルが存在しません"))
 
     def _run():
         from saxsketch.analysis import meshdiff
@@ -672,7 +802,7 @@ async def survey_measure(req: PathReq):
     try:
         return await asyncio.to_thread(_run)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"測定に失敗: {e}")
+        raise HTTPException(status_code=400, detail=i18n.t("測定に失敗: {why}", why=e))
 
 
 class SurveyCommitReq(BaseModel):
@@ -755,9 +885,11 @@ async def _write_member_models(cid: str, out_dir: str | Path, formats: list[str]
         if STATE.is_stale(cid):
             raise HTTPException(
                 status_code=409,
-                detail=f"「{comp.label}」は凍結後にパラメータ（または参照する部品）が"
-                       f"変更されています。編集済みモデルは古い形状です。"
-                       f"外部編集をやり直すか、派生モデルを破棄してください。")
+                detail=i18n.t(
+                    "「{part}」は凍結後にパラメータ（または参照する部品）が"
+                    "変更されています。編集済みモデルは古い形状です。"
+                    "外部編集をやり直すか、派生モデルを破棄してください。",
+                    part=i18n.component_label(comp.id, comp.label)))
         used_derived = True
 
     files: dict[str, Path] = {}
@@ -792,8 +924,11 @@ async def export(req: ExportReq):
     _require_project()
     proj = STATE.project
     inst = STATE.registry.get(proj.instrument_id)
-    template_label = inst.templates[proj.template_id].get("label", proj.template_id)
-    instrument_label = inst.descriptor.get("label", proj.instrument_id)
+    # 仕様書の見出しに出るので訳す（`Instrument.summary()` と同じ引き方）。
+    template_label = i18n.t(
+        inst.templates[proj.template_id].get("label", proj.template_id))
+    instrument_label = i18n.t(
+        inst.descriptor.get("label", proj.instrument_id))
 
     as_set = req.scope == "set" and proj.is_set
     member_ids = list(proj.members) if as_set else [proj.active]
@@ -821,17 +956,21 @@ async def export(req: ExportReq):
         params = dict(STATE.members[cid].paramset.values)
         extras = comp.spec_extras(params)
         bom_rows = comp.bom(params)
-        bom_by_member.append((comp.label, bom_rows))
+        comp_label = i18n.component_label(comp.id, comp.label)
+        bom_by_member.append((comp_label, bom_rows))
         spec_members.append({
-            "label": comp.label, "name": proj.member(cid).name, "dir": cid,
-            "params": params, "specs": comp.param_specs(),
+            "label": comp_label, "name": proj.member(cid).name, "dir": cid,
+            "params": params,
+            "specs": i18n.localize_specs(comp.id, comp.param_specs()),
             "dimensions": extras.get("dimensions", []), "bom_rows": bom_rows,
             "sim": STATE.simulate(cid), "sections": extras.get("sections", []),
             "material": params.get("material", "resin"),
         })
         readme_members.append({
-            "label": comp.label, "dir": cid,
-            "material_label": MATERIAL_LABELS.get(params.get("material"), "-"),
+            "label": comp_label, "dir": cid,
+            "material_label": i18n.choice_label(
+                str(params.get("material", "")),
+                MATERIAL_LABELS.get(params.get("material"), "-")),
             "dims": extras.get("dimensions", []),
         })
 
@@ -865,11 +1004,14 @@ async def export(req: ExportReq):
         edited = [STATE.members[cid].component.label
                   for cid in member_ids if built[cid]["used_derived"]]
         if edited:
-            readme += ("\n\n[外部編集済みモデル]\n"
-                       "model_edited.stl は外部ツールで手動編集したモデルです。\n"
-                       "印刷にはこのファイルを使用してください。\n"
-                       f"対象: {'、'.join(edited)}\n")
-        package_path = out_dir / f"{_safe_name(proj.name)}_入稿パッケージ.zip"
+            readme += "\n\n" + i18n.t(
+                "[外部編集済みモデル]\n"
+                "model_edited.stl は外部ツールで手動編集したモデルです。\n"
+                "印刷にはこのファイルを使用してください。\n"
+                "対象: {targets}\n",
+                targets="、".join(edited))
+        package_path = out_dir / i18n.t(
+            "{name}_入稿パッケージ.zip", name=_safe_name(proj.name))
         build_package(package_path, {k: v for k, v in files.items()}, readme)
 
     # 凍結: STEP出力とセットでスナップショット記録（外部編集ワークフローの起点）。
@@ -943,7 +1085,11 @@ def acoustics_scale():
 # ------------------------------------------------------------------ 外部ツール連携
 
 class ToolReq(BaseModel):
-    tool: str          # freecad | slicer | reveal | browser
+    #: **文字列にしない。** かつてここは `str` で、コメントだけが 4 種と
+    #: 言っていた。`settings["external_tools"]` は任意のキーを受けていたので、
+    #: 「設定に任意の exe を登録 → それを `tool` 名で起動」が 2 リクエストで
+    #: 通った。型で閉じておけば FastAPI が 422 で落とす。
+    tool: Literal["freecad", "slicer", "reveal", "browser"]
     file: str
 
 
@@ -951,11 +1097,16 @@ class ToolReq(BaseModel):
 def tools_open(req: ToolReq):
     f = Path(req.file)
     if not f.exists():
-        raise HTTPException(status_code=404, detail="ファイルが存在しません")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("ファイルが存在しません"))
     if req.tool == "reveal":
         _reveal_in_explorer(f)
         return {"ok": True}
     if req.tool == "browser":
+        if f.suffix.lower() not in _OPENABLE_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("この形式は既定アプリで開きません: {ext}", ext=f.suffix))
         _open_default_app(f)  # 既定アプリ（spec.html など）
         return {"ok": True}
     tool_path = STATE.settings.get("external_tools", {}).get(req.tool, "")
@@ -964,7 +1115,8 @@ def tools_open(req: ToolReq):
     if not tool_path:
         raise HTTPException(
             status_code=400,
-            detail=f"{req.tool} が見つかりません。設定画面で実行パスを登録してください。")
+            detail=i18n.t("{tool} が見つかりません。設定画面で実行パスを登録してください。",
+                           tool=req.tool))
     # WSL: 設定値が Windows パス(C:\..\FreeCAD.exe)でも WSL パスへ変換して exec。
     # 渡すファイル引数は Windows 側ツールが読めるよう Windows パスへ変換。
     exe = _to_wsl_path(tool_path) if IS_WSL else tool_path
@@ -972,7 +1124,8 @@ def tools_open(req: ToolReq):
     if not Path(exe).exists():
         raise HTTPException(
             status_code=400,
-            detail=f"{req.tool} の実行ファイルが見つかりません: {tool_path}")
+            detail=i18n.t("{tool} の実行ファイルが見つかりません: {path}",
+                           tool=req.tool, path=tool_path))
     subprocess.Popen([exe, file_arg])
     return {"ok": True}
 
@@ -986,8 +1139,38 @@ class SettingsReq(BaseModel):
     settings: dict
 
 
+#: 書き換えてよい設定キー。`external_tools` だけは中身も絞る（下）。
+_SETTABLE = frozenset({"external_tools", "export_root", "recent_projects"})
+
+#: 外部ツールとして登録してよい名前。`ToolReq` の Literal と**同じ集合**で、
+#: 片方だけ増えると「登録できるのに起動できない」か、その逆になる。
+_TOOL_KEYS = frozenset({"freecad", "slicer"})
+
+
 @app.put("/api/settings")
 def settings_put(req: SettingsReq):
+    """設定を更新する。**知っているキーだけ**通す。
+
+    かつては受け取った dict を丸ごと `update` してディスクへ書いていた。
+    `external_tools` に任意の名前で任意の exe を登録でき、それを
+    `/api/tools/open` が起動したので、2 リクエストで任意コード実行になっていた。
+    """
+    unknown = sorted(set(req.settings) - _SETTABLE)
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("知らない設定キー: {keys}", keys=", ".join(unknown)))
+    tools = req.settings.get("external_tools")
+    if tools is not None:
+        if not isinstance(tools, dict):
+            raise HTTPException(status_code=400, detail=i18n.t("external_tools は辞書"))
+        bad = sorted(set(tools) - _TOOL_KEYS)
+        if bad:
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("知らない外部ツール: {names}", names=", ".join(bad)))
+        # 既存のキー（旧版の openwind_note など）を消さずに重ねる
+        merged = dict(STATE.settings.get("external_tools", {}))
+        merged.update({k: str(v) for k, v in tools.items()})
+        req.settings = {**req.settings, "external_tools": merged}
     STATE.settings.update(req.settings)
     STATE.save_settings()
     return STATE.settings
@@ -1024,6 +1207,16 @@ if FRONTEND_DIST.exists():
         """
         return FileResponse(FRONTEND_DIST / "index.html",
                             headers={"cache-control": "no-store"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """bind 先がループバックか。名前は `localhost` だけ認める。"""
+    if host.lower() in ("localhost", "::1", "[::1]"):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def _in_use(host: str, port: int) -> bool:
@@ -1069,8 +1262,24 @@ def main():
         with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    host = os.environ.get("WF_HOST", "127.0.0.1")
-    want = int(os.environ.get("WF_PORT", "8712"))
+    host = os.environ.get("SAX_HOST", "127.0.0.1")
+    want = int(os.environ.get("SAX_PORT", "8712"))
+
+    # 認証が無いので、ループバック以外へ bind するのは
+    # **ファイルシステム API を無防備に公開する**のと同じ。黙って従わない。
+    if not _is_loopback_host(host) and not ALLOW_REMOTE:
+        print("✗ SAX_HOST=%s はループバックではありません。" % host,
+              file=sys.stderr)
+        print("  SaxSketch は認証を持たず、API は任意の絶対パスを読み書きし、",
+              file=sys.stderr)
+        print("  外部ツールを起動します。LAN へ出すと誰でもそれを使えます。",
+              file=sys.stderr)
+        print("  それでも出すなら SAX_ALLOW_REMOTE=1 を立ててください（自分の責任で）。",
+              file=sys.stderr)
+        sys.exit(1)
+    if ALLOW_REMOTE:
+        print(f"⚠ SAX_ALLOW_REMOTE が立っています。{host} からは認証なしで"
+              f"ファイルを読み書きできます。")
 
     if _in_use(host, want):
         if _is_saxsketch(host, want):
@@ -1079,7 +1288,7 @@ def main():
         port = _free_port(host, want + 1)
         if port is None:
             print(f"✗ {want} が使用中で、近傍にも空きポートがありません。"
-                  f"占有元を止めるか WF_PORT で別ポートを指定してください。", file=sys.stderr)
+                  f"占有元を止めるか SAX_PORT で別ポートを指定してください。", file=sys.stderr)
             sys.exit(1)
         print(f"⚠ ポート {want} は使用中。空いている {port} で起動します。")
     else:

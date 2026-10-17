@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from saxsketch import i18n
+
 from .schema import ParamSpec
 
 INSTRUMENTS_DIR = Path(__file__).resolve().parent.parent / "instruments"
@@ -66,6 +68,16 @@ class Component(ABC):
     @abstractmethod
     def param_specs(self) -> list[ParamSpec]:
         ...
+
+    def localized_specs(self) -> list[ParamSpec]:
+        """`param_specs()` を表示用に訳した複製。**label を画面に出す所で使う。**
+
+        訳の出どころは `i18n.PARAMS`（`en.py`）で、`/api/project` が通すのと
+        同じ funnel。寸法線・感度表・採寸フォームが素の `param_specs()` を
+        読んでいたので、英語の画面にそこだけ日本語が残っていた。
+        """
+        return i18n.localize_specs(self.id, self.param_specs())
+
 
     @abstractmethod
     def build(self, params: dict) -> Any:
@@ -285,15 +297,17 @@ class Component(ABC):
 
     def impedance(self, params: dict) -> dict:
         """入力インピーダンス曲線。"""
-        raise NotImplementedError(f"{self.label}にはインピーダンス計算がありません")
+        raise NotImplementedError(i18n.t(
+            "{self}にはインピーダンス計算がありません",
+            self=f"{self.label}"))
 
     def synthesize(self, params: dict, embouchure: str) -> tuple[bytes, dict]:
         """物理モデルによる単音の WAV。"""
-        raise NotImplementedError(f"{self.label}には音合成がありません")
+        raise NotImplementedError(i18n.t("{self}には音合成がありません", self=f"{self.label}"))
 
     def scale(self, params: dict) -> tuple[bytes, dict]:
         """物理モデルによる簡易スケールの WAV。"""
-        raise NotImplementedError(f"{self.label}には音合成がありません")
+        raise NotImplementedError(i18n.t("{self}には音合成がありません", self=f"{self.label}"))
 
     def cavity_volume(self, params: dict) -> dict:
         """内部空洞体積の高速近似 {"total_cc","effective_cc"}（ゴールシーク用）。"""
@@ -337,7 +351,7 @@ class Instrument:
         for s in self.sets:
             if s["id"] == set_id:
                 return s
-        raise KeyError(f"セット定義がありません: {set_id}")
+        raise KeyError(i18n.t("セット定義がありません: {set_id}", set_id=f"{set_id}"))
 
     def set_master(self, set_id: str) -> str:
         """セットの土台になる部品ID（`role == "master"`。既定は先頭）。"""
@@ -354,22 +368,28 @@ class Instrument:
         return self.set_card_fn(size_info, members)
 
     def summary(self) -> dict:
+        # 楽器・テンプレート・セットの名前は `descriptor.json` と
+        # `templates/*.json` に日本語で書いてある。**原本はそちらのまま**で、
+        # 英語は `i18n.t()`（msgid が日本語そのもの）で引く。
         return {
             "id": self.id,
-            "label": self.descriptor.get("label", self.id),
+            "label": i18n.t(self.descriptor.get("label", self.id)),
             "templates": [
-                {"id": tid, "label": t.get("label", tid)}
+                {"id": tid, "label": i18n.t(t.get("label", tid))}
                 for tid, t in self.templates.items()
             ],
             "components": [
-                {"id": cid, "label": cls.label, "available": cls.available()}
+                {"id": cid, "label": i18n.component_label(cid, cls.label),
+                 "available": cls.available()}
                 for cid, cls in self.component_classes.items()
             ],
             "sets": [
-                {"id": s["id"], "label": s.get("label", s["id"]),
+                {"id": s["id"], "label": i18n.t(s.get("label", s["id"])),
                  "members": [
                      {"component": m["component"],
-                      "label": self.component_classes[m["component"]].label,
+                      "label": i18n.component_label(
+                          m["component"],
+                          self.component_classes[m["component"]].label),
                       "required": bool(m.get("required", True)),
                       "master": m.get("role") == "master"}
                      for m in s["members"]

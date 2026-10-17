@@ -52,6 +52,8 @@ from __future__ import annotations
 
 import math
 
+from saxsketch import i18n
+
 
 def missing_cone(size_info: dict) -> dict:
     """欠損円錐の長さと体積を、円錐の半頂角とネック小端の内径から導出する。
@@ -111,11 +113,15 @@ def reference_conditions(size_info: dict) -> str:
     「あなたはここに挿すことになる」という主張に読める。
     """
     from . import openwind_bridge as ob
-    return (f"合う挿し込み量は**基準条件での値**で、実際に挿す深さの予測ではない: "
-            f"気温 {ob.TEMPERATURE_C:.0f}°C（音速 {ob.C_SOUND:.1f} m/s）で第1共鳴が "
-            f"{size_info['low_note_label']} {size_info['low_note_sounding_hz']:.2f}Hz に"
-            f"合う位置。実際の位置はリード・リガチャー・マウスピース個体・"
-            f"アンブシュアでも動き、それらはモデルに入っていない。")
+    return (i18n.t(
+        "合う挿し込み量は**基準条件での値**で、実際に挿す深さの予測ではない:"
+        " 気温 {ob}°C（音速 {ob2} m/s）で第1共鳴が "
+        "{low_note_label} {low_note_sounding_hz}Hz に合う位置。"
+        "実際の位置はリード・リガチャー・マウスピース個体・"
+        "アンブシュアでも動き、それらはモデルに入っていない。",
+        ob=f"{ob.TEMPERATURE_C:.0f}", ob2=f"{ob.C_SOUND:.1f}",
+        low_note_label=f"{size_info['low_note_label']}",
+        low_note_sounding_hz=f"{size_info['low_note_sounding_hz']:.2f}"))
 
 
 def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
@@ -153,77 +159,105 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
         # 数字を作らない —— 以前は NaN が `round()` を通って API の JSON 化で
         # 500 になっていた（B-3 で `bore_length` の壁を 1.0mm まで広げて踏んだ）。
         status = "unreachable"
-        advice = (f"目標音で鳴らせる挿し込み量が**無い**。1mm 押し込んでも音程は "
-                  f"{slope:+.2f} セントしか動かず、実用域 {lo:.0f}〜{hi:.0f}mm の"
-                  f"両端でも目標音を挟まない。チューニングでは合わせられないので"
-                  f"形状側を直す必要がある。")
+        advice = (i18n.t(
+            "目標音で鳴らせる挿し込み量が**無い**。1mm "
+            "押し込んでも音程は {slope} セントしか動かず、実用域 "
+            "{lo}〜{hi}mm の両端でも目標音を挟まない。チュー"
+            "ニングでは合わせられないので形状側を直す必要がある。",
+            slope=f"{slope:+.2f}", lo=f"{lo:.0f}", hi=f"{hi:.0f}"))
     elif not tuning["reachable"]:
         status = "unreachable"
-        side = "深く" if z > hi else "浅く"
-        advice = (f"目標音で鳴らせる挿し込み量が {z:.1f}mm で、実用域 "
-                  f"{lo:.0f}〜{hi:.0f}mm の外にある（{side}挿さないと合わない）。"
-                  f"チューニングでは埋められないので形状側を直す必要がある。")
+        side = i18n.t("深く") if z > hi else i18n.t("浅く")
+        advice = (i18n.t(
+            "目標音で鳴らせる挿し込み量が {z}mm で、実用域 {lo}〜{hi}mm "
+            "の外にある（{side}挿さないと合わない）。チュー"
+            "ニングでは埋められないので形状側を直す必要がある。",
+            z=f"{z:.1f}", lo=f"{lo:.0f}", hi=f"{hi:.0f}", side=f"{side}"))
     else:
         tight = min(out_mm, in_mm) < TUNING_MARGIN_MM
         status = "tight" if tight else "ok"
-        advice = (f"挿し込み {z:.1f}mm で目標音に合う（実用域 {lo:.0f}〜{hi:.0f}mm）。"
-                  f"1mm 押し込むと {slope:+.2f} セント動くので、"
-                  f"高い側へ約 {in_mm * slope:+.0f} / 低い側へ約 {-out_mm * slope:+.0f} "
-                  f"セントのチューニング幅がある。")
+        advice = (i18n.t(
+            "挿し込み {z}mm で目標音に合う（実用域 {lo}〜{hi}mm）。1mm "
+            "押し込むと {slope} セント動くので、高い側へ約 {in_mm} / "
+            "低い側へ約 {out_mm} セントのチューニング幅がある。",
+            z=f"{z:.1f}", lo=f"{lo:.0f}", hi=f"{hi:.0f}",
+            slope=f"{slope:+.2f}", in_mm=f"{in_mm * slope:+.0f}",
+            out_mm=f"{-out_mm * slope:+.0f}"))
         if tight:
             # ここで「余裕は n mm」と数字を出さない。深い側の上限は実測だが、
             # その実測は「これ以上押し込んだらまずい」という**演奏者の判断**で、
             # しかもネック単独でもマウスピース単独でもなく**組の性質**。
             # コルクを巻き直しても銘柄を替えても動く。この境目に精度を主張すると、
             # 持っていない分解能で「合う／合わない」を言うことになる。
-            advice += (f"ただし実用域の端まで 2mm を切っている。深い側の "
-                       f"{hi:.1f}mm は")
+            advice += (i18n.t(
+                "ただし実用域の端まで 2mm を切っている。深い側の {hi}mm は",
+                hi=f"{hi:.1f}"))
             if size_info.get("insertion_limit_mm") is not None:
-                advice += ("**実測**だが、これは機械的な止まりではなく"
-                           "「これ以上押し込んだらまずい」という判断で、しかも"
-                           "ネック単独でもマウスピース単独でもなく**組**の性質。"
-                           "コルクを巻き直しても銘柄を替えても動く。")
+                advice += (i18n.t(
+                    "**実測**だが、これは機械的な止まりではなく「これ以上押し"
+                    "込んだらまずい」という判断で、"
+                    "しかもネック単独でもマウスピー"
+                    "ス単独でもなく**組**の性質。コルクを巻き直しても銘柄を替"
+                    "えても動く。"))
             else:
-                advice += ("コルク帯長からの**推定**で、そこは厳しい公差の掛かった"
-                           "部位ではない（帯の幅は周方向でも一定でない）。しかも"
-                           "実測した 3 サイズはいずれも推定と食い違い、"
-                           "向きすら揃っていない。")
-            advice += ("数字で詰めずに、実物のマウスピースを"
-                       "止まるまで押し込んでどこで止まるかを確かめること。")
+                advice += (i18n.t(
+                    "コルク帯長からの**推定**で、そこは厳しい公差の掛かった部"
+                    "位ではない（帯の幅は周方向でも一定でない）。"
+                    "しかも実測した 3 サイズはいずれも推定と食い違い、"
+                    "向きすら揃っていない。"))
+            advice += (i18n.t(
+                "数字で詰めずに、実物のマウスピー"
+                "スを止まるまで押し込んでどこで止まるかを確かめること。"))
 
     # 容積の頭打ちは**届かないとき共通**の理由なので、分岐の外で足す
     # （合う位置が域外のときも、そもそも無いときも同じことが起きている）。
     if (status == "unreachable" and headroom_cc is not None
             and effective + headroom_cc < target):
-        advice += (f"チェンバー断面積比を上限まで上げても増えるのは "
-                   f"+{headroom_cc:.2f}cc（{effective + headroom_cc:.1f}cc）までで、"
-                   f"欠損円錐 {target:.1f}cc には**届かない**。頭打ちの主因は外殻の"
-                   f"肉厚で、これ以上増やすにはボディ径を上げるか最小肉厚を"
-                   f"下げる必要がある。")
+        advice += (i18n.t(
+            "チェンバー断面積比を上限まで上げても増えるのは "
+            "+{headroom_cc}cc（{effective}cc）までで、欠損円錐 {target}cc "
+            "には**届かない**。頭打ちの主因は外殻の肉厚で、"
+            "これ以上増やすにはボディ径を上げるか最小肉厚を下げる必要がある。",
+            headroom_cc=f"{headroom_cc:.2f}",
+            effective=f"{effective + headroom_cc:.1f}", target=f"{target:.1f}"))
 
     # 容積の比較は**判定ではなく理由**として出す。両者は一対一で動かない:
     # マウスピースは代替する欠損円錐より短いので、容積が数十%多くても音程が
     # 合うことがある（合う挿し込み量では soprano +24.1 / alto +20.4 /
     # tenor +23.4%。**揃っていたのはアルトが未実測だったからで、実測を入れたら崩れた**。
     # 一度 alto +13.3 と記録したが、あれは `cavity_floor_y` の特異点ぶんを含む）。
-    advice += (f"（実効容積 {effective:.2f}cc は欠損円錐 {target:.2f}cc の "
-               f"{ratio * 100:+.0f}%。マウスピースは代替する円錐より短いので、"
-               f"容積差はそのまま音程差にはならない。）")
+    advice += (i18n.t(
+        "（実効容積 {effective}cc は欠損円錐 {target}cc の {ratio}%。"
+        "マウスピースは代替する円錐より短いので、"
+        "容積差はそのまま音程差にはならない。）",
+        effective=f"{effective:.2f}", target=f"{target:.2f}",
+        ratio=f"{ratio * 100:+.0f}"))
 
     if cone["source"] == "measured":
         # 「実測」と書かない。出所を追うと descriptor の一文で終わり、文献名も
         # 測定者も日付も残っていない（descriptor の missing_cone_length_source）。
-        origin = (f"欠損円錐長は descriptor の {cone['apex_distance_mm']:.1f}mm を採用"
-                  f"（同じネック内径 {size_info['neck_bore_id_mm']}mm と半頂角 "
-                  f"{size_info['cone_half_angle_deg']}° から導出すると "
-                  f"{cone['derived_apex_mm']:.1f}mm で "
-                  f"{(cone['apex_distance_mm'] / cone['derived_apex_mm'] - 1) * 100:+.1f}% ずれる）。"
-                  f"**この値は出典未記録の借り物**で、代わりの半頂角も補間なので"
-                  f"どちらも実測ではない。落としても判定は動かないことは確認済み。")
+        origin = (i18n.t(
+            "欠損円錐長は descriptor の {apex_distance_mm}mm "
+            "を採用（同じネック内径 {neck_bore_id_mm}mm "
+            "と半頂角 {cone_half_angle_deg}° から導出すると "
+            "{derived_apex_mm}mm で {derived_apex_mm2}% ずれる）。"
+            "**この値は出典未記録の借り物**で、"
+            "代わりの半頂角も補間なのでどちらも実測ではない。"
+            "落としても判定は動かないことは確認済み。",
+            apex_distance_mm=f"{cone['apex_distance_mm']:.1f}",
+            neck_bore_id_mm=f"{size_info['neck_bore_id_mm']}",
+            cone_half_angle_deg=f"{size_info['cone_half_angle_deg']}",
+            derived_apex_mm=f"{cone['derived_apex_mm']:.1f}",
+            derived_apex_mm2=f"{(cone['apex_distance_mm'] / cone['derived_apex_mm'] - 1) * 100:+.1f}"))
     else:
-        origin = (f"欠損円錐長は半頂角 {size_info['cone_half_angle_deg']}°・ネック小端内径 "
-                  f"{size_info['neck_bore_id_mm']}mm から導出（頂点まで "
-                  f"{cone['apex_distance_mm']:.0f}mm）。このサイズには公表実測が無い。")
+        origin = (i18n.t(
+            "欠損円錐長は半頂角 {cone_half_angle_deg}°・"
+            "ネック小端内径 {neck_bore_id_mm}mm "
+            "から導出（頂点まで {apex_distance_mm}mm）。"
+            "このサイズには公表実測が無い。",
+            cone_half_angle_deg=f"{size_info['cone_half_angle_deg']}",
+            neck_bore_id_mm=f"{size_info['neck_bore_id_mm']}",
+            apex_distance_mm=f"{cone['apex_distance_mm']:.0f}"))
 
     return {
         "total_cc": round(cavity_vol["total_cc"], 2),
@@ -237,10 +271,11 @@ def tier1_report(cavity_vol: dict, size_info: dict, tuning: dict,
         "tuning_method": tuning["method"],
         "status": status,
         "advice": advice,
-        "note": (origin + "ネック小端内径は3サイズとも実測値（descriptor の "
-                 "neck_dimensions_source に測った個体がある）。セントは容積からの"
-                 "換算ではなく、この形状の共鳴管を伝達行列法で解いた第1共鳴。"
-                 "deviation_cents は**いまの挿し込み量での**値で、判定そのものは"
-                 "合う挿し込み量が実用域に入るかで出している。"
+        "note": (origin + i18n.t(
+            "ネック小端内径は3サイズとも実測値（descriptor の "
+            "neck_dimensions_source に測った個体がある）。"
+            "セントは容積からの換算ではなく、この形状の共鳴管を伝達行列法で解"
+            "いた第1共鳴。deviation_cents は**いまの挿し込み量での**値で、"
+            "判定そのものは合う挿し込み量が実用域に入るかで出している。")
                  + reference_conditions(size_info)),
     }

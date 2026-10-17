@@ -5,3 +5,5 @@
 *.png binary
 *.stl binary
 *.wav binary
+# .wproj は ZIP。eol=lf に巻き込むと中身が壊れる
+*.wproj binary

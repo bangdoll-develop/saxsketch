@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from saxsketch import i18n
+
 Polyline = list[tuple[float, float]]
 
 
@@ -21,7 +23,9 @@ def polyline_svg(groups: list[dict], caption: str, width_px: int = 760,
     """
     pts_all = [p for g in groups for p in g["pts"]]
     if not pts_all:
-        return f'<p class="note">{caption}（描画データなし）</p>'
+        return ('<p class="note">'
+                + i18n.t("{caption}（描画データなし）", caption=caption)
+                + '</p>')
     xs = [x for x, _ in pts_all]
     ys = [y for _, y in pts_all]
     x0, x1 = min(xs) - pad, max(xs) + pad

@@ -138,7 +138,7 @@ ALL_PASS
 ## 再生成
 
 ```bash
-wsl bash -lc "cd /mnt/c/HOME/<user>/develop/claude/mp_design && PYTHONPATH=. ~/mp_design/.venv/bin/python cad/meshdiff/bench_region_deviations.py"
+wsl bash -lc "PYTHONPATH=. ~/mp_design/.venv/bin/python cad/meshdiff/bench_region_deviations.py"
 ```
 
 `--k` / `--est-tol` / `--refine-max` / `--samples` で定数を振れる（掃引表の再現用）。

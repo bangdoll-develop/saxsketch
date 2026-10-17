@@ -26,6 +26,8 @@ import numpy as np
 from saxsketch.instruments.saxophone.components import profiles
 from saxsketch.acoustics import volume as ac_volume
 
+from saxsketch import i18n
+
 # ------------------------------------------------------------------ 物理定数（空気, 20℃前後）
 # 返す共鳴ピークの本数。時間領域シミュは高次レジスタで鳴くことがあり、
 # 実測 f0 をピーク集合と照合するには 8 本では足りない。
@@ -50,9 +52,10 @@ CARBON_DIOXIDE = 4e-4
 def sound_speed(temp_c: float = TEMPERATURE_C,
                 humidity: float = HUMIDITY,
                 carbon: float = CARBON_DIOXIDE) -> float:
-    """空気中の音速 [m/s]。OpenWind の `Physics`（既定 `ref_phy_coef='RR'`）と同じ式。
+    """空気中の音速 [m/s]。原典は Zuckerwar の展開式（下の `h` の行に出典）で、
+    OpenWind の `Physics`（既定 `ref_phy_coef='RR'`）も同じ原典に拠る。
 
-    式を写してあるのは、OpenWind 未導入の環境（TMM だけが走る）でも同じ音速を
+    ここに式を置いてあるのは、OpenWind 未導入の環境（TMM だけが走る）でも同じ音速を
     使うため。「20.05·√T」のような教科書式では OpenWind の値を再現できない
     （20℃ 343.9878 / 25℃ 347.1324 で、係数が一定にならない）ので推測しない。
     OpenWind があるときは `Physics(TEMPERATURE_C).c(0)` と一致することを
@@ -471,10 +474,13 @@ def _tmm_parts(geometry: list[list[float]], freqs: np.ndarray, holes):
     for h, x in zip(holes, xs):
         if not lo < x <= hi:
             raise ValueError(
-                f"側孔 {h.get('label', '?')} が管の外にあります "
-                f"(x={x:.4f}m, 管は {lo:.4f}〜{hi:.4f}m)")
+                i18n.t(
+                    "側孔 {label} が管の外にあります (x={x}m, 管は "
+                    "{lo}〜{hi}m)",
+                    label=f"{h.get('label', '?')}", x=f"{x:.4f}",
+                    lo=f"{lo:.4f}", hi=f"{hi:.4f}"))
     if xs != sorted(xs):
-        raise ValueError("側孔は弧長の昇順で渡すこと（区間の切れ目が決まらない）")
+        raise ValueError(i18n.t("側孔は弧長の昇順で渡すこと（区間の切れ目が決まらない）"))
     chunks = _split_geometry(geometry, xs)
     spans, last_r = [], None
     for c in chunks:
@@ -635,10 +641,10 @@ def _analyze(freqs: np.ndarray, z: np.ndarray, size_info: dict, engine: str) -> 
         "first_cents_vs_target": first["cents_vs_target"] if first else None,
         "inharmonicity_cents": inharm,
         "target_note": _hz_to_note(f_target),
-        "note": ("OpenWind（周波数領域）による共鳴ピーク。"
+        "note": (i18n.t("OpenWind（周波数領域）による共鳴ピーク。")
                  if engine == "openwind" else
-                 "簡易TMM（自作・伝達行列法）による推定。相対比較用。")
-        + " 絶対音程でなくパラメータ変化の方向を参考に。",
+                 i18n.t("簡易TMM（自作・伝達行列法）による推定。相対比較用。"))
+        + i18n.t(" 絶対音程でなくパラメータ変化の方向を参考に。"),
     }
 
 
@@ -920,7 +926,9 @@ class HoleSolver:
         self.targets = [self.f_low] + [self.f_low * 2.0 ** (st / 12.0) for st in steps]
         if len(self.targets) != len(self.fingerings):
             raise ValueError(
-                f"運指 {len(self.fingerings)} 通りに対し目標音が {len(self.targets)} 個")
+                i18n.t(
+                    "運指 {len} 通りに対し目標音が {len2} 個",
+                    len=f"{len(self.fingerings)}", len2=f"{len(self.targets)}"))
         self.freqs = np.geomspace(0.6 * self.f_low, 1.8 * max(self.targets),
                                   _SCALE_GRID_N)
         self.parts = _tmm_parts(geometry, self.freqs, self.holes)
@@ -932,7 +940,7 @@ class HoleSolver:
             return [round(float(h["x_m"]), 12) for h in hs]
 
         if key(holes) != key(self.holes):
-            raise ValueError("穴の位置が違う変種は区間行列を使い回せません")
+            raise ValueError(i18n.t("穴の位置が違う変種は区間行列を使い回せません"))
         return {name: _lowest_peak_hz(
             self.freqs, _tmm_from_parts(self.parts, holes, flags, self.freqs))
             for name, flags in self.fingerings}
@@ -1086,7 +1094,7 @@ def _to_audio(sig: np.ndarray, sr0: float) -> np.ndarray:
                         frac.numerator, frac.denominator)
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak < 1e-9:
-        raise RuntimeError("発振しませんでした（吹圧を上げてください）")
+        raise RuntimeError(i18n.t("発振しませんでした（吹圧を上げてください）"))
     out = out / peak * 0.9
     # 5ms フェードでクリック除去
     nf = min(int(SIM_SR * 0.005), out.size // 2)
@@ -1227,7 +1235,9 @@ def _simulate_reed(geometry, params, embouchure, duration,
     key = 'bell_radiation_pressure'
     if key not in rec.values:
         raise RuntimeError(
-            f"OpenWind の録音に {key} がありません: {list(rec.values.keys())}")
+            i18n.t(
+                "OpenWind の録音に {key} がありません: {list}",
+                key=f"{key}", list=f"{list(rec.values.keys())}"))
     audio = _to_audio(np.asarray(rec.values[key]), 1.0 / rec.dt)
     return audio, _measure_f0(audio), mouth_pa
 
@@ -1245,7 +1255,7 @@ def synthesize(params: dict, size_info: dict,
     リード実形状の反映値。
     """
     if not HAS_OPENWIND:
-        raise RuntimeError("OpenWind 未導入のため物理モデル音合成は利用できません")
+        raise RuntimeError(i18n.t("OpenWind 未導入のため物理モデル音合成は利用できません"))
     geometry = build_resonator(params, size_info)
     audio, f0, pa = _simulate_reed(  # pragma: no cover
         geometry, params, embouchure, duration, override)
@@ -1270,7 +1280,7 @@ def scale(params: dict, size_info: dict,
     定数のみ）ため、1音ずつシミュして連結する。
     """
     if not HAS_OPENWIND:
-        raise RuntimeError("OpenWind 未導入のため物理モデル音合成は利用できません")
+        raise RuntimeError(i18n.t("OpenWind 未導入のため物理モデル音合成は利用できません"))
     geometry = build_resonator(params, size_info)
     parts, notes = [], []
     gap = np.zeros(int(SIM_SR * 0.08))

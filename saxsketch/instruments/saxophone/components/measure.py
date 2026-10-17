@@ -18,6 +18,8 @@ import math
 import numpy as np
 import trimesh
 
+from saxsketch import i18n
+
 from . import profiles
 
 # 逆算対象外のパラメータとその理由
@@ -186,12 +188,13 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     z_off = float(bmin[2])
     if abs(z_off) > 0.5:
         warnings.append(
-            f"モデルが Z 方向に {z_off:+.1f}mm 移動しています。z=0 基準に補正して測定します。")
+            i18n.t("モデルが Z 方向に {mm}mm 移動しています。z=0 基準に補正して測定します。",
+                   mm=f"{z_off:+.1f}"))
     x_center = float((bmin[0] + bmax[0]) / 2.0)
     if abs(x_center) > 0.5:
         warnings.append(
-            "モデルが X 方向に移動しており座標系が崩れています。パラメータ逆算を中止しました。"
-            "外部ツールで移動・回転させずに編集してください。")
+            i18n.t("モデルが X 方向に移動しており座標系が崩れています。パラメータ逆算を中止しました。"
+                   "外部ツールで移動・回転させずに編集してください。"))
         return {"params": _all_unmeasurable(specs), "warnings": warnings}
 
     # ---- 表面サンプル（法線つき）
@@ -203,7 +206,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
 
     # ---- 全長
     L_meas = float(bmax[2] - bmin[2])
-    est["overall_length"] = (L_meas, "バウンディングボックス")
+    est["overall_length"] = (L_meas, i18n.t("バウンディングボックス"))
 
     # ---- テーブル平面（以降すべての基準）。**傾斜平面なので直線フィット** y = a + b·z。
     #
@@ -215,11 +218,12 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     flat = bottom & (pts[:, 2] > fl * 1.15) \
         & (np.abs(pts[:, 1] - (ty0_frozen + slope_frozen * pts[:, 2])) < 1.5)
     if flat.sum() < 100:
-        warnings.append("テーブル平面を検出できませんでした。フェイシング系の逆算を省略します。")
+        warnings.append(i18n.t("テーブル平面を検出できませんでした。"
+                               "フェイシング系の逆算を省略します。"))
         table_fit = None
 
         def ty(z):
-            raise RuntimeError("テーブル平面が未検出")
+            raise RuntimeError(i18n.t("テーブル平面が未検出"))
     else:
         b_fit, a_fit = np.polyfit(pts[flat, 2], pts[flat, 1], 1)
         table_fit = (float(a_fit), float(b_fit))
@@ -230,7 +234,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
 
         # 傾きがそのままテーブル傾斜。`table_plane_y = y0 - tan(角度)·z` なので符号は反転。
         est["table_angle"] = (math.degrees(math.atan(-table_fit[1])),
-                              "テーブル平面の直線フィット")
+                              i18n.t("テーブル平面の直線フィット"))
 
     # ---- ティップ開き（ティップレール面 z < z_start のみが確実に露出する。
     #      窓区間の底面は空洞で開いているため使えない。fl は凍結値で固定し、
@@ -248,7 +252,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
             implied = _tip_from_rise(p, zz, yy - ty(zz))
             if implied.size >= 30:
                 est["tip_opening"] = (float(np.percentile(implied, 4.0)),
-                                      "ティップレール面(凍結fl仮定)", 0.10)
+                                      i18n.t("ティップレール面(凍結fl仮定)"), 0.10)
 
     # ---- ビーク高さ（各 z ビンの上端 p95 ＝ビーク斜面。側面フランクの混入を排除し、
     #      勾配によるビン内バイアスは評価点シフト +0.95·幅 で補正して直線回帰）
@@ -268,7 +272,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
                 # 基準はその z のテーブル平面（0.25·L のところ）。
                 z_bite = 0.25 * L
                 est["beak_height"] = (float(a * z_bite + b) - float(ty(z_bite)),
-                                      "ビーク斜面p95回帰")
+                                      i18n.t("ビーク斜面p95回帰"))
 
     # ---- ボディ径（リガチャー座の最大半径。彫刻は径を減らす方向なので上位percentile）
     #      測定帯は座の範囲から取る（外形プロファイルの比率を二重に持たない）。
@@ -287,7 +291,8 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         # 上側 percentile から自然に外れ、彫刻も同じく径を減らす方向で外れる。
         r_ref = np.array([profiles.outer_radius(p, float(z)) for z in zz])
         scale = float(np.percentile(r / r_ref, 99.5))
-        est["body_dia"] = (scale * p["body_dia"], "座での外形比の上側percentile")
+        est["body_dia"] = (scale * p["body_dia"],
+                           i18n.t("座での外形比の上側percentile"))
 
     # ---- レイキャスト系（ボア・窓・バッフル・スロート）
     zb = profiles.bore_start_z(p)
@@ -299,7 +304,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
                              [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]])
     good = [d for d in dists if d is not None and d < rb * 2.0]
     if len(good) >= 3:
-        est["bore_dia"] = (2.0 * float(np.mean(good)), "軸上放射レイ")
+        est["bore_dia"] = (2.0 * float(np.mean(good)), i18n.t("軸上放射レイ"))
 
     if table_fit is not None:
         # ウィンドウ長(実効): 下方から +Y レイを z 走査し「窓が開いている」範囲を測る。
@@ -320,7 +325,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
             # `window_end_z` になる。旧実装はステーション補間の都合で 86% で
             # 閉じていたため ÷0.86 の補正が要ったが、いまは補正なしで一致する。
             est["window_length"] = (float(open_z[-1]) + 0.5 - z_start,
-                                    "下方レイ走査", 1.5)
+                                    i18n.t("下方レイ走査"), 1.5)
 
     # バッフル高さ: 窓が開いている z で空洞天井を実測し、天井式から逆算する。
     #
@@ -353,9 +358,10 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
             if hb is not None:
                 hbs.append(hb)
         if len(hbs) >= 2:
-            est["baffle_height"] = (float(np.mean(hbs)), "空洞天井レイ(3断面)")
+            est["baffle_height"] = (float(np.mean(hbs)), i18n.t("空洞天井レイ(3断面)"))
             if float(np.std(hbs)) > 0.6:
-                warnings.append("バッフル形状が設計プロファイルと不整合です（断面間のばらつき大）。")
+                warnings.append(
+                    i18n.t("バッフル形状が設計プロファイルと不整合です（断面間のばらつき大）。"))
 
     # スロート / チェンバーの断面積比: 空洞の半幅を実測し、**前向きの法則
     # (`profiles.cavity_half_width`) を数値で逆に解く**。
@@ -370,7 +376,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     tr = None if hw_th is None else _ratio_from_half_width(
         p, "throat_ratio", s_th["z"], hw_th)
     if tr is not None:
-        est["throat_ratio"] = (tr, "スロート幅レイ")
+        est["throat_ratio"] = (tr, i18n.t("スロート幅レイ"))
 
     # チェンバー拡大比。比が効くのは**重みのピーク**（窓の終端とスロートの中間）で、
     # 「断面積が最大のステーション」ではない（比 1.0 では実物どおり単調に開くので、
@@ -382,7 +388,8 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     z_ch = 0.5 * (profiles.window_end_z(p) + s_th["z"])
     s_ch = min(stations, key=lambda q: abs(q["z"] - z_ch))
     if profiles.chamber_clamped_at(p, s_ch["z"]):
-        warnings.append("チェンバーが肉厚制限で頭打ちのため、断面積比は形状から逆算できません。")
+        warnings.append(i18n.t("チェンバーが肉厚制限で頭打ちのため、"
+                               "断面積比は形状から逆算できません。"))
     else:
         hw_ch = _measure_half_width(mesh, s_ch, z_off, rb * 3.0)
         # スロートを解いた値を先に入れてから解く（重みが重なる z で二重に数えない）
@@ -390,7 +397,7 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
         cr = None if hw_ch is None else _ratio_from_half_width(
             base, "chamber_ratio", s_ch["z"], hw_ch)
         if cr is not None:
-            est["chamber_ratio"] = (cr, "チェンバー幅レイ")
+            est["chamber_ratio"] = (cr, i18n.t("チェンバー幅レイ"))
 
     # ---- 判定表の構築
     rows = []
@@ -414,7 +421,10 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
                          "delta": round(delta, 3), "verdict": verdict,
                          "method": method})
         else:
-            reason = UNMEASURABLE.get(s.key, "この形状からは測定できない")
+            # 定数は日本語のまま持ち、**引く所で**訳す（取り込み時に固めない）。
+            reason = i18n.t(UNMEASURABLE.get(s.key,
+                                             i18n.t(
+                                                 "この形状からは測定できない")))
             rows.append({"key": s.key, "label": s.label, "unit": s.unit,
                          "frozen": p.get(s.key), "estimated": None, "delta": None,
                          "verdict": "測定不能", "method": reason})
@@ -425,16 +435,16 @@ def estimate_params(mesh: trimesh.Trimesh, frozen: dict, specs: list) -> dict:
     div = {r["key"] for r in rows if r["verdict"] == "乖離"}
     if div & acoustic_keys:
         warnings.append(
-            "⚠ リード密着面／ウィンドウの寸法が凍結時から変わっています。"
-            "音響シミュレーション結果は無効です。パラメータで再設計してください。")
+            i18n.t("⚠ リード密着面／ウィンドウの寸法が凍結時から変わっています。"
+                   "音響シミュレーション結果は無効です。パラメータで再設計してください。"))
     if div & cavity_keys:
         warnings.append(
-            "⚠ 内部空洞（バッフル/チェンバー/ボア）が変わっています。"
-            "音程・音色はシミュレーション表示と乖離します。")
+            i18n.t("⚠ 内部空洞（バッフル/チェンバー/ボア）が変わっています。"
+                   "音程・音色はシミュレーション表示と乖離します。"))
     return {"params": rows, "warnings": warnings}
 
 
 def _all_unmeasurable(specs) -> list[dict]:
     return [{"key": s.key, "label": s.label, "unit": s.unit, "frozen": None,
              "estimated": None, "delta": None, "verdict": "測定不能",
-             "method": "座標系不一致"} for s in specs]
+             "method": i18n.t("座標系不一致")} for s in specs]

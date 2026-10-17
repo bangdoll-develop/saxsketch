@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+from saxsketch import i18n
+
 N_HARMONICS = 16
 
 
@@ -36,6 +38,7 @@ def harmonic_series(metrics: dict) -> dict:
         "vibrato_hz": 5.0,
         "vibrato_depth": 0.004,
         "attack_sec": round(0.05 - 0.02 * p, 3),
-        "note": "印象プレビュー（簡易加算合成）。物理的な発音は上のタブ"
-                "「物理モデル(OpenWind)」で試聴できます。",
+        "note": i18n.t(
+            "印象プレビュー（簡易加算合成）。物理的な発音は上のタブ「物理モデ"
+            "ル(OpenWind)」で試聴できます。"),
     }

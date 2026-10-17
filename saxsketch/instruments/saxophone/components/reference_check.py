@@ -37,6 +37,8 @@ FIBRACELL 72.8、差 2.6mm。ソプラノの 2.9mm と同じ桁）。材質や�
 """
 from __future__ import annotations
 
+from saxsketch import i18n
+
 from . import profiles
 
 
@@ -134,7 +136,10 @@ def mp_tip_contour_is_measured(size_info: dict) -> bool:
 
 def _span_text(lo: float, hi: float) -> str:
     """域の表示。1 点しか無いサイズでは「59.1〜59.1」と書かない。"""
-    return f"{lo:.1f}" if hi <= lo else f"{lo:.1f}〜{hi:.1f}"
+    if hi <= lo:
+        return f"{lo:.1f}"
+    # 波ダッシュは日本語の約物。英語では en ダッシュへ寄せる（訳側が持つ）。
+    return i18n.t("{lo}〜{hi}", lo=f"{lo:.1f}", hi=f"{hi:.1f}")
 
 
 def reed_length_span(size_info: dict) -> str:
@@ -199,7 +204,9 @@ def _verdict(delta: float, tol_ok: float, tol_minor: float) -> str:
 def _row(label: str, value: float, ref: float, unit: str,
          tol_ok: float, tol_minor: float) -> tuple[list, str]:
     v = _verdict(value - ref, tol_ok, tol_minor)
-    return ([label, f"{value:.1f} / {ref:.1f} {unit}  {v}"], v)
+    # **判定語は訳して出すが、返す `v` は訳さない** —— 呼び元は status を決めるのに
+    # 使う。ここで訳した語を返すと `_finish` の `"乖離" in verdicts` が黙る。
+    return ([label, f"{value:.1f} / {ref:.1f} {unit}  {i18n.t(v)}"], v)
 
 
 def required_bore_dia(size_info: dict) -> float:
@@ -232,8 +239,8 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
         v = "乖離"
     else:
         v = _verdict(bore - aim, BORE_TOL, BORE_TOL_MINOR)
-    rows.append(["ボア径 / テノン＋コルク−締め代",
-                 f"{bore:.2f} / {aim:.2f} mm  {v}"])
+    rows.append([i18n.t("ボア径 / テノン＋コルク−締め代"),
+                 f"{bore:.2f} / {aim:.2f} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     # 「テーブル幅 / 規格リード先端幅」はここから落とした（Phase 4-F）。
@@ -241,24 +248,25 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
     # で（`mouthpiece.dimensions` の注記）、テーブルの実幅は半径とカット深さから
     # 決まって z で変わる。「規格リードが載るか」は `reed_seat.seat_card` が
     # 実幅・実開口で見る —— 判定幅 0.3 / 0.8 はそちらへ引き継いだ。
-    rows.append(["リード幅（規格の呼び / 規格リード）",
+    rows.append([i18n.t("リード幅（規格の呼び / 規格リード）"),
                  f"{p['reed_width']:.1f} / "
-                 f"{_span_text(*reed_tip_width_range(size_info))} mm　"
-                 "判定は「リードが載るか」のカード"])
+                 f"{_span_text(*reed_tip_width_range(size_info))} mm"
+                 + i18n.t("　判定は「リードが載るか」のカード")])
 
     # 最大径。**超えた側だけ**見る（細い分はリガチャーが締まるので害が無い）。
     # 上限の無いサイズ（＝基準にできる市販機を実測していない）では判定しない。
     cap = ligature_max_dia(size_info)
     dia = p["body_dia"]
     if cap is None:
-        rows.append(["（参考）最大径", f"{dia:.1f} mm　"
-                                    f"このサイズは基準となる市販機が未実測のため判定しない"])
+        rows.append([
+            i18n.t("（参考）最大径"), f"{dia:.1f} mm"
+            + i18n.t("　このサイズは基準となる市販機が未実測のため判定しない")])
     else:
         over = dia - cap
         v = "一致" if over <= BODY_DIA_TOL else (
             "軽微" if over <= BODY_DIA_TOL_MINOR else "乖離")
-        rows.append(["最大径 / 市販リガチャーが受ける上限",
-                     f"{dia:.1f} / {cap:.1f} mm  {v}"])
+        rows.append([i18n.t("最大径 / 市販リガチャーが受ける上限"),
+                     f"{dia:.1f} / {cap:.1f} mm  {i18n.t(v)}"])
         verdicts.append(v)
 
     seat1 = profiles.ligature_seat_range(p)[1]
@@ -272,8 +280,8 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
         v = "一致"
     else:
         v = "軽微" if slack >= -TABLE_FLAT_TOL_MINOR else "乖離"
-    rows.append(["テーブル終端 / リガチャー座の後端",
-                 f"{table_end:.1f} / {seat1:.1f} mm  {v}"])
+    rows.append([i18n.t("テーブル終端 / リガチャー座の後端"),
+                 f"{table_end:.1f} / {seat1:.1f} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     # (2) 踵まで平坦面が続くか。**非対称**に見る。長いリードにだけ足りないなら軽微
@@ -292,28 +300,34 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
     #     借りたシャンク比のほう。片方の実測だけで判定を出してはいけない。
     if reed_length_is_measured(size_info):
         v = "一致" if table_end >= reed_hi else ("軽微" if table_end >= reed_lo else "乖離")
-        rows.append(["テーブル終端 / リード全長域",
-                     f"{table_end:.1f} / {_span_text(reed_lo, reed_hi)} mm  {v}"])
+        rows.append([i18n.t("テーブル終端 / リード全長域"),
+                     f"{table_end:.1f} / {_span_text(reed_lo, reed_hi)} mm"
+                     f"  {i18n.t(v)}"])
         verdicts.append(v)
     else:
-        rows.append(["（参考）テーブル終端 / リード全長",
-                     f"{table_end:.1f} / {reed_lo:.1f} mm　リード全長が未実測のため判定しない"])
+        rows.append([i18n.t("（参考）テーブル終端 / リード全長"),
+                     f"{table_end:.1f} / {reed_lo:.1f} mm"
+                     + i18n.t("　リード全長が未実測のため判定しない")])
 
     # (3) 参考。**判定しない。** 「踵が最大径の位置に来る」という設計則は、実測どうしで
     #     確かめられる唯一の組（ソプラノ: マウスピース 71.4 / リード 59.1・62.0）で
     #     符号が反転する。モジュール docstring の理由でしきい値を置かない。
     d_lo, d_hi = seat1 - reed_lo, seat1 - reed_hi
-    gap = f"{d_lo:+.1f}" if reed_hi <= reed_lo else f"{d_hi:+.1f}〜{d_lo:+.1f}"
-    rows.append(["（参考）リガチャー座の後端 − リード全長", f"{gap} mm"])
+    gap = (f"{d_lo:+.1f}" if reed_hi <= reed_lo else
+           i18n.t("{lo}〜{hi}", lo=f"{d_hi:+.1f}", hi=f"{d_lo:+.1f}"))
+    rows.append([i18n.t("（参考）リガチャー座の後端 − リード全長"), f"{gap} mm"])
 
     lo, hi = size_info["facing_length_range_mm"]
     fl = p["facing_length"]
     v = "一致" if lo <= fl <= hi else ("軽微" if lo - 2 <= fl <= hi + 2 else "乖離")
-    rows.append(["フェイシング長 / 公表チャート域",
-                 f"{fl:.1f} / {lo:.0f}〜{hi:.0f} mm  {v}"])
+    rows.append([i18n.t("フェイシング長 / 公表チャート域"),
+                 f"{fl:.1f} / "
+                 + i18n.t("{lo}〜{hi}", lo=f"{lo:.0f}", hi=f"{hi:.0f}")
+                 + f" mm  {i18n.t(v)}"])
     verdicts.append(v)
 
-    return _finish("実物・規格との照合", rows, verdicts,
+    return _finish(i18n.t("実物・規格との照合"), rows, verdicts,
+                   i18n.t(
                    "全長・ボディ径・チェンバーは各社とも公表していないため照合対象外。"
                    "リード全長は銘柄・カット・材質で動くので 1 点ではなく域で"
                    "見ています（descriptor の reed_length_range_mm）。**長短の向きは"
@@ -334,7 +348,7 @@ def mouthpiece_card(p: dict, size_info: dict) -> dict:
                    "なので、リガチャーを嵌めてみる相手が存在しないからです。"
                    "アルトのような適合実績は永久に付かないので「軽微」のまま残して"
                    "あります。決着させるなら手元の個体（Jody Jazz GIANT 30.0 は上限の"
-                   "内側）で測り直して、そちらを基準に取り込んでください。")
+                   "内側）で測り直して、そちらを基準に取り込んでください。"))
 
 
 def survey_card(title: str, specs: dict, size_meta: dict,
@@ -356,7 +370,8 @@ def survey_card(title: str, specs: dict, size_meta: dict,
         if sp is None or k not in before_params:
             continue
         step = sp.step or 0.1
-        r, v = _row(f"{sp.label} 実測/設計", float(mv), float(before_params[k]),
+        r, v = _row(i18n.t("{label} 実測/設計", label=sp.label),
+                    float(mv), float(before_params[k]),
                     sp.unit, max(0.6 * step, 0.05), max(2.5 * step, 0.2))
         rows.append(r)
         verdicts.append(v)
@@ -365,7 +380,8 @@ def survey_card(title: str, specs: dict, size_meta: dict,
         base = before_size.get(k)
         if base is None:
             continue
-        r, v = _row(f"{label} 実測/従前", float(mv), float(base), unit, 0.2, 0.6)
+        r, v = _row(i18n.t("{label} 実測/従前", label=label),
+                    float(mv), float(base), unit, 0.2, 0.6)
         rows.append(r)
         verdicts.append(v)
     if not rows:
@@ -383,7 +399,8 @@ def reed_card(p: dict, size_info: dict) -> dict:
     length = p["reed_length"]
     over = 0.0 if lo <= length <= hi else (length - hi if length > hi else length - lo)
     v = _verdict(over, 1.0, 3.0)
-    rows.append(["全長 / 規格域", f"{length:.1f} / {_span_text(lo, hi)} mm  {v}"])
+    rows.append([i18n.t("全長 / 規格域"),
+                 f"{length:.1f} / {_span_text(lo, hi)} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     # 先端幅も**域で**見る（全長と同じ。アルトの実物 5 本で 15.85〜16.4）。
@@ -392,7 +409,8 @@ def reed_card(p: dict, size_info: dict) -> dict:
     tw = p["tip_width"]
     over = 0.0 if lo <= tw <= hi else (tw - hi if tw > hi else tw - lo)
     v = _verdict(over, 0.3, 0.8)
-    rows.append(["先端幅 / 規格域", f"{tw:.1f} / {_span_text(lo, hi)} mm  {v}"])
+    rows.append([i18n.t("先端幅 / 規格域"),
+                 f"{tw:.1f} / {_span_text(lo, hi)} mm  {i18n.t(v)}"])
     verdicts.append(v)
 
     # 幅のテーパーが直線かどうか。`reed_profiles.taper_half_width` は先端幅→
@@ -402,31 +420,32 @@ def reed_card(p: dict, size_info: dict) -> dict:
     # 判定幅は採寸カードと同じ規則（刻み 0.1mm の 0.6 段 / 2.5 段）。
     at20 = size_info.get("reed_width_at20_mm")
     if at20 is None:
-        rows.append(["（参考）先端から 20mm の幅",
-                     "未実測。採寸フォームで入れると、幅のテーパーが直線か"
-                     "どうかをここで確かめられます"])
+        rows.append([i18n.t("（参考）先端から 20mm の幅"),
+                     i18n.t("未実測。採寸フォームで入れると、幅のテーパーが直線か"
+                            "どうかをここで確かめられます")])
     else:
         from . import reed_profiles as rp
-        r, v = _row("先端から 20mm の幅 実測/モデル", float(at20),
+        r, v = _row(i18n.t("先端から 20mm の幅 実測/モデル"), float(at20),
                     rp.width(p, 20.0), "mm", 0.06, 0.25)
         rows.append(r)
         verdicts.append(v)
 
-    return _finish("規格リードとの照合", rows, verdicts,
+    return _finish(i18n.t("規格リードとの照合"), rows, verdicts,
+                   i18n.t(
                    "規格から外すと市販リガチャー・マウスピースに合わなくなります。"
                    "厚みプロファイルは規格が無いため照合対象外。"
                    "**幅のテーパーはモデルが線形を仮定しています** —— 実物の 3 サイズ"
                    "（各 5 本）でほぼ直線で、先端のほうが 1〜2mm 広い（踵へ狭まる）ことが"
                    "分かっています。先端から 20mm の幅を測れば、手元のリードでも"
-                   "確かめられます。")
+                   "確かめられます。"))
 
 
 def _finish(title: str, rows: list, verdicts: list, note: str) -> dict:
     if "乖離" in verdicts:
-        status, big = "bad", "規格から外れています"
+        status, big = "bad", i18n.t("規格から外れています")
     elif "軽微" in verdicts:
-        status, big = "warn", "わずかに規格から外れています"
+        status, big = "warn", i18n.t("わずかに規格から外れています")
     else:
-        status, big = "ok", "規格に一致しています"
+        status, big = "ok", i18n.t("規格に一致しています")
     return {"title": title, "big": big, "status": status,
             "rows": rows, "advice": note}

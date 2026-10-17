@@ -31,6 +31,8 @@ import math
 
 from saxsketch.acoustics import volume as ac_volume
 
+from saxsketch import i18n
+
 from . import neck_profiles as npf
 
 _RING_N = 48            # 断面リングの点数（全リング一定＝ロフト堅牢性）
@@ -472,26 +474,38 @@ def hole_layout_error(p: dict, si: dict, np_: dict) -> str | None:
     for h in holes:
         s = h["s_mm"]
         if not (s_lo < s < s_hi):
-            where = "マウスピース側" if s <= s_lo else "ベル出口の先"
-            return (f"側孔 {h['label']} が管の外（{where}、弧長 {s:.0f}mm）に出ます。"
-                    f"この部品は弧長 {s_lo:.0f}〜{s_hi:.0f}mm です。"
-                    f"本体管長を伸ばすか、指孔の本数を減らしてください。")
+            where = i18n.t("マウスピース側") if s <= s_lo else i18n.t("ベル出口の先")
+            return (i18n.t(
+                "側孔 {label} が管の外（{where}、弧長 {s}mm）に出ます。"
+                "この部品は弧長 {s_lo}〜{s_hi}mm です。本体管長を伸ばすか、"
+                "指孔の本数を減らしてください。",
+                label=f"{h['label']}", where=f"{where}", s=f"{s:.0f}",
+                s_lo=f"{s_lo:.0f}", s_hi=f"{s_hi:.0f}"))
         r_bore = wall_inner_radius_at(s, p, si, np_)
         if h["dia_mm"] / 2.0 >= r_bore:
-            return (f"側孔 {h['label']} の径 φ{h['dia_mm']:.1f} が、その位置のボア径 "
-                    f"φ{2 * r_bore:.1f} 以上です。分岐の式（短いチムニー近似）が"
-                    f"成り立たないうえ、管が輪切りになります。穴を細くするか、"
-                    f"もっとベル寄りへ動かしてください。")
+            return (i18n.t(
+                "側孔 {label} の径 φ{dia_mm} が、その位置のボア径 φ{r_bore} "
+                "以上です。分岐の式（短いチムニー近似）が成り立たないうえ、"
+                "管が輪切りになります。穴を細くするか、"
+                "もっとベル寄りへ動かしてください。",
+                label=f"{h['label']}", dia_mm=f"{h['dia_mm']:.1f}",
+                r_bore=f"{2 * r_bore:.1f}"))
         if h["chimney_mm"] <= float(p["hole_chimney"]) + 1e-9:
-            return (f"側孔 {h['label']} のチムニーが壁を貫いていません "
-                    f"（{h['chimney_mm']:.2f}mm）。肉厚を確認してください。")
+            return (i18n.t(
+                "側孔 {label} のチムニーが壁を貫いていません "
+                "（{chimney_mm}mm）。肉厚を確認してください。",
+                label=f"{h['label']}", chimney_mm=f"{h['chimney_mm']:.2f}"))
     for i in range(len(holes) - 1):
         a, b = holes[i], holes[i + 1]
         gap = (b["s_mm"] - a["s_mm"]) - (a["dia_mm"] + b["dia_mm"]) / 2.0
         if gap < 1.0:
-            return (f"側孔 {a['label']} と {b['label']} が重なります"
-                    f"（弧長 {a['s_mm']:.0f} と {b['s_mm']:.0f}、縁の隙間 {gap:.1f}mm）。"
-                    f"穴を細くするか、親指孔のオフセットを広げてください。")
+            return (i18n.t(
+                "側孔 {label} と {label2} が重なります（弧長 {s_mm} と "
+                "{s_mm2}、縁の隙間 {gap}mm）。穴を細くするか、"
+                "親指孔のオフセットを広げてください。",
+                label=f"{a['label']}", label2=f"{b['label']}",
+                s_mm=f"{a['s_mm']:.0f}", s_mm2=f"{b['s_mm']:.0f}",
+                gap=f"{gap:.1f}"))
     return None
 
 
@@ -529,10 +543,10 @@ def hole_zone(s: float, p: dict, np_: dict) -> str:
     body0 = float(np_["neck_length"])
     b_s0, b_arc, b_rb, _ang = _bow(p)
     if float(p["bell_length"]) > 0.0 and s >= part_end(p, np_) - float(p["bell_length"]):
-        return "ベル"
+        return i18n.t("ベル")
     if b_rb is not None and body0 + b_s0 <= s <= body0 + b_s0 + b_arc:
-        return "ボウ"
-    return "直管"
+        return i18n.t("ボウ")
+    return i18n.t("直管")
 
 
 # --------------------------------------------------------------------------- 音響
@@ -575,10 +589,15 @@ def layout_error(p: dict, si: dict, np_: dict) -> str | None:
     # 縛らないよう、ボウが無いときは 0 として扱う。
     used = (float(p["bow_start"]) + arc) if rb is not None else 0.0
     if rb is not None and used > L:
-        return (f"ボウが本体管に収まりません: 曲げまでの直管 {p['bow_start']:.0f}mm ＋ "
-                f"曲げの弧長 {arc:.0f}mm（半径 {p['bow_radius']:.0f} × {p['bow_angle']:.0f}°）"
-                f"＝ {used:.0f}mm が本体管 {L:.0f}mm を超えています。"
-                f"本体管を伸ばすか、曲げ半径・曲げ角・曲げ開始位置を下げてください。")
+        return (i18n.t(
+            "ボウが本体管に収まりません: 曲げまでの直管 {bow_start}mm ＋ "
+            "曲げの弧長 {arc}mm（半径 {bow_radius} × {bow_angle}°）＝ "
+            "{used}mm が本体管 {l}mm を超えています。本体管を伸ばすか、"
+            "曲げ半径・曲げ角・曲げ開始位置を下げてください。",
+            bow_start=f"{p['bow_start']:.0f}", arc=f"{arc:.0f}",
+            bow_radius=f"{p['bow_radius']:.0f}",
+            bow_angle=f"{p['bow_angle']:.0f}", used=f"{used:.0f}",
+            l=f"{L:.0f}"))
     if rb is not None:
         # **曲げ半径は管の外半径より大きくないと断面が内側で折り返す。**
         # Rb ≤ r_outer だと曲率中心が管の中に入り、リングが裏返って自己交差した
@@ -589,25 +608,37 @@ def layout_error(p: dict, si: dict, np_: dict) -> str | None:
         r_out = max(outer_radius_at(s, p, si, np_)
                     for s in (s_bow, s_bow + 0.5 * arc, s_bow + arc))
         if p["bow_radius"] <= r_out * 1.05:
-            return (f"ボウの曲率半径 {p['bow_radius']:.0f}mm が管の外半径 "
-                    f"{r_out:.1f}mm 以下です。曲率中心が管の中に入るので断面が"
-                    f"内側で折り返して自己交差します。半径を {r_out * 1.05:.0f}mm "
-                    f"より大きくするか、肉厚・ボアを細くしてください。")
+            return (i18n.t(
+                "ボウの曲率半径 {bow_radius}mm が管の外半径 {r_out}mm "
+                "以下です。曲率中心が管の中に入るので断面が内側で折り返して自"
+                "己交差します。半径を {r_out2}mm より大きくするか、肉厚・"
+                "ボアを細くしてください。",
+                bow_radius=f"{p['bow_radius']:.0f}", r_out=f"{r_out:.1f}",
+                r_out2=f"{r_out * 1.05:.0f}"))
     bell = float(p["bell_length"])
     if bell > 0.0 and used + bell > L:
-        return (f"ベルがボウと重なります: 曲げの終わり {used:.0f}mm ＋ ベル {bell:.0f}mm "
-                f"＝ {used + bell:.0f}mm が本体管 {L:.0f}mm を超えています。"
-                f"ベルを短くするか、本体管を伸ばしてください。")
+        return (i18n.t(
+            "ベルがボウと重なります: 曲げの終わり {used}mm ＋ ベル {bell}mm "
+            "＝ {used2}mm が本体管 {l}mm を超えています。ベルを短くするか、"
+            "本体管を伸ばしてください。",
+            used=f"{used:.0f}", bell=f"{bell:.0f}", used2=f"{used + bell:.0f}",
+            l=f"{L:.0f}"))
     end_dia = cone_end_dia(p, si, np_)
     if bell > 0.0 and p["bell_exit_dia"] < end_dia - 1e-6:
-        return (f"ベル出口が円錐の終端より細くなっています "
-                f"（出口 φ{p['bell_exit_dia']:.1f} < 円錐終端 φ{end_dia:.1f}）。"
-                f"実物のベルは細りません。出口径を φ{end_dia:.1f} 以上にしてください。")
+        return (i18n.t(
+            "ベル出口が円錐の終端より細くなっています （出口 "
+            "φ{bell_exit_dia} < 円錐終端 φ{end_dia}）。"
+            "実物のベルは細りません。出口径を φ{end_dia2} 以上にしてください。",
+            bell_exit_dia=f"{p['bell_exit_dia']:.1f}",
+            end_dia=f"{end_dia:.1f}", end_dia2=f"{end_dia:.1f}"))
     if not is_integrated(p):
         sock_r = socket_bore_radius(p, si, np_)
         if sock_r + p["min_wall"] > outer_radius_at(part_start(p, np_) + 1e-3, p, si, np_):
-            return (f"ネック受けの肉厚が下限を割ります（受け穴 φ{2*sock_r:.1f} に対し "
-                    f"外径が足りない）。肉厚を上げるか、はめあい隙間を詰めてください。")
+            return (i18n.t(
+                "ネック受けの肉厚が下限を割ります（受け穴 φ{sock_r} に対し "
+                "外径が足りない）。肉厚を上げるか、"
+                "はめあい隙間を詰めてください。",
+                sock_r=f"{2*sock_r:.1f}"))
     return _self_collision_error(p, si, np_) or hole_layout_error(p, si, np_)
 
 
@@ -639,11 +670,14 @@ def _self_collision_error(p: dict, si: dict, np_: dict) -> str | None:
                 worst = (gap, ss[i], ss[j], d, ri + rj)
     if worst is not None and worst[0] < 0.0:
         _gap, sa, sb, d, need = worst
-        return (f"折り返した管が自分に当たっています（弧長 {sa:.0f}mm と {sb:.0f}mm の"
-                f"位置で軸間 {d:.0f}mm に対し外半径の和が {need:.0f}mm）。"
-                f"ボウの曲率半径を大きくするか、ベルを小さくしてください。"
-                f"180° のボウでは行きと帰りの脚が 2×曲率半径＝"
-                f"{2 * p['bow_radius']:.0f}mm しか離れません。")
+        return (i18n.t(
+            "折り返した管が自分に当たっています（弧長 {sa}mm と {sb}mm "
+            "の位置で軸間 {d}mm に対し外半径の和が {need}mm）。"
+            "ボウの曲率半径を大きくするか、ベルを小さくしてください。180° "
+            "のボウでは行きと帰りの脚が 2×曲率半径＝{bow_radius}mm "
+            "しか離れません。",
+            sa=f"{sa:.0f}", sb=f"{sb:.0f}", d=f"{d:.0f}", need=f"{need:.0f}",
+            bow_radius=f"{2 * p['bow_radius']:.0f}"))
     return None
 
 
@@ -684,28 +718,28 @@ def param_regions(p: dict, np_: dict) -> dict:
 
     z0, z1 = z(s_lo), z(s_hi)
     reg = {
-        "body_arc_length": {"z0": z(body0), "z1": z1, "side": "all", "label": "本体管"},
-        "wall_thickness": {"z0": z0, "z1": z1, "side": "all", "label": "肉厚"},
-        "taper_from_cone": {"z0": z0, "z1": z1, "side": "all", "label": "テーパ"},
-        "bore_small_id": {"z0": z0, "z1": z(body0), "side": "all", "label": "小端ボア"},
-        "bore_large_id": {"z0": z(s_hi - 40.0), "z1": z1, "side": "all", "label": "大端ボア"},
-        "neck_joint": {"z0": z0, "z1": z(body0), "side": "all", "label": "ネック接続"},
+        "body_arc_length": {"z0": z(body0), "z1": z1, "side": "all", "label": i18n.t("本体管")},
+        "wall_thickness": {"z0": z0, "z1": z1, "side": "all", "label": i18n.t("肉厚")},
+        "taper_from_cone": {"z0": z0, "z1": z1, "side": "all", "label": i18n.t("テーパ")},
+        "bore_small_id": {"z0": z0, "z1": z(body0), "side": "all", "label": i18n.t("小端ボア")},
+        "bore_large_id": {"z0": z(s_hi - 40.0), "z1": z1, "side": "all", "label": i18n.t("大端ボア")},
+        "neck_joint": {"z0": z0, "z1": z(body0), "side": "all", "label": i18n.t("ネック接続")},
     }
     if p["bell_length"] > 0.0:
-        bell = {"z0": z(s_hi - p["bell_length"]), "z1": z1, "side": "all", "label": "ベル"}
+        bell = {"z0": z(s_hi - p["bell_length"]), "z1": z1, "side": "all", "label": i18n.t("ベル")}
         reg["bell_length"] = bell
         reg["bell_exit_dia"] = dict(bell)
         reg["flare_power"] = dict(bell)
     if b_rb is not None:
         bow = {"z0": z(body0 + b_s0), "z1": z(body0 + b_s0 + b_arc),
-               "side": "all", "label": "ボウ（曲げ）"}
+               "side": "all", "label": i18n.t("ボウ（曲げ）")}
         reg["bow_angle"] = bow
         reg["bow_radius"] = dict(bow)
         reg["bow_start"] = {"z0": z(body0), "z1": z(body0 + b_s0),
-                            "side": "all", "label": "ボウまでの直管"}
+                            "side": "all", "label": i18n.t("ボウまでの直管")}
     if not is_integrated(p):
         sock = {"z0": z0, "z1": z(s_lo + p["socket_length"]), "side": "all",
-                "label": "ネック受け"}
+                "label": i18n.t("ネック受け")}
         reg["socket_length"] = sock
         reg["socket_clearance"] = dict(sock)
     return reg
@@ -725,13 +759,13 @@ def hole_regions(p: dict, si: dict, np_: dict) -> dict:
     reg: dict = {}
     if fz:
         band = {"z0": min(fz) - 8.0, "z1": max(fz) + 8.0, "side": "all",
-                "label": "指孔"}
+                "label": i18n.t("指孔")}
         for k in ("finger_holes", "hole_dia", "hole_chimney"):
             reg[k] = dict(band)
     tz = [z for z, h in zip(zs, holes) if h["role"] == "thumb"]
     if tz:
         band = {"z0": tz[0] - 8.0, "z1": tz[0] + 8.0, "side": "all",
-                "label": "親指孔"}
+                "label": i18n.t("親指孔")}
         for k in ("thumb_vent", "thumb_offset", "thumb_dia"):
             reg[k] = dict(band)
     return reg

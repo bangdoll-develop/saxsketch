@@ -35,7 +35,8 @@ sys.path.insert(0, str(_REPO))
 from saxsketch.analysis import align, meshdiff  # noqa: E402
 from saxsketch.instruments.saxophone.components import profiles  # noqa: E402
 
-SRC_DEFAULT = "/mnt/c/Users/<user>/Downloads/WindyCity-Tenor-72-100-LS.3mf"
+#: 基準 3mf（リポジトリには入っていない。出所は `../ATTRIBUTION.md`）。
+SRC_DEFAULT = os.environ.get("WINDYCITY_3MF", "")
 TENOR_JSON = _REPO / "saxsketch/instruments/saxophone/templates/tenor.json"
 
 #: スキーマの (min, max, step)。mouthpiece.py::_specs と同値（クランプ判定用）。

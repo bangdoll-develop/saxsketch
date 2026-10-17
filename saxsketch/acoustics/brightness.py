@@ -9,6 +9,8 @@ personalization」— スペクトル重心（明るさ）に有効なのはフ�
 """
 from __future__ import annotations
 
+from saxsketch import i18n
+
 
 def _norm(x: float, lo: float, hi: float) -> float:
     if hi <= lo:
@@ -31,12 +33,16 @@ _MODEL_RANGE = {
 def _outside_model(p: dict) -> list[str]:
     """モデルの有効範囲の外にある入力（表示用の文字列）。"""
     out = []
-    for k, (lo, hi, label, unit) in _MODEL_RANGE.items():
+    for k, (lo, hi, label_ja, unit) in _MODEL_RANGE.items():
+        label = i18n.t(label_ja)
         v = p.get(k)
         if v is None:
             continue
         if v < lo or v > hi:
-            out.append(f"{label} {v:g}{unit}（有効範囲 {lo:g}〜{hi:g}{unit}）")
+            out.append(i18n.t(
+                "{label} {v}{unit}（有効範囲 {lo}〜{hi}{unit2}）",
+                label=f"{label}", v=f"{v:g}", unit=f"{unit}", lo=f"{lo:g}",
+                hi=f"{hi:g}", unit2=f"{unit}"))
     return out
 
 
@@ -101,25 +107,28 @@ def tone_metrics(p: dict) -> dict:
         "flexibility": round(flexibility, 2),
         "edge": round(edge, 2),
         "labels": {
-            "brightness": "明るさ",
-            "power": "パワー",
-            "resistance": "抵抗感",
-            "flexibility": "柔軟性",
-            "edge": "エッジ",
+            "brightness": i18n.t("明るさ"),
+            "power": i18n.t("パワー"),
+            "resistance": i18n.t("抵抗感"),
+            "flexibility": i18n.t("柔軟性"),
+            "edge": i18n.t("エッジ"),
         },
         "note": _note(p),
     }
 
 
 def _note(p: dict) -> str:
-    base = "相対比較用の推定指標（文献傾向ベース）。数値の絶対値ではなく変化方向を参考に。"
+    base = i18n.t(
+        "相対比較用の推定指標（文献傾向ベース）。"
+        "数値の絶対値ではなく変化方向を参考に。")
     out = _outside_model(p)
     if not out:
         return base
-    return (base + " **" + " / ".join(out) + " がモデルの有効範囲の外にあります。**"
-            "この指標はそこで頭打ちになっていて、動かしても変わりません"
-            "（回帰を当てた範囲の外なので外挿していません）。"
-            "形そのものは変わっているので、断面タブと寸法を見てください。")
+    return (base + " **" + " / ".join(out) + i18n.t(
+        " がモデルの有効範囲の外にあります。"
+        "**この指標はそこで頭打ちになっていて、"
+        "動かしても変わりません（回帰を当てた範囲の外なので外挿していません）"
+        "。形そのものは変わっているので、断面タブと寸法を見てください。"))
 
 
 # 感度計算の対象パラメータ（連続値のみ）

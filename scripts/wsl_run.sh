@@ -7,11 +7,11 @@
 # 起動後、Windows 側ブラウザで http://localhost:8712 を開く。
 # 停止は Ctrl+C。
 #
-# 環境変数で上書き可: WF_DST（WSL 稼働コピー）
+# 環境変数で上書き可: SAX_DST（WSL 稼働コピー）
 set -euo pipefail
 
-WF_DST="${WF_DST:-$HOME/mp_design}"
-cd "$WF_DST"
+SAX_DST="${SAX_DST:-$HOME/mp_design}"
+cd "$SAX_DST"
 
 if [ ! -d ".venv" ]; then
   echo "✗ .venv 無し。先に: bash scripts/wsl_sync.sh --deps" >&2; exit 1
